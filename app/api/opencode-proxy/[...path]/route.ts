@@ -19,23 +19,11 @@ function responseHeaders(contentType?: string | null): HeadersInit {
         "Content-Type": contentType || "application/json",
         "Cache-Control": "no-store",
         "X-Content-Type-Options": "nosniff",
+        "Access-Control-Allow-Origin": "*",
     };
 }
 
-function rejectCrossOriginBrowserRequest(request: NextRequest): NextResponse | null {
-    const origin = request.headers.get("origin");
-    if (!origin || origin === new URL(request.url).origin) return null;
-
-    return NextResponse.json(
-        { error: "Cross-origin use of this proxy is not allowed." },
-        { status: 403, headers: responseHeaders() },
-    );
-}
-
 async function proxyOpenCodeGo(request: NextRequest, context: RouteContext) {
-    const crossOriginResponse = rejectCrossOriginBrowserRequest(request);
-    if (crossOriginResponse) return crossOriginResponse;
-
     const { path = [] } = await context.params;
     const proxyPath = path.join("/");
 
@@ -98,19 +86,15 @@ export async function POST(request: NextRequest, context: RouteContext) {
     return proxyOpenCodeGo(request, context);
 }
 
-export async function OPTIONS(request: NextRequest) {
-    const crossOriginResponse = rejectCrossOriginBrowserRequest(request);
-    if (crossOriginResponse) return crossOriginResponse;
-
+export async function OPTIONS() {
     return new NextResponse(null, {
         status: 204,
         headers: {
-            "Access-Control-Allow-Origin": new URL(request.url).origin,
+            "Access-Control-Allow-Origin": "*",
             "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
             "Access-Control-Allow-Headers": "Authorization,Content-Type",
             "Access-Control-Max-Age": "86400",
             "Cache-Control": "no-store",
-            Vary: "Origin",
         },
     });
 }
