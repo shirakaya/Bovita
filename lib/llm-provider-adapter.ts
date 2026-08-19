@@ -843,10 +843,17 @@ function parseOpenAICompatibleStreamDelta(data: unknown): LlmStreamDelta {
                 thinking?: string;
                 tool_calls?: unknown[];
             };
+            message?: {
+                content?: unknown;
+                reasoning_content?: string;
+                reasoning?: string;
+                thinking?: string;
+            };
             text?: string;
         }>;
     };
     const delta = d.choices?.[0]?.delta;
+    const message = d.choices?.[0]?.message;
     const toolCallDeltas = Array.isArray(delta?.tool_calls)
         ? delta.tool_calls.map((value, fallbackIndex) => {
             const item = value as { index?: number; id?: string; function?: { name?: string; arguments?: string } };
@@ -859,8 +866,21 @@ function parseOpenAICompatibleStreamDelta(data: unknown): LlmStreamDelta {
         })
         : undefined;
     return {
-        content: String(delta?.content ?? d.choices?.[0]?.text ?? ""),
-        reasoning: String(delta?.reasoning_content ?? delta?.reasoning ?? delta?.thinking ?? ""),
+        // Some OpenAI-compatible gateways accept stream=true but return one
+        // complete Chat Completions object instead of delta chunks. Support
+        // both shapes so a valid message is not mistaken for an empty stream.
+        content: delta
+            ? String(delta.content ?? d.choices?.[0]?.text ?? "")
+            : debugTextFromUnknownContent(message?.content).trim() || String(d.choices?.[0]?.text ?? ""),
+        reasoning: String(
+            delta?.reasoning_content
+            ?? delta?.reasoning
+            ?? delta?.thinking
+            ?? message?.reasoning_content
+            ?? message?.reasoning
+            ?? message?.thinking
+            ?? "",
+        ),
         toolCallDeltas,
     };
 }
