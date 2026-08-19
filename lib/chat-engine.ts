@@ -760,18 +760,19 @@ export async function sendLLMStreamRequest(
         appId?: string;
         appTags?: string[];
         followUpCount?: number;
+        debugSessionId?: string;
         signal?: AbortSignal;
     },
     callbacks?: ChatCompletionStreamCallbacks,
 ): Promise<ChatCompletionStreamResult> {
     const pluginPurpose = options?.appId ?? "chat";
-    const afterPlugins = await applyChatPluginLlmRequest(preset, messages, pluginPurpose);
+    const afterPlugins = await applyChatPluginLlmRequest(preset, messages, pluginPurpose, options?.debugSessionId);
     const effectivePreset = afterPlugins.preset;
     const originalOnDelta = callbacks?.onDelta;
     const pluginCallbacks: ChatCompletionStreamCallbacks | undefined = callbacks ? {
         ...callbacks,
         onDelta: (text: string) => {
-            emitChatPluginEvent("llm.streamChunk", { chunk: text, purpose: pluginPurpose });
+            emitChatPluginEvent("llm.streamChunk", { chunk: text, purpose: pluginPurpose, sessionId: options?.debugSessionId });
             return originalOnDelta?.(text);
         },
     } : undefined;
@@ -798,7 +799,7 @@ export async function sendLLMStreamRequest(
             throw new ChatEngineError("流式响应没有解析到文本增量。");
         }
         let rawOutput = stripHallucinatedTimestamps(streamedContent.trim());
-        rawOutput = await applyChatPluginLlmResponse(rawOutput, pluginPurpose);
+        rawOutput = await applyChatPluginLlmResponse(rawOutput, pluginPurpose, options?.debugSessionId);
 
         // Store API log entry — mirror sendLLMRequest so streaming calls also show up
         // in the "底层调用大模型日志" panel.
@@ -2288,18 +2289,34 @@ export async function generateChatCompletion(
     const meta = { characterName: character.name, userName: userIdentity?.name };
     const actionContext = { characterId: session.contactId, sessionId: session.id, sourceEngine: "chat" as const, signal: options?.signal };
 
-    const maxToolRounds = getMaxToolRounds();
-    for (let round = 0; round < maxToolRounds; round++) {
-        let filteredOutput: string;
-        try {
-            filteredOutput = await sendLLMRequest(config, preset, llmMessages, regexes, meta, {
+    const sendChatRound = async (): Promise<string> => {
+        let reasoning = "";
+        const result = await sendLLMStreamRequest(
+            config,
+            preset,
+            llmMessages,
+            regexes,
+            meta,
+            {
                 appId: options?.appId ?? "chat",
                 appTags: requestAppTags,
                 followUpCount: options?.followUpCount,
                 debugSessionId: session.id,
                 signal: options?.signal,
-                onReasoning: callbacks?.onReasoning,
-            });
+            },
+            {
+                onReasoningDelta: (delta) => { reasoning += delta; },
+            },
+        );
+        if (reasoning) callbacks?.onReasoning?.(reasoning);
+        return result.content;
+    };
+
+    const maxToolRounds = getMaxToolRounds();
+    for (let round = 0; round < maxToolRounds; round++) {
+        let filteredOutput: string;
+        try {
+            filteredOutput = await sendChatRound();
         } catch (err) {
             const errMsg = `⚠️ 回复生成失败: ${err instanceof Error ? err.message : String(err)}`;
             if (parts.length > 0) {
@@ -2457,14 +2474,7 @@ export async function generateChatCompletion(
             // Last round — one final call
             if (round === maxToolRounds - 1) {
                 try {
-                    const finalOutput = await sendLLMRequest(config, preset, llmMessages, regexes, meta, {
-                        appId: options?.appId ?? "chat",
-                        appTags: requestAppTags,
-                        followUpCount: options?.followUpCount,
-                        debugSessionId: session.id,
-                        signal: options?.signal,
-                        onReasoning: callbacks?.onReasoning,
-                    });
+                    const finalOutput = await sendChatRound();
                     throwIfAborted(options?.signal);
                     await callbacks?.onTextPart?.(finalOutput);
                     parts.push({ text: finalOutput });
