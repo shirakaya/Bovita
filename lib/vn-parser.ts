@@ -25,6 +25,49 @@ function escapeXmlAttribute(value: string): string {
     .replace(/'/g, "&apos;");
 }
 
+type ParsedVnDialogueLine = {
+  speaker: string;
+  text: string;
+  consumedLines: number;
+};
+
+/**
+ * Accept both supported bilingual shapes:
+ *   角色|"原文|译文"
+ *   角色|"原文"
+ *   |译文
+ * Models occasionally emit the second shape despite the prompt. Treat its
+ * leading-pipe line as a continuation instead of a separate narration frame.
+ */
+function parseDialogueAt(lines: string[], index: number): ParsedVnDialogueLine | null {
+  const line = lines[index];
+  const complete = line.match(/^(.+?)\|["\u201c\u300c](.+)["\u201d\u300d]$/);
+  const open = complete ? null : line.match(/^(.+?)\|["\u201c\u300c](.+)$/);
+  const match = complete || open;
+  if (!match) return null;
+
+  let dialogueText = match[2].trim();
+  let consumedLines = 1;
+  const continuation = lines[index + 1];
+  if (!dialogueText.includes("|") && continuation?.startsWith("|")) {
+    const translated = continuation
+      .slice(1)
+      .trim()
+      .replace(/["\u201d\u300d]$/, "")
+      .trim();
+    if (translated) {
+      dialogueText = `${dialogueText.replace(/["\u201d\u300d]$/, "").trim()}|${translated}`;
+      consumedLines = 2;
+    }
+  }
+
+  return {
+    speaker: match[1].trim(),
+    text: dialogueText,
+    consumedLines,
+  };
+}
+
 /**
  * Parse AI output in `<scene>` XML format into VnFrames.
  */
@@ -67,18 +110,20 @@ export function parseVnResponse(rawText: string): VnParsedResponse {
 
     // Parse lines: "角色名|\"台词\"" = dialogue, other = narration
     const lines = content.split("\n").map((l) => l.trim()).filter(Boolean);
-    for (const line of lines) {
-      const dialogueMatch = line.match(/^(.+?)\|["\u201c\u300c](.+)["\u201d\u300d]$/);
-      if (dialogueMatch) {
-        const preparedSpeech = prepareSpeech(dialogueMatch[2].trim(), sceneEmotion);
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index];
+      const dialogue = parseDialogueAt(lines, index);
+      if (dialogue) {
+        const preparedSpeech = prepareSpeech(dialogue.text, sceneEmotion);
         frames.push({
           bg: lastBg,
           sprite: lastSprite,
-          speaker: dialogueMatch[1].trim(),
+          speaker: dialogue.speaker,
           text: preparedSpeech.displayText,
           voiceText: preparedSpeech.speechText,
           voiceEmotion: preparedSpeech.emotion,
         });
+        index += dialogue.consumedLines - 1;
       } else {
         // Narration
         frames.push({
@@ -93,15 +138,17 @@ export function parseVnResponse(rawText: string): VnParsedResponse {
   // If no scenes found, parse lines individually (fallback)
   if (frames.length === 0 && body) {
     const lines = body.split("\n").map((l) => l.trim()).filter(Boolean);
-    for (const line of lines) {
-      const dialogueMatch = line.match(/^(.+?)\|["\u201c\u300c](.+)["\u201d\u300d]$/);
-      if (dialogueMatch) {
-        const preparedSpeech = prepareSpeech(decodeXmlEntities(dialogueMatch[2].trim()));
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index];
+      const dialogue = parseDialogueAt(lines, index);
+      if (dialogue) {
+        const preparedSpeech = prepareSpeech(decodeXmlEntities(dialogue.text));
         frames.push({
-          speaker: dialogueMatch[1].trim(),
+          speaker: dialogue.speaker,
           text: preparedSpeech.displayText,
           voiceText: preparedSpeech.speechText,
         });
+        index += dialogue.consumedLines - 1;
       } else {
         frames.push({ text: decodeXmlEntities(line) });
       }
