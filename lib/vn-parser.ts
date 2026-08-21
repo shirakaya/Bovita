@@ -126,11 +126,16 @@ export function parseVnResponse(rawText: string): VnParsedResponse {
         index += dialogue.consumedLines - 1;
       } else {
         // Narration
+        const continuation = lines[index + 1];
+        const translatedNarration = continuation?.startsWith("|")
+          ? continuation.slice(1).trim()
+          : "";
         frames.push({
           bg: lastBg,
           sprite: lastSprite,
-          text: line,
+          text: translatedNarration ? `${line}\n|${translatedNarration}` : line,
         });
+        if (translatedNarration) index += 1;
       }
     }
   }
@@ -150,7 +155,14 @@ export function parseVnResponse(rawText: string): VnParsedResponse {
         });
         index += dialogue.consumedLines - 1;
       } else {
-        frames.push({ text: decodeXmlEntities(line) });
+        const continuation = lines[index + 1];
+        const translatedNarration = continuation?.startsWith("|")
+          ? continuation.slice(1).trim()
+          : "";
+        frames.push({
+          text: decodeXmlEntities(translatedNarration ? `${line}\n|${translatedNarration}` : line),
+        });
+        if (translatedNarration) index += 1;
       }
     }
   }
