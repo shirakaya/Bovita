@@ -17,6 +17,7 @@ import { formatCharacterRelationsForPrompt } from "./character-world-storage";
 import { buildCharacterTimeContext, buildGroupTimeContext, type CharacterTimeContext } from "./character-time";
 import { formatShoppingPaymentRequestHistory } from "./shopping-payment-request";
 import { buildGroupAdminBracketText } from "./group-admin";
+import { formatVoiceMessageDirective } from "./speech-style";
 
 export type LLMMessageRole = "system" | "user" | "assistant" | "tool";
 export type LLMToolCallPayload = { id: string; name: string; args: Record<string, unknown>; thoughtSignature?: string };
@@ -1168,7 +1169,7 @@ export function formatRichMediaForHistory(msg: ChatMessage, userName: string, ch
             }
             return msg.content;
         case "audio":
-            return `[语音条:${d?.label ?? "语音消息"}]`;
+            return formatVoiceMessageDirective(d?.label ?? "语音消息", d?.voiceEmotion);
         case "location":
             return `[位置:${d?.label ?? "位置"}]`;
         case "group_admin_notice":

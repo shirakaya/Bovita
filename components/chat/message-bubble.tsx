@@ -26,6 +26,7 @@ import { formatShoppingPaymentRequestHistory } from "@/lib/shopping-payment-requ
 import { toCustomAppIconId } from "@/lib/custom-app-types";
 import { ChatPluginSlot } from "@/components/chat/chat-plugin-slot";
 import { CHAT_PLUGIN_SLOTS_CHANGED_EVENT, getChatPluginRuntime } from "@/lib/chat-plugin-runtime";
+import { prepareSpeech } from "@/lib/speech-style";
 
 interface MessageBubbleProps {
     msg: ChatMessage;
@@ -2168,11 +2169,17 @@ function VoiceMessageBubble({ msg, characterId, onUpdate, defaultTranslationExpa
     const [playing, setPlaying] = useState(false);
     const [synthesizing, setSynthesizing] = useState(false);
     const audioRef = useRef<HTMLAudioElement | null>(null);
-    const text = msg.mediaData?.label || "语音消息";
+    const rawText = msg.mediaData?.label || "语音消息";
+    const preparedSpeech = prepareSpeech(rawText, msg.mediaData?.voiceEmotion);
+    const text = preparedSpeech.displayText;
     const bilingual = splitBilingualText(text);
-    const speechText = bilingual?.original || text;
+    const speechText = preparedSpeech.speechText;
+    const speechEmotion = preparedSpeech.emotion;
     const synthesizedFromText = msg.mediaData?.synthesizedFromText;
-    const needsResynthesis = msg.role !== "user" && synthesizedFromText !== speechText;
+    const synthesizedEmotion = msg.mediaData?.synthesizedEmotion;
+    const needsResynthesis = msg.role !== "user" && (
+        synthesizedFromText !== speechText || synthesizedEmotion !== speechEmotion
+    );
     const duration = msg.mediaData?.voiceDuration || Math.max(2, Math.ceil(speechText.length / 4));
 
     // Auto-synthesize on mount if no audio yet (AI messages)
@@ -2186,14 +2193,18 @@ function VoiceMessageBubble({ msg, characterId, onUpdate, defaultTranslationExpa
                 const { resolveVoiceConfig, synthesizeSpeech } = await import("@/lib/tts-service");
                 const vc = resolveVoiceConfig(characterId);
                 if (!vc || cancelled) { setSynthesizing(false); return; }
-                const blob = await synthesizeSpeech(speechText, vc);
+                const blob = await synthesizeSpeech(speechText, vc, { emotion: speechEmotion });
                 if (cancelled || !blob) { setSynthesizing(false); return; }
                 // Convert to base64 data URL and persist
                 const reader = new FileReader();
                 reader.onload = () => {
                     if (cancelled) return;
                     const dataUrl = reader.result as string;
-                    const nextMediaData = { ...msg.mediaData, synthesizedFromText: speechText };
+                    const nextMediaData = {
+                        ...msg.mediaData,
+                        synthesizedFromText: speechText,
+                        synthesizedEmotion: speechEmotion,
+                    };
                     updateMessageMediaData(msg.id, nextMediaData);
                     updateMessageMediaUrl(msg.id, dataUrl);
                     if (onUpdate) onUpdate({ ...msg, mediaUrl: dataUrl, mediaData: nextMediaData });
@@ -2204,7 +2215,7 @@ function VoiceMessageBubble({ msg, characterId, onUpdate, defaultTranslationExpa
         })();
         return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [msg.id, msg.mediaUrl, msg.mediaData, characterId, needsResynthesis, speechText]);
+    }, [msg.id, msg.mediaUrl, msg.mediaData, characterId, needsResynthesis, speechText, speechEmotion]);
 
     const handlePlay = () => {
         if (synthesizing || needsResynthesis) return;

@@ -14,6 +14,7 @@ import type { StateValue } from "./chat-storage";
 import { parseStateValues, mergeStateValues } from "./state-value-parser";
 import { stripActionShells } from "./action-parser";
 import { stripTextToolDirectives } from "./text-tool-protocol";
+import { normalizeSpeechEmotion } from "./speech-style";
 import {
     formatCustomAppDirectiveSummary,
     getCustomAppDirectiveSyntaxHead,
@@ -244,12 +245,12 @@ const RICH_PATTERNS: {
         },
     },
     {
-        // [语音条:文字内容] — voice message
-        regex: new RegExp(`\\[语音条${C}([^\\]]+)\\]`),
+        // [语音条 emotion="happy":文字内容]；旧的 [语音条:文字] 仍兼容
+        regex: new RegExp(`\\[语音条(?:\\s+emotion\\s*=\\s*["']?([a-zA-Z]+)["']?)?${C}([^\\]]+)\\]`),
         build: (m) => ({
             content: "",
             mediaType: "audio" as const,
-            mediaData: { label: m[1].trim() },
+            mediaData: { label: m[2].trim(), voiceEmotion: normalizeSpeechEmotion(m[1]) },
         }),
     },
     {

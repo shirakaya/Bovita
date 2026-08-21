@@ -2,6 +2,7 @@
 
 import type { VoiceApiConfig, ContentAppId } from "./settings-types";
 import { loadVoiceConfigs, loadBindingConfig, resolveBinding } from "./settings-storage";
+import { normalizeSpeechEmotion } from "./speech-style";
 
 export type VoiceApiConfigResolved = VoiceApiConfig;
 
@@ -69,11 +70,6 @@ async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = TTS_
 
 // ── Minimax TTS ─────────────────────────────────────
 
-// MiniMax voice_setting.emotion 支持的取值（speech-01-turbo/hd、speech-02-turbo/hd 等）。
-const MINIMAX_EMOTIONS = new Set([
-    "happy", "sad", "angry", "fearful", "disgusted", "surprised", "calm", "neutral", "fluent",
-]);
-
 async function synthesizeMinimax(text: string, config: VoiceApiConfig, emotion?: string): Promise<Blob | null> {
     if (!config.apiKey) throw new Error("Minimax API Key 未配置");
 
@@ -84,8 +80,8 @@ async function synthesizeMinimax(text: string, config: VoiceApiConfig, emotion?:
         vol: 1.0,
         pitch: 0,
     };
-    const normalizedEmotion = emotion?.trim().toLowerCase();
-    if (normalizedEmotion && MINIMAX_EMOTIONS.has(normalizedEmotion)) {
+    const normalizedEmotion = normalizeSpeechEmotion(emotion);
+    if (normalizedEmotion) {
         voiceSetting.emotion = normalizedEmotion;
     }
 

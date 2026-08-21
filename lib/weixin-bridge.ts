@@ -8,9 +8,9 @@ import { generateChatCompletion, flattenCompletionResult } from "./chat-engine";
 import type { MediaAttachment } from "./tool-executor";
 import { loadMediaBlob, isMediaStoreRef } from "./media-cache-storage";
 import { parseAIResponse, type ParsedMessagePart } from "./rich-message-parser";
-import { splitBilingualText } from "./bilingual-text";
 import { resolveVoiceConfig, synthesizeSpeech } from "./tts-service";
 import { formatShoppingPaymentRequestHistory } from "./shopping-payment-request";
+import { prepareSpeech } from "./speech-style";
 
 // ── iLink 实际消息格式 ────────────────────────────────────────
 type ILinkTextItem = { type: 1; text_item: { text: string } };
@@ -59,14 +59,6 @@ function getMediaLabel(part: ParsedMessagePart): string {
 
 function getVoiceTranscript(part: ParsedMessagePart): string {
     return getMediaLabel(part) || "语音消息";
-}
-
-function getVoiceSpeechText(transcript: string): string {
-    return transcript
-        .split(/\n+/)
-        .map(line => splitBilingualText(line)?.original || line)
-        .join("\n")
-        .trim();
 }
 
 function estimateVoiceDuration(text: string): number {
@@ -766,8 +758,9 @@ async function partToWeixinOutgoing(part: ParsedMessagePart, charName: string, c
     const directImage = cleanText(part.mediaData?.stickerUrl);
     if (directImage.startsWith("data:image/")) return { kind: "image", imageDataUrl: directImage };
     if (part.mediaType === "audio") {
-        const transcript = getVoiceTranscript(part);
-        const speechText = getVoiceSpeechText(transcript);
+        const preparedSpeech = prepareSpeech(getVoiceTranscript(part), part.mediaData?.voiceEmotion);
+        const transcript = preparedSpeech.displayText;
+        const speechText = preparedSpeech.speechText;
         const fallbackDuration = typeof part.mediaData?.voiceDuration === "number"
             ? Math.max(1, Math.ceil(part.mediaData.voiceDuration))
             : estimateVoiceDuration(speechText || transcript);
@@ -775,7 +768,9 @@ async function partToWeixinOutgoing(part: ParsedMessagePart, charName: string, c
         const voiceConfig = resolveVoiceConfig(characterId, "chat");
         if (voiceConfig?.enableTTS) {
             try {
-                const audioBlob = await synthesizeSpeech(speechText || transcript, voiceConfig);
+                const audioBlob = await synthesizeSpeech(speechText || transcript, voiceConfig, {
+                    emotion: preparedSpeech.emotion,
+                });
                 if (audioBlob) {
                     const [audioDataUrl, audioDuration] = await Promise.all([
                         blobToAudioDataUrl(audioBlob),

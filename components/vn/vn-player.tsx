@@ -183,11 +183,16 @@ export function VnPlayer({ characterId, chapterIndex, onClose, onChapterEnd, vnT
     const frameIndex = targetFrame.sourceFrameIndex;
     if (!messageId || frameIndex == null) return;
 
-    const speechText = getTypingSourceText(targetFrame).trim();
+    const speechText = (targetFrame.voiceText || getTypingSourceText(targetFrame)).trim();
+    const speechEmotion = targetFrame.voiceEmotion;
     if (!speechText) return;
 
     const cached = targetFrame.voiceAudio;
-    if (cached?.audioDataUrl && cached.synthesizedFromText === speechText) {
+    if (
+      cached?.audioDataUrl &&
+      cached.synthesizedFromText === speechText &&
+      cached.synthesizedEmotion === speechEmotion
+    ) {
       if (options?.play) {
         const blob = await dataUrlToBlob(cached.audioDataUrl);
         await playVoiceBlob(key, blob);
@@ -205,12 +210,13 @@ export function VnPlayer({ characterId, chapterIndex, onClose, onChapterEnd, vnT
 
     setVoiceBusyKey(key);
     try {
-      const blob = await synthesizeSpeech(speechText, voiceConfig);
+      const blob = await synthesizeSpeech(speechText, voiceConfig, { emotion: speechEmotion });
       if (!blob) return;
       const audioDataUrl = await blobToDataUrl(blob);
       const audio: VnFrameAudio = {
         audioDataUrl,
         synthesizedFromText: speechText,
+        synthesizedEmotion: speechEmotion,
         updatedAt: new Date().toISOString(),
       };
       updateVnMessageFrameAudio(messageId, frameIndex, audio);
@@ -884,10 +890,11 @@ export function VnPlayer({ characterId, chapterIndex, onClose, onChapterEnd, vnT
     const key = getFrameVoiceKey(targetFrame);
     // 旁白帧（无 speaker）不提供配音按钮
     if (!targetFrame || !key || !targetFrame.speaker || targetFrame.sourceRole !== "assistant" || !targetFrame.text.trim()) return null;
-    const speechText = getTypingSourceText(targetFrame).trim();
+    const speechText = (targetFrame.voiceText || getTypingSourceText(targetFrame)).trim();
     const hasCurrentAudio = Boolean(
       targetFrame.voiceAudio?.audioDataUrl &&
-      targetFrame.voiceAudio.synthesizedFromText === speechText,
+      targetFrame.voiceAudio.synthesizedFromText === speechText &&
+      targetFrame.voiceAudio.synthesizedEmotion === targetFrame.voiceEmotion,
     );
     const busy = voiceBusyKey === key;
     const playing = voicePlayingKey === key;

@@ -10,7 +10,7 @@ import { createSTTSession, type STTSession } from "@/lib/stt-service";
 import { resolveVoiceConfig, synthesizeSpeech, playAudioBlob } from "@/lib/tts-service";
 import { suspendKeepAliveForCall, resumeKeepAliveAfterCall } from "@/lib/use-weixin-bridge";
 import { BilingualTextBlock } from "./message-bubble";
-import { splitBilingualText } from "@/lib/bilingual-text";
+import { prepareSpeech } from "@/lib/speech-style";
 import type { Character } from "@/lib/character-types";
 import { useCallKeyboardOffsetStyle } from "./use-call-keyboard-offset";
 import { isAndroidBrowser } from "./voice-input-platform";
@@ -34,13 +34,6 @@ type SubtitleEntry = {
     senderName?: string;
     senderCharacterId?: string;
 };
-
-function stripBilingualForSpeech(text: string): string {
-    return text
-        .split("\n")
-        .map(line => splitBilingualText(line)?.original || line)
-        .join("\n");
-}
 
 type GroupCallScreenProps = {
     type: "voice" | "video";
@@ -230,8 +223,8 @@ export function GroupCallScreen({ type, session, characters, onEnd, initiator = 
                     getLatestCharacterStateValues(r.characterId),
                 );
                 const textParts = parts.filter(p => !p.mediaType && p.content.trim());
-                const displayText = textParts.map(p => p.content).join("\n");
-                const speechText = stripBilingualForSpeech(displayText);
+                const preparedSpeech = prepareSpeech(textParts.map(p => p.content).join("\n"));
+                const { displayText, speechText } = preparedSpeech;
 
                 if (!displayText && !(statusPanel || innerMonologue)) continue;
 
@@ -260,7 +253,9 @@ export function GroupCallScreen({ type, session, characters, onEnd, initiator = 
                 const voiceConfig = resolveVoiceConfig(r.characterId);
                 if (voiceConfig && speechText.trim()) {
                     try {
-                        const audioBlob = await synthesizeSpeech(speechText, voiceConfig);
+                        const audioBlob = await synthesizeSpeech(speechText, voiceConfig, {
+                            emotion: preparedSpeech.emotion,
+                        });
                         if (stateRef.current === "ENDED") return;
                         if (audioBlob) {
                             const { promise, abort } = playAudioBlob(audioBlob);

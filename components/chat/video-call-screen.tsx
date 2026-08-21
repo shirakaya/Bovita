@@ -12,7 +12,7 @@ import { createSTTSession, type STTSession } from "@/lib/stt-service";
 import { resolveVoiceConfig, synthesizeSpeech, playAudioBlob } from "@/lib/tts-service";
 import { suspendKeepAliveForCall, resumeKeepAliveAfterCall } from "@/lib/use-weixin-bridge";
 import { BilingualTextBlock } from "./message-bubble";
-import { splitBilingualText } from "@/lib/bilingual-text";
+import { prepareSpeech } from "@/lib/speech-style";
 import type { Character } from "@/lib/character-types";
 import { useCallKeyboardOffsetStyle } from "./use-call-keyboard-offset";
 import { CallSttWarningDialog, hideCallSttWarningPermanently, isCallSttWarningHidden } from "./call-stt-warning-dialog";
@@ -43,13 +43,6 @@ type VideoCallScreenProps = {
     onConnect?: () => void;
     initiator?: "user" | "character";
 };
-
-function stripBilingualForSpeech(text: string): string {
-    return text
-        .split("\n")
-        .map(line => splitBilingualText(line)?.original || line)
-        .join("\n");
-}
 
 // ── Component ───────────────────────────────────────
 
@@ -339,6 +332,9 @@ export function VideoCallScreen({ session, character, onEnd, onConnect, initiato
         const chatParts = parts.filter(p =>
             !p.mediaType || !["voice_call", "video_call", "poke", "accept_red_packet", "decline_red_packet", "accept_transfer", "decline_transfer", "accept_payment_request", "decline_payment_request"].includes(p.mediaType)
         );
+        const displayChatParts = chatParts.map((part) => !part.mediaType
+            ? { ...part, content: prepareSpeech(part.content).displayText }
+            : part);
 
         if (chatParts.length === 0 && (statusPanel || innerMonologue)) {
             const aiMsg = pushChatMessage({
@@ -349,7 +345,7 @@ export function VideoCallScreen({ session, character, onEnd, onConnect, initiato
             });
             messagesRef.current = [...messagesRef.current, aiMsg];
         } else {
-            const newMsgs = chatParts.map((part, idx) =>
+            const newMsgs = displayChatParts.map((part, idx) =>
                 pushChatMessage({
                     sessionId: session.id, role: "assistant", content: part.content,
                     mediaType: part.mediaType,
@@ -390,8 +386,8 @@ export function VideoCallScreen({ session, character, onEnd, onConnect, initiato
             if (stateRef.current === "ENDED") return;
 
             const { cleanParts } = processAIResponse(aiResponseText);
-            const displayText = cleanParts.join("\n");
-            const speechText = stripBilingualForSpeech(displayText);
+            const preparedSpeech = prepareSpeech(cleanParts.join("\n"));
+            const { displayText, speechText } = preparedSpeech;
 
             if (!displayText) { setCallState("IDLE"); return; }
 
@@ -401,7 +397,9 @@ export function VideoCallScreen({ session, character, onEnd, onConnect, initiato
             const voiceConfig = resolveVoiceConfig(session.contactId);
             if (voiceConfig && !isSpeakerMutedRef.current) {
                 try {
-                    const audioBlob = await synthesizeSpeech(speechText, voiceConfig);
+                    const audioBlob = await synthesizeSpeech(speechText, voiceConfig, {
+                        emotion: preparedSpeech.emotion,
+                    });
                     if (stateRef.current === "ENDED") return;
                     if (audioBlob && !isSpeakerMutedRef.current) {
                         const { promise, abort } = playAudioBlob(audioBlob);

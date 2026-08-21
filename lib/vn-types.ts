@@ -3,6 +3,8 @@ export type VnFrame = {
   sprite?: string;   // sprite key (e.g. "沈既川/微笑")
   speaker?: string;  // null = narration
   text: string;
+  voiceText?: string; // 含 TTS 控制标记、但不含双语译文的实际合成文本
+  voiceEmotion?: string;
   sourceMessageId?: string;
   sourceFrameIndex?: number;
   sourceRole?: VnMessage["role"];
@@ -66,5 +68,6 @@ export type VnMessage = {
 export type VnFrameAudio = {
   audioDataUrl: string;
   synthesizedFromText: string;
+  synthesizedEmotion?: string;
   updatedAt: string;
 };

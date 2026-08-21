@@ -1,4 +1,5 @@
 import type { VnFrame, VnOptions, VnParsedResponse } from "./vn-types";
+import { normalizeSpeechEmotion, prepareSpeech } from "./speech-style";
 
 export const VN_PARSER_VERSION = 1;
 
@@ -50,6 +51,8 @@ export function parseVnResponse(rawText: string): VnParsedResponse {
     // Parse bg and sprite attributes
     const bgMatch = attrs.match(/bg\s*=\s*"([^"]*)"/i);
     const spriteMatch = attrs.match(/sprite\s*=\s*"([^"]*)"/i);
+    const emotionMatch = attrs.match(/emotion\s*=\s*"([^"]*)"/i);
+    const sceneEmotion = normalizeSpeechEmotion(emotionMatch?.[1]);
 
     if (bgMatch) lastBg = decodeXmlEntities(bgMatch[1]);
     if (spriteMatch) lastSprite = decodeXmlEntities(spriteMatch[1]);
@@ -67,11 +70,14 @@ export function parseVnResponse(rawText: string): VnParsedResponse {
     for (const line of lines) {
       const dialogueMatch = line.match(/^(.+?)\|["\u201c\u300c](.+)["\u201d\u300d]$/);
       if (dialogueMatch) {
+        const preparedSpeech = prepareSpeech(dialogueMatch[2].trim(), sceneEmotion);
         frames.push({
           bg: lastBg,
           sprite: lastSprite,
           speaker: dialogueMatch[1].trim(),
-          text: dialogueMatch[2].trim(),
+          text: preparedSpeech.displayText,
+          voiceText: preparedSpeech.speechText,
+          voiceEmotion: preparedSpeech.emotion,
         });
       } else {
         // Narration
@@ -90,7 +96,12 @@ export function parseVnResponse(rawText: string): VnParsedResponse {
     for (const line of lines) {
       const dialogueMatch = line.match(/^(.+?)\|["\u201c\u300c](.+)["\u201d\u300d]$/);
       if (dialogueMatch) {
-        frames.push({ speaker: dialogueMatch[1].trim(), text: decodeXmlEntities(dialogueMatch[2].trim()) });
+        const preparedSpeech = prepareSpeech(decodeXmlEntities(dialogueMatch[2].trim()));
+        frames.push({
+          speaker: dialogueMatch[1].trim(),
+          text: preparedSpeech.displayText,
+          voiceText: preparedSpeech.speechText,
+        });
       } else {
         frames.push({ text: decodeXmlEntities(line) });
       }
