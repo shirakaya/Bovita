@@ -6,7 +6,7 @@ import type { PresetConfig } from "./settings-types";
 import { getCheckPhonePromptTags } from "./checkphone-config";
 
 export const BUILTIN_PRESET_ID = "builtin_default_v1";
-export const BUILTIN_PRESET_VERSION = 261; // 261：语义完整优先，撤销强制 TTS 分段；升级仅重写内置预设，自建预设不受影响
+export const BUILTIN_PRESET_VERSION = 262; // 262：主动消息提示词迁入内置预设；升级仅重写内置预设，自建预设不受影响
 
 export function createBuiltinPreset(): PresetConfig {
     const now = Date.now();
@@ -55,6 +55,7 @@ export function createBuiltinPreset(): PresetConfig {
             { identifier: "chat_offline_format", enabled: true },
             { identifier: "chat_optional_actions", enabled: true },
             { identifier: "chat_followup", enabled: true },
+            { identifier: "chat_proactive", enabled: true },
             { identifier: "chat_timed_wake", enabled: true },
             { identifier: "chat_period_care", enabled: true },
             { identifier: "chat_voice_format", enabled: true },
@@ -498,6 +499,26 @@ export function createBuiltinPreset(): PresetConfig {
                 injection_depth: 0,
                 enabled: true,
                 tags: ["chat", "followup"],
+            },
+            {
+                identifier: "chat_proactive",
+                name: "▸ 冷场主动消息",
+                role: "user",
+                content: [
+                    "<proactive_message_instruction>",
+                    "{{timeContext}}",
+                    "你和{{user}}已经有一段时间没有聊天了，距最近一条消息约{{proactiveIdleMinutes}}分钟。现在处于允许主动联系的时间段。",
+                    "请结合{{char}}的性格、你们的关系、当前时间和最近聊天内容，决定是否主动发起消息。不要为了完成任务而强行找话题；角色没有合理动机时可以保持静默。",
+                    "如果发送，内容应像角色自然产生的联系，不要机械复述旧话，不要提及系统、冷场计时或触发规则，并遵循chat_output_format。",
+                    "如果决定静默，按照以下格式输出：",
+                    "[好感度:X][占有欲:X][焦虑值:X]",
+                    "[内心]你的所有内心想法写在这里。[/内心]",
+                    "</proactive_message_instruction>",
+                ].join("\n"),
+                injection_position: 0,
+                injection_depth: 0,
+                enabled: true,
+                tags: ["chat", "proactive"],
             },
             {
                 identifier: "chat_timed_wake",
