@@ -921,6 +921,13 @@ export type FollowUpConfig = {
     anxietyFieldName: string;    // 状态值字段名（默认 "焦虑值"）
     anxietyMinDelay: number;     // 最短延迟 秒（焦虑=100 时，默认 15）
     anxietyMaxDelay: number;     // 最长延迟 秒（焦虑=阈值时，默认 180）
+    proactiveEnabled: boolean;
+    proactivePrompt: string;
+    proactiveStartHour: number;
+    proactiveEndHour: number;
+    proactiveMinIdleMinutes: number;
+    proactiveMaxIdleMinutes: number;
+    proactiveDailyLimit: number;
 };
 
 export type ChatSendConfig = {
@@ -931,6 +938,11 @@ const DEFAULT_FOLLOW_UP_PROMPT = `你已经在未收到{{user}}回复的情况�
 如果继续发消息，内容应该自然，遵循chat_output_format的格式，不要重复之前说过的话。
 如果决定静默，只输出状态值和内心想法，不输出任何聊天消息。`;
 
+const DEFAULT_PROACTIVE_MESSAGE_PROMPT = `你和{{user}}已经有一段时间没有聊天了，距最近一条消息约{{idleMinutes}}分钟。现在处于允许主动联系的时间段。
+请结合{{char}}的性格、你们的关系、当前时间和最近聊天内容，决定是否主动发起一条新消息。
+如果发送，内容应像自然产生的联系，不要机械复述旧话，也不要提及系统、冷场计时或触发规则，并遵循chat_output_format。
+如果此刻没有合理动机，保持静默：只输出状态值和内心想法，不输出聊天消息。`;
+
 
 export function getDefaultFollowUpConfig(): FollowUpConfig {
     return {
@@ -939,6 +951,13 @@ export function getDefaultFollowUpConfig(): FollowUpConfig {
         anxietyFieldName: "焦虑值",
         anxietyMinDelay: 15,
         anxietyMaxDelay: 180,
+        proactiveEnabled: false,
+        proactivePrompt: DEFAULT_PROACTIVE_MESSAGE_PROMPT,
+        proactiveStartHour: 9,
+        proactiveEndHour: 20,
+        proactiveMinIdleMinutes: 30,
+        proactiveMaxIdleMinutes: 120,
+        proactiveDailyLimit: 3,
     };
 }
 
@@ -961,6 +980,13 @@ export function loadFollowUpConfig(): FollowUpConfig {
             anxietyFieldName: typeof parsed.anxietyFieldName === "string" && parsed.anxietyFieldName.trim() ? parsed.anxietyFieldName : defaults.anxietyFieldName,
             anxietyMinDelay: typeof parsed.anxietyMinDelay === "number" ? Math.max(5, Math.min(300, parsed.anxietyMinDelay)) : defaults.anxietyMinDelay,
             anxietyMaxDelay: typeof parsed.anxietyMaxDelay === "number" ? Math.max(15, Math.min(600, parsed.anxietyMaxDelay)) : defaults.anxietyMaxDelay,
+            proactiveEnabled: parsed.proactiveEnabled === true,
+            proactivePrompt: typeof parsed.proactivePrompt === "string" && parsed.proactivePrompt.trim() ? parsed.proactivePrompt : defaults.proactivePrompt,
+            proactiveStartHour: typeof parsed.proactiveStartHour === "number" ? Math.max(0, Math.min(23, Math.round(parsed.proactiveStartHour))) : defaults.proactiveStartHour,
+            proactiveEndHour: typeof parsed.proactiveEndHour === "number" ? Math.max(0, Math.min(23, Math.round(parsed.proactiveEndHour))) : defaults.proactiveEndHour,
+            proactiveMinIdleMinutes: typeof parsed.proactiveMinIdleMinutes === "number" ? Math.max(1, Math.min(1440, Math.round(parsed.proactiveMinIdleMinutes))) : defaults.proactiveMinIdleMinutes,
+            proactiveMaxIdleMinutes: typeof parsed.proactiveMaxIdleMinutes === "number" ? Math.max(1, Math.min(2880, Math.round(parsed.proactiveMaxIdleMinutes))) : defaults.proactiveMaxIdleMinutes,
+            proactiveDailyLimit: typeof parsed.proactiveDailyLimit === "number" ? Math.max(1, Math.min(20, Math.round(parsed.proactiveDailyLimit))) : defaults.proactiveDailyLimit,
         };
     } catch {
         return getDefaultFollowUpConfig();
