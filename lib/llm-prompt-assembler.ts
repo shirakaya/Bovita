@@ -58,6 +58,7 @@ export interface AssemblerInput {
     initialStateValues?: StateValue[];
     followUpCount?: number;
     followUpDelay?: number;
+    proactiveIdleMinutes?: number;
     timedWakeElapsedMinutes?: number;
     timedWakeIntent?: string;
     periodCareContext?: string;
@@ -610,6 +611,7 @@ export function assemblePromptPayload(input: AssemblerInput): LLMMessage[] {
         ? [...input.appTags]
         : [appId, ...(followUpCount > 0 ? ["followup"] : [])];
     const followUpDelay = input.followUpDelay ?? 0;
+    const proactiveIdleMinutes = input.proactiveIdleMinutes ?? 0;
     const timedWakeElapsedMinutes = input.timedWakeElapsedMinutes ?? 0;
     const timedWakeIntent = input.timedWakeIntent ?? "";
     const periodCareContext = input.periodCareContext ?? "";
@@ -656,6 +658,7 @@ export function assemblePromptPayload(input: AssemblerInput): LLMMessage[] {
         engine.stateStr = stateStr;
         engine.followUpCount = followUpCount;
         engine.followUpDelay = followUpDelay;
+        engine.proactiveIdleMinutes = String(proactiveIdleMinutes);
         engine.timedWakeElapsedMinutes = String(timedWakeElapsedMinutes);
         engine.timedWakeIntent = timedWakeIntent;
         engine.periodCareContext = periodCareContext;
