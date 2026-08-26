@@ -579,6 +579,94 @@ function FollowUpSettingsEditor({ onBack }: { onBack: () => void }) {
                     />
                 </div>
 
+                <p className="menu-group-desc mx-2">冷场主动消息</p>
+                <div className="menu-group">
+                    <div className="menu-item">
+                        <ProfileSettingsIcon icon={MessageSquareDashed} color={BINDING_ACCENTS.preset} />
+                        <div className="menu-label-group">
+                            <span className="menu-label">允许角色主动发消息</span>
+                            <span className="menu-desc">冷场达到随机等待时间后，由角色决定发送或静默</span>
+                        </div>
+                        <div className="menu-right">
+                            <Toggle
+                                checked={config.proactiveEnabled}
+                                onChange={enabled => updateConfig({ proactiveEnabled: enabled })}
+                            />
+                        </div>
+                    </div>
+                    <ProfileSettingsSliderItem
+                        icon={Clock}
+                        color={CONTENT_APP_ACCENTS.calendar}
+                        label="允许时段开始"
+                        desc="设为相同小时表示全天允许"
+                        value={config.proactiveStartHour}
+                        valueLabel={`${String(config.proactiveStartHour).padStart(2, "0")}:00`}
+                        min={0}
+                        max={23}
+                        step={1}
+                        onChange={value => updateConfig({ proactiveStartHour: value })}
+                    />
+                    <ProfileSettingsSliderItem
+                        icon={Clock}
+                        color={CONTENT_APP_ACCENTS.calendar}
+                        label="允许时段结束"
+                        desc="支持跨午夜，例如 22:00–07:00"
+                        value={config.proactiveEndHour}
+                        valueLabel={`${String(config.proactiveEndHour).padStart(2, "0")}:00`}
+                        min={0}
+                        max={23}
+                        step={1}
+                        onChange={value => updateConfig({ proactiveEndHour: value })}
+                    />
+                    <ProfileSettingsSliderItem
+                        icon={Clock}
+                        color={BINDING_ACCENTS.voice}
+                        label="最短冷场等待"
+                        value={config.proactiveMinIdleMinutes}
+                        valueLabel={`${config.proactiveMinIdleMinutes}分钟`}
+                        min={1}
+                        max={1440}
+                        step={5}
+                        onChange={value => updateConfig({ proactiveMinIdleMinutes: value })}
+                    />
+                    <ProfileSettingsSliderItem
+                        icon={Clock}
+                        color={BINDING_ACCENTS.voice}
+                        label="最长冷场等待"
+                        desc="每次在最短与最长之间随机取值"
+                        value={config.proactiveMaxIdleMinutes}
+                        valueLabel={`${config.proactiveMaxIdleMinutes}分钟`}
+                        min={1}
+                        max={2880}
+                        step={5}
+                        onChange={value => updateConfig({ proactiveMaxIdleMinutes: value })}
+                    />
+                    <ProfileSettingsSliderItem
+                        icon={Send}
+                        color={CONTENT_APP_ACCENTS.moments}
+                        label="每日发送上限"
+                        desc="按每个角色分别计数；模型选择静默时不占次数"
+                        value={config.proactiveDailyLimit}
+                        valueLabel={`${config.proactiveDailyLimit}次`}
+                        min={1}
+                        max={20}
+                        step={1}
+                        onChange={value => updateConfig({ proactiveDailyLimit: value })}
+                    />
+                    <div className="menu-item flex-col items-stretch gap-2">
+                        <div className="menu-label-group">
+                            <span className="menu-label">主动消息提示词</span>
+                            <span className="menu-desc">支持 {"{{char}}"}、{"{{user}}"}、{"{{idleMinutes}}"}</span>
+                        </div>
+                        <textarea
+                            className="ui-textarea ts-13 leading-relaxed"
+                            value={config.proactivePrompt}
+                            onChange={event => updateConfig({ proactivePrompt: event.target.value })}
+                            style={{ minHeight: 150, resize: "vertical" }}
+                        />
+                    </div>
+                </div>
+
                 {/* Reset button */}
                 <div className="menu-group">
                     <button className="menu-item" onClick={handleResetDefaults}>
