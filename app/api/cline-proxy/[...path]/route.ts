@@ -12,6 +12,55 @@ const ALLOWED_PATHS = new Set([
 const STREAM_HEARTBEAT_INTERVAL_MS = 10_000;
 const MAX_REQUEST_BODY_BYTES = 5 * 1024 * 1024;
 
+function normalizeSsePayload(rawData: string): string {
+    if (rawData === "[DONE]") return "data: [DONE]\n\n";
+
+    try {
+        const parsed = JSON.parse(rawData) as {
+            data?: unknown;
+            success?: unknown;
+            choices?: Array<{
+                delta?: unknown;
+                message?: {
+                    role?: unknown;
+                    content?: unknown;
+                    reasoning_content?: unknown;
+                };
+                [key: string]: unknown;
+            }>;
+            [key: string]: unknown;
+        };
+        const payload = parsed.success === true && parsed.data !== undefined
+            ? parsed.data
+            : parsed;
+
+        if (payload && typeof payload === "object") {
+            const completion = payload as typeof parsed;
+            if (Array.isArray(completion.choices)) {
+                completion.choices = completion.choices.map((choice) => {
+                    if (choice.delta !== undefined || !choice.message) return choice;
+
+                    const { role, content, reasoning_content } = choice.message;
+                    return {
+                        ...choice,
+                        delta: {
+                            ...(typeof role === "string" ? { role } : {}),
+                            ...(typeof content === "string" ? { content } : {}),
+                            ...(typeof reasoning_content === "string"
+                                ? { reasoning_content }
+                                : {}),
+                        },
+                    };
+                });
+            }
+        }
+
+        return `data: ${JSON.stringify(payload)}\n\n`;
+    } catch {
+        return `data: ${rawData}\n\n`;
+    }
+}
+
 type RouteContext = {
     params: Promise<{ path?: string[] }>;
 };
@@ -97,6 +146,29 @@ async function proxyCline(request: NextRequest, context: RouteContext) {
         }
 
         if (isStreamingChatRequest) {
+            const upstream = await fetch(target, {
+                method: request.method,
+                headers,
+                body,
+                cache: "no-store",
+                redirect: "follow",
+            });
+
+            if (!upstream.ok) {
+                const errorBody = await upstream.text();
+                return new NextResponse(errorBody, {
+                    status: upstream.status,
+                    headers: corsHeaders(upstream.headers.get("content-type")),
+                });
+            }
+
+            if (!upstream.body) {
+                return NextResponse.json(
+                    { error: "Cline returned an empty response body." },
+                    { status: 502, headers: corsHeaders() },
+                );
+            }
+
             const encoder = new TextEncoder();
             const stream = new ReadableStream<Uint8Array>({
                 start(controller) {
@@ -112,39 +184,49 @@ async function proxyCline(request: NextRequest, context: RouteContext) {
 
                     void (async () => {
                         try {
-                            const upstream = await fetch(target, {
-                                method: request.method,
-                                headers,
-                                body,
-                                cache: "no-store",
-                                redirect: "follow",
-                            });
-
-                            if (!upstream.ok) {
-                                const errorBody = await upstream.text();
-                                controller.enqueue(encoder.encode(
-                                    `data: ${JSON.stringify({
-                                        error: {
-                                            message: `Cline API error ${upstream.status}: ${errorBody}`,
-                                            status: upstream.status,
-                                        },
-                                    })}\n\n`,
-                                ));
-                                return;
-                            }
-
-                            if (!upstream.body) {
-                                controller.enqueue(encoder.encode(
-                                    `data: ${JSON.stringify({ error: { message: "Cline returned an empty response body." } })}\n\n`,
-                                ));
-                                return;
-                            }
-
                             const reader = upstream.body.getReader();
+                            const decoder = new TextDecoder();
+                            let pending = "";
                             while (true) {
                                 const { done, value } = await reader.read();
+                                pending += decoder.decode(value, { stream: !done });
+
+                                const events = pending.split(/\r?\n\r?\n/);
+                                pending = events.pop() || "";
+
+                                for (const event of events) {
+                                    const dataLines = event
+                                        .split(/\r?\n/)
+                                        .filter((line) => line.startsWith("data:"))
+                                        .map((line) => line.slice(5).trimStart());
+
+                                    if (dataLines.length > 0) {
+                                        controller.enqueue(encoder.encode(
+                                            normalizeSsePayload(dataLines.join("\n")),
+                                        ));
+                                    } else if (event.trim().startsWith("{")) {
+                                        controller.enqueue(encoder.encode(
+                                            normalizeSsePayload(event.trim()),
+                                        ));
+                                    }
+                                }
+
                                 if (done) break;
-                                controller.enqueue(value);
+                            }
+
+                            if (pending.trim()) {
+                                const dataLines = pending
+                                    .split(/\r?\n/)
+                                    .filter((line) => line.startsWith("data:"))
+                                    .map((line) => line.slice(5).trimStart());
+                                const rawData = dataLines.length > 0
+                                    ? dataLines.join("\n")
+                                    : pending.trim();
+                                if (rawData === "[DONE]" || rawData.startsWith("{")) {
+                                    controller.enqueue(encoder.encode(
+                                        normalizeSsePayload(rawData),
+                                    ));
+                                }
                             }
                         } catch (error) {
                             const message = error instanceof Error ? error.message : String(error);
@@ -177,9 +259,38 @@ async function proxyCline(request: NextRequest, context: RouteContext) {
             redirect: "follow",
         });
 
+        const upstreamContentType = upstream.headers.get("content-type");
+        if (upstreamContentType?.includes("application/json")) {
+            const responseText = await upstream.text();
+
+            try {
+                const payload = JSON.parse(responseText) as {
+                    data?: unknown;
+                    success?: unknown;
+                };
+
+                // Cline currently wraps non-streaming OpenAI responses as
+                // { data: <completion>, success: true }. Float expects choices
+                // (or model data) at the top level, so remove only that envelope.
+                if (payload.success === true && payload.data !== undefined) {
+                    return new NextResponse(JSON.stringify(payload.data), {
+                        status: upstream.status,
+                        headers: corsHeaders("application/json"),
+                    });
+                }
+            } catch {
+                // Preserve Cline's original body if it is not valid JSON.
+            }
+
+            return new NextResponse(responseText, {
+                status: upstream.status,
+                headers: corsHeaders(upstreamContentType),
+            });
+        }
+
         return new NextResponse(upstream.body, {
             status: upstream.status,
-            headers: corsHeaders(upstream.headers.get("content-type")),
+            headers: corsHeaders(upstreamContentType),
         });
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
