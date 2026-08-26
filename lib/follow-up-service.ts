@@ -16,10 +16,14 @@ import {
     updateMessageMediaData,
     createResponseBatchId,
     getLatestCharacterStateValues,
+    loadAllProactiveMessageSchedules,
+    saveAllProactiveMessageSchedules,
+    saveProactiveMessageSchedule,
+    clearAllProactiveMessageSchedules,
 } from "./chat-storage";
-import type { ChatMessage, StateValue } from "./chat-storage";
+import type { ChatMessage, StateValue, ProactiveMessageSchedule } from "./chat-storage";
 import { generateChatCompletion, flattenCompletionResult } from "./chat-engine";
-import { loadFollowUpConfig } from "./settings-storage";
+import { loadFollowUpConfig, resolveUserIdentity } from "./settings-storage";
 import { parseAIResponse } from "./rich-message-parser";
 import type { ParsedMessagePart } from "./rich-message-parser";
 import { isKnownStickerLabel } from "./sticker-data";
@@ -50,6 +54,7 @@ import {
 const MAX_FOLLOW_UPS = 10;
 const POLL_INTERVAL_MS = 3000; // check every 3 s
 const PERIOD_CARE_POLL_INTERVAL_MS = 60_000;
+const PROACTIVE_POLL_INTERVAL_MS = 30_000;
 const BACKGROUND_MESSAGE_STAGGER_MS = 800;
 
 function resolveFollowUpSenderName(sessionId: string): string {
@@ -69,7 +74,10 @@ const cancelledWhileFiring = new Set<string>(); // cancelled during in-flight AP
 const timedWakeFiringSet = new Set<string>();
 const periodCareFiringSet = new Set<string>();
 const backgroundReplyFiringSet = new Set<string>();
+const proactiveFiringSet = new Set<string>();
+const proactiveCancelledWhileFiring = new Set<string>();
 let lastPeriodCarePollAt = 0;
+let lastProactivePollAt = 0;
 
 // ── Public API ─────────────────────────────────────────────
 
@@ -175,6 +183,9 @@ export function cancelFollowUp(sessionId: string) {
     if (firingSet.has(sessionId)) {
         cancelledWhileFiring.add(sessionId);
     }
+    if (proactiveFiringSet.has(sessionId)) {
+        proactiveCancelledWhileFiring.add(sessionId);
+    }
 }
 
 // ── Internals ──────────────────────────────────────────────
@@ -208,9 +219,107 @@ function pollSchedules() {
         }
         pollTimedWakeSchedules(now);
         pollMenstrualPeriodCare(now);
+        pollProactiveMessages(now);
     } catch (e) {
         console.error("[FollowUp] pollSchedules error:", e);
     }
+}
+
+function localDayKey(timestamp: number): string {
+    const date = new Date(timestamp);
+    return [
+        date.getFullYear(),
+        String(date.getMonth() + 1).padStart(2, "0"),
+        String(date.getDate()).padStart(2, "0"),
+    ].join("-");
+}
+
+function randomProactiveDelayMs(): number {
+    const config = loadFollowUpConfig();
+    const min = Math.min(config.proactiveMinIdleMinutes, config.proactiveMaxIdleMinutes);
+    const max = Math.max(config.proactiveMinIdleMinutes, config.proactiveMaxIdleMinutes);
+    const minutes = min + Math.random() * (max - min);
+    return Math.max(1, Math.round(minutes)) * 60_000;
+}
+
+function isInsideProactiveWindow(timestamp: number, startHour: number, endHour: number): boolean {
+    if (startHour === endHour) return true;
+    const hour = new Date(timestamp).getHours();
+    return startHour < endHour
+        ? hour >= startHour && hour < endHour
+        : hour >= startHour || hour < endHour;
+}
+
+function nextProactiveWindowStart(timestamp: number, startHour: number, endHour: number): number {
+    if (startHour === endHour || isInsideProactiveWindow(timestamp, startHour, endHour)) return timestamp;
+    const date = new Date(timestamp);
+    const candidate = new Date(date);
+    candidate.setHours(startHour, 0, 0, 0);
+    if (candidate.getTime() <= timestamp) candidate.setDate(candidate.getDate() + 1);
+    return candidate.getTime();
+}
+
+function latestConversationTimestamp(messages: ChatMessage[]): number | null {
+    const latest = [...messages].reverse().find(message => message.role === "user" || message.role === "assistant");
+    if (!latest) return null;
+    const timestamp = new Date(latest.createdAt).getTime();
+    return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+function pollProactiveMessages(now: number) {
+    if (now - lastProactivePollAt < PROACTIVE_POLL_INTERVAL_MS) return;
+    lastProactivePollAt = now;
+
+    const config = loadFollowUpConfig();
+    const stored = loadAllProactiveMessageSchedules();
+    if (!config.proactiveEnabled) {
+        if (stored.length > 0) clearAllProactiveMessageSchedules();
+        return;
+    }
+
+    const existing = new Map(stored.map(schedule => [schedule.sessionId, schedule]));
+    const dayKey = localDayKey(now);
+    const nextSchedules: ProactiveMessageSchedule[] = [];
+    const sessions = loadChatSessions().filter(session => !session.isGroup && !session.isBlacklisted);
+
+    for (const session of sessions) {
+        const messages = loadChatMessages(session.id);
+        const anchorAt = latestConversationTimestamp(messages);
+        if (anchorAt === null) continue;
+
+        const previous = existing.get(session.id);
+        const sentCount = previous?.dayKey === dayKey ? previous.sentCount : 0;
+        let schedule = previous && previous.anchorAt === anchorAt
+            ? { ...previous, dayKey, sentCount }
+            : {
+                sessionId: session.id,
+                anchorAt,
+                fireAt: anchorAt + randomProactiveDelayMs(),
+                dayKey,
+                sentCount,
+            };
+
+        if (schedule.sentCount >= config.proactiveDailyLimit) {
+            nextSchedules.push(schedule);
+            continue;
+        }
+
+        if (schedule.fireAt <= now && !isInsideProactiveWindow(now, config.proactiveStartHour, config.proactiveEndHour)) {
+            schedule = {
+                ...schedule,
+                fireAt: nextProactiveWindowStart(now, config.proactiveStartHour, config.proactiveEndHour),
+            };
+        }
+
+        if (schedule.fireAt <= now && proactiveFiringSet.size === 0) {
+            const idleMinutes = Math.max(1, Math.round((now - anchorAt) / 60_000));
+            schedule = { ...schedule, fireAt: now + randomProactiveDelayMs() };
+            fireProactiveMessage(schedule, idleMinutes);
+        }
+        nextSchedules.push(schedule);
+    }
+
+    saveAllProactiveMessageSchedules(nextSchedules);
 }
 
 function pollTimedWakeSchedules(now: number) {
@@ -357,6 +466,84 @@ async function fireFollowUp(sched: { sessionId: string; count: number; delaySec?
     } finally {
         firingSet.delete(sched.sessionId);
         cancelledWhileFiring.delete(sched.sessionId);
+    }
+}
+
+async function fireProactiveMessage(schedule: ProactiveMessageSchedule, idleMinutes: number) {
+    proactiveFiringSet.add(schedule.sessionId);
+    try {
+        const config = loadFollowUpConfig();
+        if (!config.proactiveEnabled || schedule.sentCount >= config.proactiveDailyLimit) return;
+
+        const session = loadChatSessions().find(item => item.id === schedule.sessionId);
+        if (!session || session.isGroup || session.isBlacklisted) return;
+
+        const latestMessages = loadChatMessages(session.id);
+        if (latestConversationTimestamp(latestMessages) !== schedule.anchorAt) return;
+
+        const instruction = config.proactivePrompt
+            .replaceAll("{{idleMinutes}}", String(idleMinutes))
+            .replaceAll("{{char}}", resolveFollowUpSenderName(session.id))
+            .replaceAll("{{user}}", resolveUserIdentity(session.contactId, "chat")?.name || "用户");
+        const messagesWithInstruction: ChatMessage[] = [
+            ...latestMessages,
+            {
+                id: `_proactive_${Date.now()}`,
+                sessionId: session.id,
+                role: "system",
+                content: instruction,
+                status: "sent",
+                createdAt: new Date().toISOString(),
+            },
+        ];
+
+        window.dispatchEvent(new CustomEvent("followup-started", { detail: { sessionId: session.id } }));
+        let reasoning: string | undefined;
+        const aiResponseText = flattenCompletionResult(await generateChatCompletion(
+            session,
+            messagesWithInstruction,
+            { appTags: ["chat", "text", "proactive"] },
+            { onReasoning: (text) => { reasoning = text; } },
+        ));
+
+        if (proactiveCancelledWhileFiring.has(session.id)) {
+            window.dispatchEvent(new CustomEvent("followup-fired", { detail: { sessionId: session.id } }));
+            return;
+        }
+
+        const { hasVisible, stateValues } = await parseAndSaveResponse(
+            aiResponseText,
+            session.id,
+            0,
+            undefined,
+            latestMessages,
+            { reasoningText: reasoning },
+        );
+
+        const now = Date.now();
+        const updatedMessages = loadChatMessages(session.id);
+        const updatedAnchor = latestConversationTimestamp(updatedMessages) ?? schedule.anchorAt;
+        saveProactiveMessageSchedule({
+            ...schedule,
+            anchorAt: updatedAnchor,
+            fireAt: now + randomProactiveDelayMs(),
+            dayKey: localDayKey(now),
+            sentCount: schedule.sentCount + (hasVisible ? 1 : 0),
+        });
+
+        if (hasVisible) scheduleFollowUp(session.id, 0, stateValues);
+        window.dispatchEvent(new CustomEvent("followup-fired", { detail: { sessionId: session.id } }));
+    } catch (error: any) {
+        console.error("[ProactiveMessage] Error:", error);
+        pushChatMessage({
+            sessionId: schedule.sessionId,
+            role: "system",
+            content: `⚠️ 主动消息失败: ${error?.message || String(error)}`,
+        });
+        window.dispatchEvent(new CustomEvent("followup-fired", { detail: { sessionId: schedule.sessionId } }));
+    } finally {
+        proactiveFiringSet.delete(schedule.sessionId);
+        proactiveCancelledWhileFiring.delete(schedule.sessionId);
     }
 }
 
