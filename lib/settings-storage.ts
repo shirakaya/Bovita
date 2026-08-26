@@ -985,7 +985,7 @@ export function loadFollowUpConfig(): FollowUpConfig {
             proactiveStartHour: typeof parsed.proactiveStartHour === "number" ? Math.max(0, Math.min(23, Math.round(parsed.proactiveStartHour))) : defaults.proactiveStartHour,
             proactiveEndHour: typeof parsed.proactiveEndHour === "number" ? Math.max(0, Math.min(23, Math.round(parsed.proactiveEndHour))) : defaults.proactiveEndHour,
             proactiveMinIdleMinutes: typeof parsed.proactiveMinIdleMinutes === "number" ? Math.max(1, Math.min(1440, Math.round(parsed.proactiveMinIdleMinutes))) : defaults.proactiveMinIdleMinutes,
-            proactiveMaxIdleMinutes: typeof parsed.proactiveMaxIdleMinutes === "number" ? Math.max(1, Math.min(2880, Math.round(parsed.proactiveMaxIdleMinutes))) : defaults.proactiveMaxIdleMinutes,
+            proactiveMaxIdleMinutes: typeof parsed.proactiveMaxIdleMinutes === "number" ? Math.max(1, Math.min(1440, Math.round(parsed.proactiveMaxIdleMinutes))) : defaults.proactiveMaxIdleMinutes,
             proactiveDailyLimit: typeof parsed.proactiveDailyLimit === "number" ? Math.max(1, Math.min(20, Math.round(parsed.proactiveDailyLimit))) : defaults.proactiveDailyLimit,
         };
     } catch {
