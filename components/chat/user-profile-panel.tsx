@@ -594,65 +594,101 @@ function FollowUpSettingsEditor({ onBack }: { onBack: () => void }) {
                             />
                         </div>
                     </div>
-                    <ProfileSettingsSliderItem
-                        icon={Clock}
-                        color={CONTENT_APP_ACCENTS.calendar}
-                        label="允许时段开始"
-                        desc="设为相同小时表示全天允许"
-                        value={config.proactiveStartHour}
-                        valueLabel={`${String(config.proactiveStartHour).padStart(2, "0")}:00`}
-                        min={0}
-                        max={23}
-                        step={1}
-                        onChange={value => updateConfig({ proactiveStartHour: value })}
-                    />
-                    <ProfileSettingsSliderItem
-                        icon={Clock}
-                        color={CONTENT_APP_ACCENTS.calendar}
-                        label="允许时段结束"
-                        desc="支持跨午夜，例如 22:00–07:00"
-                        value={config.proactiveEndHour}
-                        valueLabel={`${String(config.proactiveEndHour).padStart(2, "0")}:00`}
-                        min={0}
-                        max={23}
-                        step={1}
-                        onChange={value => updateConfig({ proactiveEndHour: value })}
-                    />
-                    <ProfileSettingsSliderItem
-                        icon={Clock}
-                        color={BINDING_ACCENTS.voice}
-                        label="最短冷场等待"
-                        value={config.proactiveMinIdleMinutes}
-                        valueLabel={`${config.proactiveMinIdleMinutes}分钟`}
-                        min={1}
-                        max={1440}
-                        step={5}
-                        onChange={value => updateConfig({ proactiveMinIdleMinutes: value })}
-                    />
-                    <ProfileSettingsSliderItem
-                        icon={Clock}
-                        color={BINDING_ACCENTS.voice}
-                        label="最长冷场等待"
-                        desc="每次在最短与最长之间随机取值"
-                        value={config.proactiveMaxIdleMinutes}
-                        valueLabel={`${config.proactiveMaxIdleMinutes}分钟`}
-                        min={1}
-                        max={2880}
-                        step={5}
-                        onChange={value => updateConfig({ proactiveMaxIdleMinutes: value })}
-                    />
-                    <ProfileSettingsSliderItem
-                        icon={Send}
-                        color={CONTENT_APP_ACCENTS.moments}
-                        label="每日发送上限"
-                        desc="按每个角色分别计数；模型选择静默时不占次数"
-                        value={config.proactiveDailyLimit}
-                        valueLabel={`${config.proactiveDailyLimit}次`}
-                        min={1}
-                        max={20}
-                        step={1}
-                        onChange={value => updateConfig({ proactiveDailyLimit: value })}
-                    />
+                    <div className="menu-item">
+                        <ProfileSettingsIcon icon={Clock} color={CONTENT_APP_ACCENTS.calendar} />
+                        <div className="menu-label-group">
+                            <span className="menu-label">允许时段开始</span>
+                            <span className="menu-desc">0–23；起止相同表示全天允许</span>
+                        </div>
+                        <div className="menu-right flex items-center gap-1">
+                            <input
+                                type="number"
+                                inputMode="numeric"
+                                min={0}
+                                max={23}
+                                value={config.proactiveStartHour}
+                                onChange={event => updateConfig({ proactiveStartHour: Math.max(0, Math.min(23, Number(event.target.value) || 0)) })}
+                                className="ui-input w-[72px] text-right"
+                            />
+                            <span className="ts-12 text-[var(--c-text)] opacity-70">点</span>
+                        </div>
+                    </div>
+                    <div className="menu-item">
+                        <ProfileSettingsIcon icon={Clock} color={CONTENT_APP_ACCENTS.calendar} />
+                        <div className="menu-label-group">
+                            <span className="menu-label">允许时段结束</span>
+                            <span className="menu-desc">支持跨午夜，例如 22–7</span>
+                        </div>
+                        <div className="menu-right flex items-center gap-1">
+                            <input
+                                type="number"
+                                inputMode="numeric"
+                                min={0}
+                                max={23}
+                                value={config.proactiveEndHour}
+                                onChange={event => updateConfig({ proactiveEndHour: Math.max(0, Math.min(23, Number(event.target.value) || 0)) })}
+                                className="ui-input w-[72px] text-right"
+                            />
+                            <span className="ts-12 text-[var(--c-text)] opacity-70">点</span>
+                        </div>
+                    </div>
+                    <div className="menu-item">
+                        <ProfileSettingsIcon icon={Clock} color={BINDING_ACCENTS.voice} />
+                        <div className="menu-label-group">
+                            <span className="menu-label">最短冷场等待</span>
+                            <span className="menu-desc">1–1440 分钟</span>
+                        </div>
+                        <div className="menu-right flex items-center gap-1">
+                            <input
+                                type="number"
+                                inputMode="numeric"
+                                min={1}
+                                max={1440}
+                                value={config.proactiveMinIdleMinutes}
+                                onChange={event => updateConfig({ proactiveMinIdleMinutes: Math.max(1, Math.min(1440, Number(event.target.value) || 1)) })}
+                                className="ui-input w-[84px] text-right"
+                            />
+                            <span className="ts-12 text-[var(--c-text)] opacity-70">分钟</span>
+                        </div>
+                    </div>
+                    <div className="menu-item">
+                        <ProfileSettingsIcon icon={Clock} color={BINDING_ACCENTS.voice} />
+                        <div className="menu-label-group">
+                            <span className="menu-label">最长冷场等待</span>
+                            <span className="menu-desc">1–1440 分钟；区间内随机取值</span>
+                        </div>
+                        <div className="menu-right flex items-center gap-1">
+                            <input
+                                type="number"
+                                inputMode="numeric"
+                                min={1}
+                                max={1440}
+                                value={config.proactiveMaxIdleMinutes}
+                                onChange={event => updateConfig({ proactiveMaxIdleMinutes: Math.max(1, Math.min(1440, Number(event.target.value) || 1)) })}
+                                className="ui-input w-[84px] text-right"
+                            />
+                            <span className="ts-12 text-[var(--c-text)] opacity-70">分钟</span>
+                        </div>
+                    </div>
+                    <div className="menu-item">
+                        <ProfileSettingsIcon icon={Send} color={CONTENT_APP_ACCENTS.moments} />
+                        <div className="menu-label-group">
+                            <span className="menu-label">每日发送上限</span>
+                            <span className="menu-desc">每个角色分别计数；静默不占次数</span>
+                        </div>
+                        <div className="menu-right flex items-center gap-1">
+                            <input
+                                type="number"
+                                inputMode="numeric"
+                                min={1}
+                                max={20}
+                                value={config.proactiveDailyLimit}
+                                onChange={event => updateConfig({ proactiveDailyLimit: Math.max(1, Math.min(20, Number(event.target.value) || 1)) })}
+                                className="ui-input w-[72px] text-right"
+                            />
+                            <span className="ts-12 text-[var(--c-text)] opacity-70">次</span>
+                        </div>
+                    </div>
                     <div className="menu-item flex-col items-stretch gap-2">
                         <div className="menu-label-group">
                             <span className="menu-label">主动消息提示词</span>
