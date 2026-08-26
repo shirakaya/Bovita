@@ -600,7 +600,7 @@ function FollowUpSettingsEditor({ onBack }: { onBack: () => void }) {
                             <span className="menu-label">允许时段开始</span>
                             <span className="menu-desc">0–23；起止相同表示全天允许</span>
                         </div>
-                        <div className="menu-right flex items-center gap-1">
+                        <div className="menu-right proactive-number-control">
                             <input
                                 type="number"
                                 inputMode="numeric"
@@ -608,9 +608,9 @@ function FollowUpSettingsEditor({ onBack }: { onBack: () => void }) {
                                 max={23}
                                 value={config.proactiveStartHour}
                                 onChange={event => updateConfig({ proactiveStartHour: Math.max(0, Math.min(23, Number(event.target.value) || 0)) })}
-                                className="ui-input w-[72px] text-right"
+                                className="proactive-number-input"
                             />
-                            <span className="ts-12 text-[var(--c-text)] opacity-70">点</span>
+                            <span className="proactive-number-unit">点</span>
                         </div>
                     </div>
                     <div className="menu-item">
@@ -619,7 +619,7 @@ function FollowUpSettingsEditor({ onBack }: { onBack: () => void }) {
                             <span className="menu-label">允许时段结束</span>
                             <span className="menu-desc">支持跨午夜，例如 22–7</span>
                         </div>
-                        <div className="menu-right flex items-center gap-1">
+                        <div className="menu-right proactive-number-control">
                             <input
                                 type="number"
                                 inputMode="numeric"
@@ -627,9 +627,9 @@ function FollowUpSettingsEditor({ onBack }: { onBack: () => void }) {
                                 max={23}
                                 value={config.proactiveEndHour}
                                 onChange={event => updateConfig({ proactiveEndHour: Math.max(0, Math.min(23, Number(event.target.value) || 0)) })}
-                                className="ui-input w-[72px] text-right"
+                                className="proactive-number-input"
                             />
-                            <span className="ts-12 text-[var(--c-text)] opacity-70">点</span>
+                            <span className="proactive-number-unit">点</span>
                         </div>
                     </div>
                     <div className="menu-item">
@@ -638,7 +638,7 @@ function FollowUpSettingsEditor({ onBack }: { onBack: () => void }) {
                             <span className="menu-label">最短冷场等待</span>
                             <span className="menu-desc">1–1440 分钟</span>
                         </div>
-                        <div className="menu-right flex items-center gap-1">
+                        <div className="menu-right proactive-number-control">
                             <input
                                 type="number"
                                 inputMode="numeric"
@@ -646,9 +646,9 @@ function FollowUpSettingsEditor({ onBack }: { onBack: () => void }) {
                                 max={1440}
                                 value={config.proactiveMinIdleMinutes}
                                 onChange={event => updateConfig({ proactiveMinIdleMinutes: Math.max(1, Math.min(1440, Number(event.target.value) || 1)) })}
-                                className="ui-input w-[84px] text-right"
+                                className="proactive-number-input"
                             />
-                            <span className="ts-12 text-[var(--c-text)] opacity-70">分钟</span>
+                            <span className="proactive-number-unit">分钟</span>
                         </div>
                     </div>
                     <div className="menu-item">
@@ -657,7 +657,7 @@ function FollowUpSettingsEditor({ onBack }: { onBack: () => void }) {
                             <span className="menu-label">最长冷场等待</span>
                             <span className="menu-desc">1–1440 分钟；区间内随机取值</span>
                         </div>
-                        <div className="menu-right flex items-center gap-1">
+                        <div className="menu-right proactive-number-control">
                             <input
                                 type="number"
                                 inputMode="numeric"
@@ -665,9 +665,9 @@ function FollowUpSettingsEditor({ onBack }: { onBack: () => void }) {
                                 max={1440}
                                 value={config.proactiveMaxIdleMinutes}
                                 onChange={event => updateConfig({ proactiveMaxIdleMinutes: Math.max(1, Math.min(1440, Number(event.target.value) || 1)) })}
-                                className="ui-input w-[84px] text-right"
+                                className="proactive-number-input"
                             />
-                            <span className="ts-12 text-[var(--c-text)] opacity-70">分钟</span>
+                            <span className="proactive-number-unit">分钟</span>
                         </div>
                     </div>
                     <div className="menu-item">
@@ -676,7 +676,7 @@ function FollowUpSettingsEditor({ onBack }: { onBack: () => void }) {
                             <span className="menu-label">每日发送上限</span>
                             <span className="menu-desc">每个角色分别计数；静默不占次数</span>
                         </div>
-                        <div className="menu-right flex items-center gap-1">
+                        <div className="menu-right proactive-number-control">
                             <input
                                 type="number"
                                 inputMode="numeric"
@@ -684,9 +684,9 @@ function FollowUpSettingsEditor({ onBack }: { onBack: () => void }) {
                                 max={20}
                                 value={config.proactiveDailyLimit}
                                 onChange={event => updateConfig({ proactiveDailyLimit: Math.max(1, Math.min(20, Number(event.target.value) || 1)) })}
-                                className="ui-input w-[72px] text-right"
+                                className="proactive-number-input"
                             />
-                            <span className="ts-12 text-[var(--c-text)] opacity-70">次</span>
+                            <span className="proactive-number-unit">次</span>
                         </div>
                     </div>
                     <div className="menu-item flex-col items-stretch gap-2">
