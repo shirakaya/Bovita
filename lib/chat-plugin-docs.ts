@@ -135,6 +135,7 @@ opts.timeoutMs 覆盖该 transform 的超时（默认 8000ms）。在 transform 
 ## ctx.ui —— 界面
 
 - \`ctx.ui.toast(text, opts?)\` 聊天顶部轻提示，默认约 2.4s 消失。做"识别中/加载中"这类进行中提示时传 \`{ durationMs: 0 }\` 让它常驻，用返回的 \`close()\` 在完成时手动关闭：\`const t = ctx.ui.toast("处理中…", { durationMs: 0 }); try { …await… } finally { t.close(); }\`
+- \`ctx.ui.insertText(text, { focus? })\` —— 把文本插入当前聊天草稿的光标位置；只写入输入框，不会自动发送。没有可用输入框时返回 \`false\`。
 - \`ctx.ui.slot(坑位名, (el, props) => { ...; return 可选清理函数 })\` —— 认领一块 **React 不管辖的裸 DOM 容器**，随便渲染：
   - "chat.header"：聊天标题栏下方（props: { sessionId, isGroup }）
   - "chat.inputToolbar"：输入栏"+"面板下方（props: { isGroup }）

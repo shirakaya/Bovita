@@ -397,6 +397,26 @@ class ChatPluginRuntime {
                     emitDom(CHAT_PLUGIN_TOAST_EVENT, { id, text: String(text), durationMs: opts?.durationMs });
                     return { close: () => emitDom(CHAT_PLUGIN_TOAST_EVENT, { id, text: "", close: true }) };
                 },
+                insertText: (text, opts) => {
+                    const textarea = Array.from(document.querySelectorAll<HTMLTextAreaElement>(".chat-input-textarea"))
+                        .find(el => !el.disabled && el.offsetParent !== null);
+                    if (!textarea) return false;
+                    const value = textarea.value;
+                    const start = textarea.selectionStart ?? value.length;
+                    const end = textarea.selectionEnd ?? start;
+                    const next = value.slice(0, start) + String(text) + value.slice(end);
+                    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+                    setter?.call(textarea, next);
+                    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+                    const cursor = start + String(text).length;
+                    requestAnimationFrame(() => {
+                        textarea.setSelectionRange(cursor, cursor);
+                        textarea.style.height = "auto";
+                        textarea.style.height = Math.min(textarea.scrollHeight, 120) + "px";
+                        if (opts?.focus !== false) textarea.focus();
+                    });
+                    return true;
+                },
                 slot: (name, mount) => {
                     const registration: SlotRegistration = { pluginId, mount };
                     const list = this.slots.get(name) ?? [];

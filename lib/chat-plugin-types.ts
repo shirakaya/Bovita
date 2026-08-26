@@ -21,7 +21,7 @@ import type { Character } from "./character-types";
 /** 反注册函数：撤销对应的注册动作 */
 export type Disposable = () => void;
 
-export const CHAT_PLUGIN_API_VERSION = 1;
+export const CHAT_PLUGIN_API_VERSION = 2;
 
 // ── manifest ──────────────────────────────────────────────
 
@@ -287,6 +287,8 @@ export type ChatPluginContext = {
          * 做"进行中/加载"指示时传 { durationMs: 0 } 让它常驻，用返回的 close() 手动关闭。
          */
         toast(text: string, opts?: { durationMs?: number }): { close: () => void };
+        /** 把文本插入当前聊天输入框的光标位置；只修改草稿，不会自动发送。 */
+        insertText(text: string, opts?: { focus?: boolean }): boolean;
         /** 认领一个 DOM 坑位 */
         slot(name: ChatPluginSlotName, mount: ChatPluginSlotMount): Disposable;
         /** 注册消息操作菜单项 */
