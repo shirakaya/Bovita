@@ -356,6 +356,7 @@ export type DebugPromptRequestOptions = {
 type ChatPromptBuildOptions = {
     followUpCount?: number;
     followUpDelay?: number;
+    proactiveIdleMinutes?: number;
     timedWakeElapsedMinutes?: number;
     timedWakeIntent?: string;
     periodCareContext?: string;
@@ -1895,6 +1896,7 @@ export async function buildChatPromptMessages(
         initialStateValues: getLatestCharacterStateValues(character.id),
         followUpCount: options?.followUpCount,
         followUpDelay: options?.followUpDelay,
+        proactiveIdleMinutes: options?.proactiveIdleMinutes,
         timedWakeElapsedMinutes: options?.timedWakeElapsedMinutes,
         timedWakeIntent: options?.timedWakeIntent,
         periodCareContext: options?.periodCareContext,
