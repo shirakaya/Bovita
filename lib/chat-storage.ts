@@ -1647,8 +1647,10 @@ export function saveChatAppSettings(settings: ChatAppSettings) {
 // --- Follow-up schedule persistence (supports multiple sessions) ---
 
 const FOLLOW_UP_SCHEDULES_KEY = "ai_phone_followup_schedules_v1";
+const PROACTIVE_MESSAGE_SCHEDULES_KEY = "ai_phone_proactive_message_schedules_v1";
 registerKvMigration(SETTINGS_KEY);
 registerKvMigration(FOLLOW_UP_SCHEDULES_KEY);
+registerKvMigration(PROACTIVE_MESSAGE_SCHEDULES_KEY);
 
 export type FollowUpSchedule = {
     sessionId: string;
@@ -1683,6 +1685,41 @@ export function loadFollowUpSchedule(sessionId: string): FollowUpSchedule | null
 
 export function clearFollowUpSchedule(sessionId: string): void {
     saveAllFollowUpSchedules(loadAllFollowUpSchedules().filter(s => s.sessionId !== sessionId));
+}
+
+export type ProactiveMessageSchedule = {
+    sessionId: string;
+    anchorAt: number;
+    fireAt: number;
+    dayKey: string;
+    sentCount: number;
+};
+
+export function loadAllProactiveMessageSchedules(): ProactiveMessageSchedule[] {
+    if (typeof window === "undefined") return [];
+    try {
+        const raw = kvGet(PROACTIVE_MESSAGE_SCHEDULES_KEY);
+        return raw ? JSON.parse(raw) as ProactiveMessageSchedule[] : [];
+    } catch {
+        return [];
+    }
+}
+
+export function saveAllProactiveMessageSchedules(schedules: ProactiveMessageSchedule[]): void {
+    if (typeof window === "undefined") return;
+    kvSet(PROACTIVE_MESSAGE_SCHEDULES_KEY, JSON.stringify(schedules));
+}
+
+export function saveProactiveMessageSchedule(schedule: ProactiveMessageSchedule): void {
+    const all = loadAllProactiveMessageSchedules();
+    const index = all.findIndex(item => item.sessionId === schedule.sessionId);
+    if (index >= 0) all[index] = schedule;
+    else all.push(schedule);
+    saveAllProactiveMessageSchedules(all);
+}
+
+export function clearAllProactiveMessageSchedules(): void {
+    saveAllProactiveMessageSchedules([]);
 }
 
 /** Update the mediaData.status of a message (for red packet / transfer interactions). */
