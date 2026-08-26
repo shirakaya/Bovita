@@ -10,13 +10,22 @@ const RESERVED_LOCAL_STORAGE_KEYS = [
   "ai_phone_settings_idb_migrated_v1",
 ];
 
+// Never put the credential used to reach the cloud inside that same cloud
+// backup. The run state is device-local bookkeeping and would also make every
+// backup change itself. Everything else in AiPhoneKvDB is caught by the
+// fallback source below, even when a feature forgot to register its key here.
+const KV_BACKUP_EXCLUDED_KEYS = [
+  "ai_phone_cloud_backup_config_v1",
+  "ai_phone_cloud_backup_state_v1",
+];
+
 // ⚠️ CONTRACT: this list is the single source of truth for BOTH the data
 // backup/import/clear system (data-management/backup.ts, idb.ts) AND the
 // character "local data library" tool (local-data-fs.ts). Any change to WHERE
 // data is stored (a new kv key, a moved key, a new IndexedDB store) MUST be
 // mirrored here in the same change — otherwise that data silently disappears
 // from backups and from the tool even though it is still physically in storage.
-export const DATA_MODULES: DataModuleDefinition[] = [
+const PRIMARY_DATA_MODULES: DataModuleDefinition[] = [
   {
     id: "chat",
     label: "聊天数据",
@@ -26,6 +35,7 @@ export const DATA_MODULES: DataModuleDefinition[] = [
     sources: [
       { type: "indexeddb", dbName: "AiPhoneChatDB", label: "聊天记录" },
       { type: "indexeddb", dbName: "AiPhoneMediaCacheDB", label: "聊天与工具媒体缓存" },
+      { type: "indexeddb", dbName: "AiPhoneQaDB", label: "答疑助手会话" },
       {
         type: "kv",
         label: "聊天设置与待处理状态",
@@ -68,6 +78,11 @@ export const DATA_MODULES: DataModuleDefinition[] = [
           "weixin_bots_v1",
           "weixin_keepalive_v1",
           "weixin_cloud_sync_config_v1",
+          "ai_phone_agent_computer_cfg_v1",
+          "ai_phone_idle_reconnect_rules_v1",
+          "ai_phone_qa_feedback_v1",
+          "ai_phone_qa_github_v1",
+          "ai_phone_media_maintenance_config_v1",
         ],
       },
       {
@@ -90,6 +105,7 @@ export const DATA_MODULES: DataModuleDefinition[] = [
         keys: [
           "ai_phone_characters_v1",
           "ai_phone_bg_items_v1",
+          "ai_phone_character_versions_v1",
         ],
       },
     ],
@@ -123,6 +139,9 @@ export const DATA_MODULES: DataModuleDefinition[] = [
           "moments_signature",
           "ai_phone_sticker_packs_v1",
           "ai_phone_sticker_assign_v1",
+          "ai_phone_mascot_settings_v1",
+          "ai_phone_css_assets_v1",
+          "music-custom-bg-v1",
         ],
       },
     ],
@@ -229,8 +248,51 @@ export const DATA_MODULES: DataModuleDefinition[] = [
           "music-user-recent",
           "reading-import-diagnostic-v1",
           "reading_import_diag_v1",
+          "ai_phone_music_sync_v1",
+          "ai_phone_custom_apps_v1",
+          "ai_phone_custom_app_icon_styles_v1",
+          "ai_phone_custom_app_notifications_v1",
+          "ai_phone_custom_app_badges_v1",
+          "ai_phone_custom_app_tasks_v1",
+          "ai_phone_custom_app_world_activations_v1",
+          "ai_phone_custom_app_suggestions_v1",
+          "ai_phone_reality_bridge_rules_v1",
+          "ai_phone_reality_bridge_feed_v1",
+          "ai_phone_reality_bridge_settings_v1",
+          "ai_phone_reality_bridge_data_items_v1",
+          "ai_phone_reality_bridge_shortcut_actions_v1",
+          "ai_phone_reality_bridge_rule_runs_v1",
         ],
-        prefixes: ["music-search-cache:", "music-playlist-tracks-", "music-playlist-detail-"],
+        prefixes: [
+          "music-search-cache:",
+          "music-playlist-tracks-",
+          "music-playlist-detail-",
+          "ai_phone_custom_app_data_v1:",
+          "ai_phone_custom_app_timeline_v1:",
+        ],
+      },
+    ],
+  },
+  {
+    id: "resource_hub",
+    label: "资源集市",
+    description: "摊主钥匙（自己发布资源的所有权凭证）、昵称头像与集市设置",
+    variant: "teal",
+    sources: [
+      {
+        type: "kv",
+        label: "摊主身份与集市设置",
+        keys: [
+          // 钥匙丢了就再也管不了自己发过的资源，必须跟着备份走
+          "ai_phone_resource_hub_identity_v1",
+          "ai_phone_resource_hub_my_uploads_v1",
+          "ai_phone_resource_hub_profile_v1",
+          "ai_phone_resource_hub_upload_cfg_v1",
+          "ai_phone_resource_hub_source_v1",
+          "ai_phone_resource_hub_flowers_sent_v1",
+          "ai_phone_resource_hub_flowers_seen_v1",
+          "ai_phone_resource_hub_notice_v2",
+        ],
       },
     ],
   },
@@ -295,17 +357,39 @@ export const DATA_MODULES: DataModuleDefinition[] = [
           "ai_phone_black_market_user_id_v1",
           "ai_phone_black_market_scene_sessions_v1",
           "ai_phone_black_market_studio_drafts_v1",
+          "mixology_cabinet_v1",
+          "mixology_recipes_v1",
+          "mixology_sessions_v1",
+          "mixology_builtin_version_v1",
+          "mixology_profile_v1",
         ],
         prefixes: ["map_world_theme_", "map_adventure_summary_", "ai_phone_black_market_theater_events_"],
       },
     ],
   },
+];
+
+const ownedKvKeys = PRIMARY_DATA_MODULES.flatMap((module) => module.sources.flatMap((source) =>
+  source.type === "kv" ? (source.keys ?? []) : []));
+const ownedKvPrefixes = PRIMARY_DATA_MODULES.flatMap((module) => module.sources.flatMap((source) =>
+  source.type === "kv" ? (source.prefixes ?? []) : []));
+
+export const DATA_MODULES: DataModuleDefinition[] = [
+  ...PRIMARY_DATA_MODULES,
   {
     id: "cache",
-    label: "缓存与临时",
-    description: "浏览器遗留键、临时状态和未归类的小型缓存",
+    label: "缓存与未分类数据",
+    description: "浏览器遗留键、临时状态，以及尚未显式归类的键值数据",
     variant: "warning",
+    large: true,
     sources: [
+      {
+        type: "kv",
+        label: "未分类键值数据",
+        includeAll: true,
+        excludeKeys: [...ownedKvKeys, ...KV_BACKUP_EXCLUDED_KEYS],
+        excludePrefixes: ownedKvPrefixes,
+      },
       { type: "localStorage", label: "浏览器遗留缓存", includeAll: true, excludeKeys: RESERVED_LOCAL_STORAGE_KEYS },
     ],
   },

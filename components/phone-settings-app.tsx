@@ -4,6 +4,7 @@ import { useState, useEffect, useLayoutEffect, useCallback, useRef, createContex
 import { Activity, Check, ChevronRight, Clock, Database, FileText, Fingerprint, Globe, HardDrive, Image, Info, KeyRound, Laptop, Layers, Link2, Loader2, LogOut, MessageSquare, Mic, SlidersHorizontal, UserCircle, Wrench, X } from "lucide-react";
 import { ConfirmDialog } from "./ui/modal";
 import { useAccount } from "@/lib/account-context";
+import { isSelfHostedModeEnabled } from "@/lib/self-hosting";
 import { changeAccountPassword } from "@/lib/account-client";
 import { ApiSettings } from "./settings/api-settings";
 import { VoiceSettings } from "./settings/voice-settings";
@@ -16,13 +17,14 @@ import { UserIdentitySettings } from "./settings/user-identity";
 import { AboutDeclaration } from "./settings/about-declaration";
 import { BindingManager } from "./settings/binding-manager";
 import { WeixinSettings } from "./settings/weixin-settings";
+import { CloudServicesPage } from "./settings/cloud-services-setup";
 import { ToolboxSettings } from "./settings/toolbox-settings";
 import { ModerationCenter } from "./settings/moderation-center";
 import { AgentComputerSettings } from "./settings/agent-computer-settings";
 import { fetchIsAdmin } from "@/lib/moderation-client";
-import { isSelfHostedModeEnabled } from "@/lib/self-hosting";
 import { PageShell } from "./ui/page-shell";
 import { CardGrid, FeaturedCard, type CardItem, type FeaturedCardItem } from "./ui/card-grid";
+import { GlassIcon } from "./ui/glass-icon";
 import { Toggle } from "./ui/form";
 import { loadChatAppSettings, saveChatAppSettings } from "@/lib/chat-storage";
 import { loadKeepAlive, saveKeepAlive } from "@/lib/weixin-storage";
@@ -50,6 +52,7 @@ type SubPage =
     | "data"
     | "binding"
     | "identity"
+    | "cloud"
     | "weixin"
     | "toolbox"
     | "agentComputer"
@@ -247,6 +250,7 @@ export function PhoneSettingsApp({ onClose, onNotice }: SettingsPageProps) {
         label: imageGenerationItem.label,
         desc: imageGenerationItem.desc,
         iconColor: imageGenerationItem.iconColor,
+        glassIcon: imageGenerationItem.glass,
         onClick: () => setCurrentPage("imageGeneration"),
     };
 
@@ -267,6 +271,7 @@ export function PhoneSettingsApp({ onClose, onNotice }: SettingsPageProps) {
         label: bindingItem.label,
         desc: bindingItem.desc,
         iconColor: bindingItem.iconColor,
+        glassIcon: bindingItem.glass,
         onClick: () => setCurrentPage("binding"),
     };
 
@@ -288,8 +293,10 @@ export function PhoneSettingsApp({ onClose, onNotice }: SettingsPageProps) {
                 return <DataManagement onNotice={onNotice} />;
             case "binding":
                 return <BindingManager />;
+            case "cloud":
+                return <CloudServicesPage />;
             case "weixin":
-                return <WeixinSettings onOpenDataManagement={() => setCurrentPage("data")} />;
+                return <WeixinSettings onOpenCloudServices={() => setCurrentPage("cloud")} />;
             case "toolbox":
                 return <ToolboxSettings />;
             case "agentComputer":
@@ -357,7 +364,7 @@ export function PhoneSettingsApp({ onClose, onNotice }: SettingsPageProps) {
                     <div className="page-menu settings-main-menu">
                         {!selfHostedMode && (
                             <button type="button" className="settings-account-card" onClick={() => setAccountSheetOpen(true)}>
-                                <span className="settings-account-avatar">{account.username.slice(0, 1).toUpperCase()}</span>
+                                <span className="settings-account-avatar"><GlassIcon name="account" /></span>
                                 <span className="settings-account-copy">
                                     <span className="settings-account-name">{account.displayName || account.username}</span>
                                     <span className="settings-account-sub">账号、密码与登录</span>
@@ -398,8 +405,8 @@ export function PhoneSettingsApp({ onClose, onNotice }: SettingsPageProps) {
                         <div className="settings-realtime-section">
                             <h3 className="settings-menu-section-title">Runtime</h3>
                             <div className="app-card card-featured settings-toggle-card">
-                                <span className="card-icon" style={realtimeIconStyle}>
-                                    <Clock size={22} strokeWidth={1.75} />
+                                <span className="card-icon card-icon-glass">
+                                    <GlassIcon name="time-aware" />
                                 </span>
                                 <div className="card-featured-body">
                                     <div className="card-featured-label">真实时间感知</div>
@@ -422,8 +429,8 @@ export function PhoneSettingsApp({ onClose, onNotice }: SettingsPageProps) {
                             <div className="settings-moderation-section">
                                 <h3 className="settings-menu-section-title">Moderation</h3>
                                 <div className="app-card card-featured settings-toggle-card" role="button" tabIndex={0} style={{ cursor: "pointer" }} onClick={() => setCurrentPage("moderation")}>
-                                    <span className="card-icon" style={accountIconStyle}>
-                                        <SlidersHorizontal size={22} strokeWidth={1.75} />
+                                    <span className="card-icon card-icon-glass">
+                                        <GlassIcon name="moderation" />
                                     </span>
                                     <div className="card-featured-body">
                                         <div className="card-featured-label">管理中心</div>
@@ -437,8 +444,8 @@ export function PhoneSettingsApp({ onClose, onNotice }: SettingsPageProps) {
                             <h3 className="settings-menu-section-title">Tools</h3>
                             <div className="menu-group settings-tools-menu">
                                 <div className="menu-item settings-tools-menu-item">
-                                    <span className="card-icon" style={promptViewerIconStyle}>
-                                        <FileText size={22} strokeWidth={1.75} />
+                                    <span className="card-icon card-icon-glass">
+                                        <GlassIcon name="prompt-viewer" />
                                     </span>
                                     <span className="settings-tools-menu-copy">
                                         <span className="menu-label appearance-menu-item-label">提示词查看器</span>
@@ -449,8 +456,8 @@ export function PhoneSettingsApp({ onClose, onNotice }: SettingsPageProps) {
                                     </span>
                                 </div>
                                 <div className="menu-item settings-tools-menu-item">
-                                    <span className="card-icon" style={quickActionIconStyle}>
-                                        <SlidersHorizontal size={22} strokeWidth={1.75} />
+                                    <span className="card-icon card-icon-glass">
+                                        <GlassIcon name="quick-action" />
                                     </span>
                                     <span className="settings-tools-menu-copy">
                                         <span className="menu-label appearance-menu-item-label">快捷操作</span>

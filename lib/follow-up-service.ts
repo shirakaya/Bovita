@@ -28,7 +28,7 @@ import { parseAIResponse } from "./rich-message-parser";
 import type { ParsedMessagePart } from "./rich-message-parser";
 import { isKnownStickerLabel } from "./sticker-data";
 import { loadCharacters } from "./character-storage";
-import { bgSetInterval } from "./bg-timer";
+import { bgSetInterval, bgSetTimeout } from "./bg-timer";
 import { dispatchChatMessageNotice } from "./chat-notification-events";
 import { settleShoppingPaymentRequest } from "./shopping-payment-request";
 import {
@@ -56,6 +56,7 @@ const POLL_INTERVAL_MS = 3000; // check every 3 s
 const PERIOD_CARE_POLL_INTERVAL_MS = 60_000;
 const PROACTIVE_POLL_INTERVAL_MS = 30_000;
 const BACKGROUND_MESSAGE_STAGGER_MS = 800;
+const SCHEDULED_OUTBOX_GRACE_MS = 8000;
 
 function resolveFollowUpSenderName(sessionId: string): string {
     const sess = loadChatSessions().find(s => s.id === sessionId);
@@ -64,6 +65,15 @@ function resolveFollowUpSenderName(sessionId: string): string {
     const alias = sess.alias?.trim();
     if (alias) return alias;
     return loadCharacters().find(character => character.id === sess.contactId)?.name?.trim() || "角色";
+}
+
+function resolveTimedWakeElapsedMinutes(sched: TimedWakeSchedule, history: ChatMessage[], atMs: number): number {
+    if (sched.source === "user") {
+        const lastUser = [...history].reverse().find(message => message.role === "user");
+        const lastUserAt = lastUser ? Date.parse(lastUser.createdAt) : sched.createdAt;
+        return Math.max(1, Math.round((atMs - lastUserAt) / 60000));
+    }
+    return Math.max(1, Math.round((atMs - sched.createdAt) / 60000));
 }
 
 // ── Module state ───────────────────────────────────────────
@@ -76,6 +86,25 @@ const periodCareFiringSet = new Set<string>();
 const backgroundReplyFiringSet = new Set<string>();
 const proactiveFiringSet = new Set<string>();
 const proactiveCancelledWhileFiring = new Set<string>();
+// 正在后台生成回复的会话；聊天室中途挂载时据此恢复“正在输入”状态。
+const backgroundGeneratingSessions = new Set<string>();
+const cancelledBackgroundSessions = new Set<string>();
+
+export function isBackgroundReplyGenerating(sessionId: string): boolean {
+    return backgroundGeneratingSessions.has(sessionId);
+}
+
+export function cancelBackgroundGeneration(sessionId: string): void {
+    if (!backgroundGeneratingSessions.has(sessionId) && !firingSet.has(sessionId)) return;
+    cancelledBackgroundSessions.add(sessionId);
+    if (firingSet.has(sessionId)) cancelledWhileFiring.add(sessionId);
+    cancelFollowUpBailout(sessionId);
+}
+
+function isBackgroundGenerationCancelled(sessionId: string): boolean {
+    return cancelledBackgroundSessions.has(sessionId);
+}
+
 let lastPeriodCarePollAt = 0;
 let lastProactivePollAt = 0;
 
@@ -84,6 +113,7 @@ let lastProactivePollAt = 0;
 export function startFollowUpService() {
     if (stopInterval) return; // already running
     console.log("[FollowUp] Service started, polling every", POLL_INTERVAL_MS, "ms");
+    extendScheduledOutboxGrace();
     stopInterval = bgSetInterval(pollSchedules, POLL_INTERVAL_MS);
     if (typeof window !== "undefined") {
         periodCareUpdateHandler = () => {
@@ -91,6 +121,14 @@ export function startFollowUpService() {
             pollMenstrualPeriodCare(Date.now());
         };
         window.addEventListener("menstrual-period-care-updated", periodCareUpdateHandler);
+        scheduledOutboxVisibilityHandler = () => {
+            if (!document.hidden) extendScheduledOutboxGrace();
+        };
+        scheduledOutboxFocusHandler = extendScheduledOutboxGrace;
+        scheduledOutboxPageShowHandler = extendScheduledOutboxGrace;
+        document.addEventListener("visibilitychange", scheduledOutboxVisibilityHandler);
+        window.addEventListener("focus", scheduledOutboxFocusHandler);
+        window.addEventListener("pageshow", scheduledOutboxPageShowHandler);
     }
 }
 
@@ -99,6 +137,20 @@ export function stopFollowUpService() {
     if (typeof window !== "undefined" && periodCareUpdateHandler) {
         window.removeEventListener("menstrual-period-care-updated", periodCareUpdateHandler);
         periodCareUpdateHandler = null;
+    }
+    if (typeof window !== "undefined") {
+        if (scheduledOutboxVisibilityHandler) {
+            document.removeEventListener("visibilitychange", scheduledOutboxVisibilityHandler);
+            scheduledOutboxVisibilityHandler = null;
+        }
+        if (scheduledOutboxFocusHandler) {
+            window.removeEventListener("focus", scheduledOutboxFocusHandler);
+            scheduledOutboxFocusHandler = null;
+        }
+        if (scheduledOutboxPageShowHandler) {
+            window.removeEventListener("pageshow", scheduledOutboxPageShowHandler);
+            scheduledOutboxPageShowHandler = null;
+        }
     }
 }
 
@@ -110,6 +162,7 @@ export function scheduleFollowUp(sessionId: string, count: number, stateValues?:
     if (!stateValues || stateValues.length === 0) {
         console.log(`[FollowUp] No state values, not scheduling.`);
         clearFollowUpSchedule(sessionId);
+        cancelFollowUpBailout(sessionId);
         return;
     }
 
@@ -117,12 +170,14 @@ export function scheduleFollowUp(sessionId: string, count: number, stateValues?:
     if (!anxietyEntry) {
         console.log(`[FollowUp] No "${config.anxietyFieldName}" field found, not scheduling.`);
         clearFollowUpSchedule(sessionId);
+        cancelFollowUpBailout(sessionId);
         return;
     }
 
     if (anxietyEntry.value < config.anxietyThreshold) {
         console.log(`[FollowUp] Anxiety ${anxietyEntry.value} < threshold ${config.anxietyThreshold}, not scheduling.`);
         clearFollowUpSchedule(sessionId);
+        cancelFollowUpBailout(sessionId);
         return;
     }
 
@@ -133,6 +188,8 @@ export function scheduleFollowUp(sessionId: string, count: number, stateValues?:
     const fireAt = Date.now() + delaySec * 1000;
     console.log(`[FollowUp] Anxiety-driven: value=${anxietyEntry.value}, delay=${delaySec}s, session=${sessionId}, count=${count}`);
     saveFollowUpSchedule({ sessionId, fireAt, count, delaySec });
+    // 离线推送兜底：把本轮追问的完整请求快照预约到服务端，App 被杀时由服务端接管
+    void armFollowUpBailout(sessionId, count, delaySec, fireAt);
 }
 
 export async function requestBackgroundChatReply(sessionId: string): Promise<{ ok: boolean; skipped?: string }> {
@@ -143,21 +200,20 @@ export async function requestBackgroundChatReply(sessionId: string): Promise<{ o
     backgroundReplyFiringSet.add(sessionId);
     try {
         const latestMessages = loadChatMessages(session.id);
+        backgroundGeneratingSessions.add(session.id);
         window.dispatchEvent(new CustomEvent("followup-started", { detail: { sessionId: session.id } }));
-        let reasoning: string | undefined;
-        const aiResponseText = flattenCompletionResult(await generateChatCompletion(
+        const rounds = await generateBackgroundCompletionRounds(
             session,
             latestMessages,
             { appTags: session.isGroup ? undefined : ["chat", "text"] },
-            { onReasoning: (t) => { reasoning = t; } },
-        ));
-        const { hasVisible, stateValues } = await parseAndSaveResponse(
-            aiResponseText,
+        );
+        if (isBackgroundGenerationCancelled(session.id)) return { ok: false, skipped: "cancelled" };
+        const { hasVisible, stateValues } = await saveBackgroundCompletionRounds(
+            rounds,
             session.id,
             0,
             undefined,
             latestMessages,
-            { reasoningText: reasoning },
         );
         if (hasVisible) scheduleFollowUp(session.id, 0, stateValues);
         window.dispatchEvent(new CustomEvent("followup-fired", { detail: { sessionId: session.id } }));
@@ -172,6 +228,8 @@ export async function requestBackgroundChatReply(sessionId: string): Promise<{ o
         window.dispatchEvent(new CustomEvent("followup-fired", { detail: { sessionId } }));
         return { ok: false };
     } finally {
+        backgroundGeneratingSessions.delete(sessionId);
+        cancelledBackgroundSessions.delete(sessionId);
         backgroundReplyFiringSet.delete(sessionId);
     }
 }
@@ -179,6 +237,10 @@ export async function requestBackgroundChatReply(sessionId: string): Promise<{ o
 /** Cancel any pending follow-up for a session (called when user sends a message). */
 export function cancelFollowUp(sessionId: string) {
     clearFollowUpSchedule(sessionId);
+    cancelFollowUpBailout(sessionId);
+    // 用户发了消息：冷场重连计数清零，按新周期重挂服务端预约
+    const idleRule = resetIdleReconnectForSession(sessionId);
+    if (idleRule) void armIdleReconnectBailout({ ...idleRule, consecutiveCount: 0 });
     // If an API call is already in-flight, mark it for cancellation
     if (firingSet.has(sessionId)) {
         cancelledWhileFiring.add(sessionId);
@@ -191,16 +253,92 @@ export function cancelFollowUp(sessionId: string) {
 // ── Internals ──────────────────────────────────────────────
 
 function delay(ms: number): Promise<void> {
-    return new Promise(resolve => window.setTimeout(resolve, ms));
+    // Worker 定时器：iOS 后台会冻结主线程 setTimeout，逐条弹出的间隔若用它，
+    // 多气泡回复的保存流程会卡在后台直到回前台
+    return new Promise<void>(resolve => { bgSetTimeout(resolve, ms); });
 }
 
-async function dispatchBackgroundMessagesOneByOne(sessionId: string, messages: ChatMessage[]) {
+async function dispatchBackgroundMessagesOneByOne(sessionId: string, messages: ChatMessage[], immediate = false) {
     for (let index = 0; index < messages.length; index += 1) {
-        if (index > 0) await delay(BACKGROUND_MESSAGE_STAGGER_MS);
+        if (index > 0 && !immediate) await delay(BACKGROUND_MESSAGE_STAGGER_MS);
         window.dispatchEvent(new CustomEvent("followup-message-saved", {
             detail: { sessionId, message: messages[index] },
         }));
     }
+}
+
+type BackgroundCompletionRound = {
+    text: string;
+    responseBatchId?: string;
+    rawResponseText?: string;
+    reasoningText?: string;
+};
+
+async function generateBackgroundCompletionRounds(
+    session: Parameters<typeof generateChatCompletion>[0],
+    messages: Parameters<typeof generateChatCompletion>[1],
+    options: Parameters<typeof generateChatCompletion>[2],
+): Promise<BackgroundCompletionRound[]> {
+    const rounds: BackgroundCompletionRound[] = [];
+    // 每轮 LLM 调用的思维链：onReasoning 先于该轮 onTextPart 触发，挂到该轮文本上
+    let pendingReasoning: string | undefined;
+    const result = await generateChatCompletion(session, messages, options, {
+        onReasoning: (t) => { pendingReasoning = t; },
+        onTextPart: (text, _senderInfo, meta) => {
+            if (!text.trim()) return;
+            const reasoningText = pendingReasoning;
+            pendingReasoning = undefined;
+            rounds.push({
+                text,
+                responseBatchId: meta?.responseBatchId,
+                rawResponseText: meta?.rawResponseText ?? text,
+                reasoningText,
+            });
+        },
+    });
+    if (rounds.length === 0) {
+        const fallback = flattenCompletionResult(result);
+        if (fallback.trim()) rounds.push({ text: fallback, rawResponseText: fallback, reasoningText: pendingReasoning });
+    }
+    return rounds;
+}
+
+async function saveBackgroundCompletionRounds(
+    rounds: BackgroundCompletionRound[],
+    sessionId: string,
+    currentCount: number,
+    followUpIndex: number | undefined,
+    contextMessages: ChatMessage[],
+    options?: { senderCharacterId?: string; senderName?: string; silent?: boolean },
+): Promise<{ hasVisible: boolean; newCount: number; stateValues: StateValue[] }> {
+    let hasVisible = false;
+    let newCount = currentCount;
+    let stateValues: StateValue[] = [];
+    for (const round of rounds) {
+        const result = await parseAndSaveResponse(
+            round.text,
+            sessionId,
+            currentCount,
+            followUpIndex,
+            contextMessages,
+            {
+                ...options,
+                responseBatchId: round.responseBatchId,
+                rawResponseText: round.rawResponseText,
+                reasoningText: round.reasoningText,
+            },
+        );
+        if (result.hasVisible) {
+            hasVisible = true;
+            newCount = result.newCount;
+        } else if (!hasVisible) {
+            newCount = result.newCount;
+        }
+        if (result.stateValues.length > 0) {
+            stateValues = result.stateValues;
+        }
+    }
+    return { hasVisible, newCount, stateValues };
 }
 
 function pollSchedules() {
@@ -327,6 +465,7 @@ function pollTimedWakeSchedules(now: number) {
     for (const sched of schedules) {
         if (sched.fireAt > now) continue;
         if (timedWakeFiringSet.has(sched.id)) continue;
+        if (now < scheduledOutboxGraceUntil) continue;
         console.log(`[TimedWake] Firing now for session=${sched.sessionId}`);
         fireTimedWake(sched);
     }
@@ -428,25 +567,35 @@ async function fireFollowUp(sched: { sessionId: string; count: number; delaySec?
 
         // Notify UI that follow-up generation is starting (typing indicator)
         console.log("[FollowUp] Dispatching followup-started for session:", session.id);
+        backgroundGeneratingSessions.add(session.id);
         window.dispatchEvent(new CustomEvent("followup-started", { detail: { sessionId: session.id } }));
 
-        let reasoning: string | undefined;
-        const aiResponseText = flattenCompletionResult(await generateChatCompletion(
-            session,
-            messagesWithHint,
-            { followUpCount: count, followUpDelay: sched.delaySec ?? 60, appTags: ["chat", "text", "followup"] },
-            { onReasoning: (t) => { reasoning = t; } },
-        ));
+        // 本地生成期间给本轮兜底预约续命：慢生成不会被服务端误判为"客户端已死"
+        const stopBailoutHeartbeat = startBailoutHeartbeat(`followup:${session.id}:${count}`);
+        let rounds: BackgroundCompletionRound[];
+        try {
+            rounds = await generateBackgroundCompletionRounds(
+                session,
+                messagesWithHint,
+                { followUpCount: count, followUpDelay: sched.delaySec ?? 60, appTags: ["chat", "text", "followup"] },
+            );
+        } finally {
+            stopBailoutHeartbeat();
+        }
 
         // User sent a message while we were waiting for the API — discard result
-        if (cancelledWhileFiring.has(sched.sessionId)) {
+        if (cancelledWhileFiring.has(sched.sessionId) || isBackgroundGenerationCancelled(sched.sessionId)) {
             console.log(`[FollowUp] Cancelled during API call, discarding result for session=${sched.sessionId}`);
             cancelledWhileFiring.delete(sched.sessionId);
             return;
         }
 
-        const { hasVisible, newCount, stateValues } = await parseAndSaveResponse(aiResponseText, session.id, sched.count, count, latestMessages, { reasoningText: reasoning });
+        const { hasVisible, newCount, stateValues } = await saveBackgroundCompletionRounds(rounds, session.id, sched.count, count, latestMessages);
         console.log(`[FollowUp] Result: hasVisible=${hasVisible}, newCount=${newCount}`);
+
+        // 本地已完成这一轮，撤销服务端对应的兜底预约（只撤本轮的精确键，
+        // 不用前缀删，避免误删 scheduleFollowUp 马上要挂的下一轮）
+        cancelFollowUpBailout(session.id, count);
 
         if (hasVisible && newCount < MAX_FOLLOW_UPS) {
             scheduleFollowUp(session.id, newCount, stateValues);
@@ -464,6 +613,8 @@ async function fireFollowUp(sched: { sessionId: string; count: number; delaySec?
         });
         window.dispatchEvent(new CustomEvent("followup-fired", { detail: { sessionId: sched.sessionId } }));
     } finally {
+        backgroundGeneratingSessions.delete(sched.sessionId);
+        cancelledBackgroundSessions.delete(sched.sessionId);
         firingSet.delete(sched.sessionId);
         cancelledWhileFiring.delete(sched.sessionId);
     }
@@ -534,6 +685,8 @@ async function fireProactiveMessage(schedule: ProactiveMessageSchedule, idleMinu
 async function fireTimedWake(sched: TimedWakeSchedule) {
     timedWakeFiringSet.add(sched.id);
     removeTimedWakeSchedule(sched.id);
+    // 本地接手触发：撤销服务端兜底预约（生成中被杀由发送保险单接管）
+    cancelBailoutKey(`timedwake:${sched.id}`);
 
     try {
         const sessions = loadChatSessions();
@@ -541,30 +694,35 @@ async function fireTimedWake(sched: TimedWakeSchedule) {
         if (!session || session.contactId !== sched.characterId) return;
 
         const latestMessages = loadChatMessages(session.id);
-        const elapsedMinutes = Math.max(1, Math.round((Date.now() - sched.createdAt) / 60000));
+        const elapsedMinutes = resolveTimedWakeElapsedMinutes(sched, latestMessages, Date.now());
 
         console.log("[TimedWake] Dispatching followup-started for session:", session.id);
+        backgroundGeneratingSessions.add(session.id);
         window.dispatchEvent(new CustomEvent("followup-started", { detail: { sessionId: session.id } }));
 
-        let reasoning: string | undefined;
-        const aiResponseText = flattenCompletionResult(await generateChatCompletion(
+        // 用户创建的定时只提供沉默时长语境；角色工具约的保留"你当时想着"视角。
+        const wakeTag = sched.source === "user" ? "user_timed_wake" : "timed_wake";
+        const rounds = await generateBackgroundCompletionRounds(
             session,
             latestMessages,
             {
-                appTags: ["chat", "text", "timed_wake"],
+                appTags: ["chat", "text", wakeTag],
                 timedWakeElapsedMinutes: elapsedMinutes,
                 timedWakeIntent: sched.intent,
             },
-            { onReasoning: (t) => { reasoning = t; } },
-        ));
+        );
 
-        const { hasVisible, stateValues } = await parseAndSaveResponse(
-            aiResponseText,
+        if (isBackgroundGenerationCancelled(session.id)) {
+            window.dispatchEvent(new CustomEvent("followup-fired", { detail: { sessionId: session.id } }));
+            return;
+        }
+
+        const { hasVisible, stateValues } = await saveBackgroundCompletionRounds(
+            rounds,
             session.id,
             0,
             undefined,
             latestMessages,
-            { reasoningText: reasoning },
         );
         console.log(`[TimedWake] Result: hasVisible=${hasVisible}`);
 
@@ -575,13 +733,16 @@ async function fireTimedWake(sched: TimedWakeSchedule) {
         window.dispatchEvent(new CustomEvent("followup-fired", { detail: { sessionId: session.id } }));
     } catch (error: any) {
         console.error("[TimedWake] Error:", error);
+        const failureLabel = sched.source === "user" ? "定时主动消息" : "稍后主动联系";
         pushChatMessage({
             sessionId: sched.sessionId,
             role: "system",
-            content: `⚠️ 稍后主动联系失败: ${error?.message || String(error)}`,
+            content: `⚠️ ${failureLabel}失败: ${error?.message || String(error)}`,
         });
         window.dispatchEvent(new CustomEvent("followup-fired", { detail: { sessionId: sched.sessionId } }));
     } finally {
+        backgroundGeneratingSessions.delete(sched.sessionId);
+        cancelledBackgroundSessions.delete(sched.sessionId);
         timedWakeFiringSet.delete(sched.id);
     }
 }
@@ -603,32 +764,36 @@ async function fireMenstrualPeriodCare(input: {
         const latestMessages = loadChatMessages(session.id);
 
         console.log("[PeriodCare] Dispatching followup-started for session:", session.id);
+        backgroundGeneratingSessions.add(session.id);
         window.dispatchEvent(new CustomEvent("followup-started", { detail: { sessionId: session.id } }));
 
-        let reasoning: string | undefined;
-        const aiResponseText = flattenCompletionResult(await generateChatCompletion(
+        const rounds = await generateBackgroundCompletionRounds(
             session,
             latestMessages,
             {
                 appTags: ["chat", "text", "period_care"],
                 periodCareContext: input.event.context,
             },
-            { onReasoning: (t) => { reasoning = t; } },
-        ));
+        );
 
-        const { hasVisible, stateValues } = await parseAndSaveResponse(
-            aiResponseText,
+        if (isBackgroundGenerationCancelled(session.id)) {
+            window.dispatchEvent(new CustomEvent("followup-fired", { detail: { sessionId: session.id } }));
+            return;
+        }
+
+        const { hasVisible, stateValues } = await saveBackgroundCompletionRounds(
+            rounds,
             session.id,
             0,
             undefined,
             latestMessages,
-            { reasoningText: reasoning },
         );
         saveMenstrualPeriodCareTrigger({
             characterId: input.characterId,
             sessionId: session.id,
             cycleKey: input.event.cycleKey,
         });
+        cancelBailoutKey(`periodcare:${input.characterId}:${input.event.cycleKey}`);
         console.log(`[PeriodCare] Result: hasVisible=${hasVisible}`);
 
         if (hasVisible) {
@@ -645,13 +810,16 @@ async function fireMenstrualPeriodCare(input: {
         });
         window.dispatchEvent(new CustomEvent("followup-fired", { detail: { sessionId: input.sessionId } }));
     } finally {
+        backgroundGeneratingSessions.delete(input.sessionId);
+        cancelledBackgroundSessions.delete(input.sessionId);
         periodCareFiringSet.delete(firingKey);
     }
 }
 
 // ── AI media action handler for follow-up context ──
+// （现实桥的后台生成也复用它：收红包/收转账/收代付在后台同样真执行）
 
-function handleFollowUpMediaAction(
+export function handleFollowUpMediaAction(
     actionType: string,
     sessionId: string,
     contextMessages: ChatMessage[],
@@ -749,7 +917,16 @@ function buildGeneratedFollowUpImageMessage(
     };
 }
 
+function canCarryFollowUpPanel(part: ParsedMessagePart): boolean {
+    return part.mediaType !== "poke" && part.mediaType !== "group_admin_notice";
+}
+
+// 后台保存 AI 回复的统一实现：分条、状态栏/独白、拍一拍、来电、收红包类动作、
+// 生图占位、横幅+系统弹窗、逐条弹出。追问/定时唤醒/经期关心/自定义APP/现实桥/
+// 朋友圈动作标签都走这里；聊天室前台有自己的原生实现。
 // options.senderCharacterId/senderName：群聊消息的发言角色（单聊不传）。
+// options.silent：静默落账（离线推送回端合并用）——立即写入全部消息、立即派发事件，
+// 不弹横幅/系统通知（推送在设备上已经弹过一遍了）。
 export async function parseAndSaveResponse(
     rawText: string,
     sessionId: string,
@@ -759,10 +936,16 @@ export async function parseAndSaveResponse(
     options?: {
         senderCharacterId?: string;
         senderName?: string;
+        silent?: boolean;
+        responseBatchId?: string;
+        /** 离线回端时沿用云端生成时间，避免多轮补账被“当前时间”打乱因果顺序。 */
+        createdAt?: string;
+        rawResponseText?: string;
         reasoningText?: string;
     },
 ): Promise<{ hasVisible: boolean; newCount: number; stateValues: StateValue[] }> {
-    const responseBatchId = createResponseBatchId();
+    const responseBatchId = options?.responseBatchId || createResponseBatchId();
+    const rawResponseText = options?.rawResponseText ?? rawText;
     const reasoningText = options?.reasoningText;
     void contextMessages;
     const sessions = loadChatSessions();
@@ -775,37 +958,33 @@ export async function parseAndSaveResponse(
     let triggerCall: "voice" | "video" | undefined;
     const charName = resolveFollowUpSenderName(sessionId);
 
-    const pokeSysMessages: ChatMessage[] = [];
-    const filteredParts = parts.filter(p => {
-        if (p.mediaType === "voice_call") { triggerCall = "voice"; return false; }
-        if (p.mediaType === "video_call") { triggerCall = "video"; return false; }
+    const filteredParts: ParsedMessagePart[] = [];
+    for (const p of parts) {
+        if (p.mediaType === "voice_call") { triggerCall = "voice"; continue; }
+        if (p.mediaType === "video_call") { triggerCall = "video"; continue; }
         // 「丢弃角色输出的无效表情包」开关（主动消息路径）
         if (p.mediaType === "sticker" && sess?.discardInvalidStickers === true) {
             const senderIds = sess.isGroup ? (sess.participantIds ?? []) : [sess.contactId];
-            if (!isKnownStickerLabel(p.mediaData?.label || "", senderIds)) return false;
+            if (!isKnownStickerLabel(p.mediaData?.label || "", senderIds)) continue;
         }
         if (p.mediaType === "accept_red_packet" || p.mediaType === "decline_red_packet"
             || p.mediaType === "accept_transfer" || p.mediaType === "decline_transfer"
             || p.mediaType === "accept_payment_request" || p.mediaType === "decline_payment_request") {
             handleFollowUpMediaAction(p.mediaType, sessionId, contextMessages);
-            return false;
+            continue;
         }
-        // Poke: convert to system message (resolve "我" to character name)
         if (p.mediaType === "poke") {
             const pokeSender = (p.mediaData?.pokeSender === "我" ? charName : p.mediaData?.pokeSender) || charName;
             const pokeTarget = p.mediaData?.pokeTarget || "你";
-            pokeSysMessages.push(pushChatMessage({
-                sessionId, role: "system",
+            filteredParts.push({
                 content: `${pokeSender} 拍了拍 ${pokeTarget}`,
                 mediaType: "poke",
                 mediaData: { pokeSender, pokeTarget },
-                responseBatchId: createResponseBatchId(),
-                rawResponseText: `[${pokeSender}拍了拍${pokeTarget}]`,
-            }));
-            return false;
+            });
+            continue;
         }
-        return true;
-    });
+        filteredParts.push(p);
+    }
 
     // Save call trigger as system message (persists even when user is not in chat room)
     if (triggerCall) {
@@ -814,6 +993,7 @@ export async function parseAndSaveResponse(
             sessionId,
             role: "system",
             content: `[我发起了${callLabel}]`,
+            createdAt: options?.createdAt,
             responseBatchId: createResponseBatchId(),
             rawResponseText: `[我发起了${callLabel}]`,
         });
@@ -825,8 +1005,9 @@ export async function parseAndSaveResponse(
                 sessionId,
                 role: "assistant",
                 content: "",
+                createdAt: options?.createdAt,
                 responseBatchId,
-                rawResponseText: rawText,
+                rawResponseText,
                 statusPanel,
                 innerMonologue,
                 reasoningText,
@@ -844,22 +1025,32 @@ export async function parseAndSaveResponse(
 
     const savedMessages: ChatMessage[] = [];
     const imageReplacementTasks: Promise<unknown>[] = [];
+    let metaIdx = filteredParts.findIndex(canCarryFollowUpPanel);
+    if (metaIdx === -1 && (statusPanel || innerMonologue || reasoningText || stateValues.length > 0)) {
+        filteredParts.push({ content: "" });
+        metaIdx = filteredParts.length - 1;
+    }
     for (let i = 0; i < filteredParts.length; i++) {
         const generatedPart = buildGeneratedFollowUpImageMessage(filteredParts[i]);
+        const sourceCreatedAt = options?.createdAt ? Date.parse(options.createdAt) : NaN;
+        const createdAt = Number.isFinite(sourceCreatedAt)
+            ? new Date(sourceCreatedAt + i).toISOString()
+            : undefined;
         const saved = pushChatMessage({
             sessionId,
             role: "assistant",
             content: generatedPart.content,
+            createdAt,
             mediaType: generatedPart.mediaType,
             mediaUrl: generatedPart.mediaUrl,
             mediaData: generatedPart.mediaData,
             responseBatchId,
-            rawResponseText: rawText,
-            statusPanel: i === 0 && statusPanel ? statusPanel : undefined,
-            innerMonologue: i === 0 && innerMonologue ? innerMonologue : undefined,
-            reasoningText: i === 0 ? reasoningText : undefined,
-            stateValues: i === 0 && stateValues.length > 0 ? stateValues : undefined,
-            freshStateValues: i === 0 ? freshStateValues : undefined,
+            rawResponseText,
+            statusPanel: i === metaIdx && statusPanel ? statusPanel : undefined,
+            innerMonologue: i === metaIdx && innerMonologue ? innerMonologue : undefined,
+            reasoningText: i === metaIdx ? reasoningText : undefined,
+            stateValues: i === metaIdx && stateValues.length > 0 ? stateValues : undefined,
+            freshStateValues: i === metaIdx ? freshStateValues : undefined,
             senderCharacterId: options?.senderCharacterId,
             senderName: options?.senderName,
             ...(followUpIndex ? { followUpIndex } : {}),
@@ -876,32 +1067,36 @@ export async function parseAndSaveResponse(
         savedMessages.push(saved);
     }
 
-    await dispatchBackgroundMessagesOneByOne(sessionId, savedMessages);
+    await dispatchBackgroundMessagesOneByOne(sessionId, savedMessages, options?.silent === true);
     if (imageReplacementTasks.length > 0) {
         await Promise.allSettled(imageReplacementTasks);
     }
 
-    // In-app notice for follow-up messages: rotate through multi-bubble replies.
-    if (filteredParts.length > 0) {
+    // 与聊天室前台切后台时同节奏的双通道提醒：横幅 + 系统弹窗成对、
+    // 按 800ms 逐条发（与气泡逐条弹出同拍；Worker 定时器保证后台锁屏也按节奏到达）
+    // 静默模式（回端合并）不再重复提醒——系统推送已经弹过了
+    if (filteredParts.length > 0 && options?.silent !== true) {
         const isGroup = sess?.isGroup === true;
+        const avatar = isGroup
+            ? (options?.senderCharacterId
+                ? loadCharacters().find(c => c.id === options.senderCharacterId)?.avatar || null
+                : null)
+            : (sess ? loadCharacters().find(c => c.id === sess.contactId)?.avatar || null : null);
         const bodyPrefix = isGroup && options?.senderName ? `${options.senderName}: ` : "";
+        const partBody = (part: ParsedMessagePart) => bodyPrefix + ((part.content || "").trim()
+            || (part.mediaType === "image" && part.mediaData?.label ? `发了一张照片: ${part.mediaData.label}` : "发来一条消息"));
+        const { sendBrowserNotification } = await import("./browser-notification");
         filteredParts.forEach((part, index) => {
-            const body = bodyPrefix + ((part.content || "").trim()
-                || (part.mediaType === "image" && part.mediaData?.label ? `发了一张照片: ${part.mediaData.label}` : "发来一条消息"));
-            window.setTimeout(() => {
+            bgSetTimeout(() => {
                 dispatchChatMessageNotice({
                     sessionId,
                     senderName: charName,
-                    body: body.slice(0, 80),
+                    body: partBody(part).slice(0, 80),
+                    avatar,
                     ...(isGroup ? { isGroup: true } : {}),
                 });
-            }, index * 1000);
-        });
-        import("./browser-notification").then(({ sendBrowserNotification }) => {
-            const firstPart = filteredParts[0];
-            const body = bodyPrefix + (firstPart.content.trim()
-                || (firstPart.mediaType === "image" && firstPart.mediaData?.label ? `发了一张照片: ${firstPart.mediaData.label}` : "发来一条消息"));
-            sendBrowserNotification(charName, { body: body.slice(0, 50) });
+                sendBrowserNotification(charName, { body: partBody(part).slice(0, 60), icon: avatar || undefined });
+            }, index * BACKGROUND_MESSAGE_STAGGER_MS);
         });
     }
 
