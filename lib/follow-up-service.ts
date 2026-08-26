@@ -481,28 +481,12 @@ async function fireProactiveMessage(schedule: ProactiveMessageSchedule, idleMinu
         const latestMessages = loadChatMessages(session.id);
         if (latestConversationTimestamp(latestMessages) !== schedule.anchorAt) return;
 
-        const instruction = config.proactivePrompt
-            .replaceAll("{{idleMinutes}}", String(idleMinutes))
-            .replaceAll("{{char}}", resolveFollowUpSenderName(session.id))
-            .replaceAll("{{user}}", resolveUserIdentity(session.contactId, "chat")?.name || "用户");
-        const messagesWithInstruction: ChatMessage[] = [
-            ...latestMessages,
-            {
-                id: `_proactive_${Date.now()}`,
-                sessionId: session.id,
-                role: "system",
-                content: instruction,
-                status: "sent",
-                createdAt: new Date().toISOString(),
-            },
-        ];
-
         window.dispatchEvent(new CustomEvent("followup-started", { detail: { sessionId: session.id } }));
         let reasoning: string | undefined;
         const aiResponseText = flattenCompletionResult(await generateChatCompletion(
             session,
-            messagesWithInstruction,
-            { appTags: ["chat", "text", "proactive"] },
+            latestMessages,
+            { appTags: ["chat", "text", "proactive"], proactiveIdleMinutes: idleMinutes },
             { onReasoning: (text) => { reasoning = text; } },
         ));
 
