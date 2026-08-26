@@ -689,18 +689,6 @@ function FollowUpSettingsEditor({ onBack }: { onBack: () => void }) {
                             <span className="proactive-number-unit">次</span>
                         </div>
                     </div>
-                    <div className="menu-item flex-col items-stretch gap-2">
-                        <div className="menu-label-group">
-                            <span className="menu-label">主动消息提示词</span>
-                            <span className="menu-desc">支持 {"{{char}}"}、{"{{user}}"}、{"{{idleMinutes}}"}</span>
-                        </div>
-                        <textarea
-                            className="ui-textarea ts-13 leading-relaxed"
-                            value={config.proactivePrompt}
-                            onChange={event => updateConfig({ proactivePrompt: event.target.value })}
-                            style={{ minHeight: 150, resize: "vertical" }}
-                        />
-                    </div>
                 </div>
 
                 {/* Reset button */}
