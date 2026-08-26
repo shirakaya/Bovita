@@ -281,17 +281,26 @@ export function buildProviderDebugMessages(
 }
 
 export function parseProviderResponse(providerKind: LlmProviderKind, data: unknown): LlmParsedResponse {
-    const result = providerKind === "anthropic" ? parseAnthropicResponse(data)
-        : providerKind === "gemini" ? parseGeminiResponse(data)
-        : parseOpenAICompatibleResponse(data);
+    const normalizedData = unwrapProviderEnvelope(data);
+    const result = providerKind === "anthropic" ? parseAnthropicResponse(normalizedData)
+        : providerKind === "gemini" ? parseGeminiResponse(normalizedData)
+        : parseOpenAICompatibleResponse(normalizedData);
+    result.raw = data;
     result.content = stripHallucinatedTimestamps(result.content);
     return result;
 }
 
 export function parseProviderStreamDelta(providerKind: LlmProviderKind, data: unknown): LlmStreamDelta {
-    if (providerKind === "anthropic") return parseAnthropicStreamDelta(data);
-    if (providerKind === "gemini") return parseGeminiStreamDelta(data);
-    return parseOpenAICompatibleStreamDelta(data);
+    const normalizedData = unwrapProviderEnvelope(data);
+    if (providerKind === "anthropic") return parseAnthropicStreamDelta(normalizedData);
+    if (providerKind === "gemini") return parseGeminiStreamDelta(normalizedData);
+    return parseOpenAICompatibleStreamDelta(normalizedData);
+}
+
+function unwrapProviderEnvelope(data: unknown): unknown {
+    if (!data || typeof data !== "object" || Array.isArray(data)) return data;
+    const record = data as Record<string, unknown>;
+    return record.success === true && record.data !== undefined ? record.data : data;
 }
 
 function buildSamplingBody(preset: PresetConfig | null): Record<string, unknown> {
