@@ -29,7 +29,7 @@ export const DATA_MODULES: DataModuleDefinition[] = [
       {
         type: "kv",
         label: "聊天设置与待处理状态",
-        keys: ["ai_phone_chat_settings_v1", "ai_phone_followup_schedules_v1", "ai_phone_timed_wake_schedules_v1"],
+        keys: ["ai_phone_chat_settings_v1", "ai_phone_followup_schedules_v1", "ai_phone_proactive_message_schedules_v1", "ai_phone_timed_wake_schedules_v1"],
         prefixes: ["chat-generating:", "pending_reply_", "ai_phone_chat_offline_turns:", "chat-offline-mode:"],
       },
       {
