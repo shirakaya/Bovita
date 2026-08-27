@@ -4,7 +4,10 @@ export const runtime = "nodejs";
 export const maxDuration = 300;
 
 const CLINE_API_ORIGIN = "https://api.cline.bot/api";
-const ALLOWED_ORIGIN = "https://bovita.netlify.app";
+const ALLOWED_BROWSER_ORIGINS = new Set([
+    "https://bovita.netlify.app",
+    "https://bovita-float.vercel.app",
+]);
 const ALLOWED_PATHS = new Set([
     "v1/models",
     "v1/chat/completions",
@@ -65,25 +68,36 @@ type RouteContext = {
     params: Promise<{ path?: string[] }>;
 };
 
-function corsHeaders(contentType?: string | null): Record<string, string> {
+function allowedBrowserOrigin(request: NextRequest): string | null {
+    const origin = request.headers.get("origin");
+    if (!origin) return null;
+
+    const requestOrigin = new URL(request.url).origin;
+    return origin === requestOrigin || ALLOWED_BROWSER_ORIGINS.has(origin)
+        ? origin
+        : null;
+}
+
+function corsHeaders(request: NextRequest, contentType?: string | null): Record<string, string> {
+    const origin = allowedBrowserOrigin(request);
     return {
         "Content-Type": contentType || "application/json",
         "Cache-Control": "no-store",
         "X-Content-Type-Options": "nosniff",
-        "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
+        ...(origin ? { "Access-Control-Allow-Origin": origin } : {}),
         Vary: "Origin",
     };
 }
 
 function isAllowedBrowserOrigin(request: NextRequest): boolean {
-    return request.headers.get("origin") === ALLOWED_ORIGIN;
+    return allowedBrowserOrigin(request) !== null;
 }
 
 async function proxyCline(request: NextRequest, context: RouteContext) {
     if (!isAllowedBrowserOrigin(request)) {
         return NextResponse.json(
             { error: "Origin is not allowed." },
-            { status: 403, headers: corsHeaders() },
+            { status: 403, headers: corsHeaders(request) },
         );
     }
 
@@ -93,7 +107,7 @@ async function proxyCline(request: NextRequest, context: RouteContext) {
     if (!ALLOWED_PATHS.has(proxyPath)) {
         return NextResponse.json(
             { error: "Unsupported Cline API endpoint." },
-            { status: 404, headers: corsHeaders() },
+            { status: 404, headers: corsHeaders(request) },
         );
     }
 
@@ -101,7 +115,7 @@ async function proxyCline(request: NextRequest, context: RouteContext) {
     if (!authorization?.startsWith("Bearer ")) {
         return NextResponse.json(
             { error: "Missing Bearer Authorization header." },
-            { status: 401, headers: corsHeaders() },
+            { status: 401, headers: corsHeaders(request) },
         );
     }
 
@@ -109,7 +123,7 @@ async function proxyCline(request: NextRequest, context: RouteContext) {
     if (Number.isFinite(contentLength) && contentLength > MAX_REQUEST_BODY_BYTES) {
         return NextResponse.json(
             { error: "Request body is too large." },
-            { status: 413, headers: corsHeaders() },
+            { status: 413, headers: corsHeaders(request) },
         );
     }
 
@@ -131,7 +145,7 @@ async function proxyCline(request: NextRequest, context: RouteContext) {
         if (body && body.byteLength > MAX_REQUEST_BODY_BYTES) {
             return NextResponse.json(
                 { error: "Request body is too large." },
-                { status: 413, headers: corsHeaders() },
+                { status: 413, headers: corsHeaders(request) },
             );
         }
 
@@ -158,14 +172,14 @@ async function proxyCline(request: NextRequest, context: RouteContext) {
                 const errorBody = await upstream.text();
                 return new NextResponse(errorBody, {
                     status: upstream.status,
-                    headers: corsHeaders(upstream.headers.get("content-type")),
+                    headers: corsHeaders(request, upstream.headers.get("content-type")),
                 });
             }
 
             if (!upstream.body) {
                 return NextResponse.json(
                     { error: "Cline returned an empty response body." },
-                    { status: 502, headers: corsHeaders() },
+                    { status: 502, headers: corsHeaders(request) },
                 );
             }
 
@@ -244,7 +258,7 @@ async function proxyCline(request: NextRequest, context: RouteContext) {
             return new NextResponse(stream, {
                 status: 200,
                 headers: {
-                    ...corsHeaders("text/event-stream; charset=utf-8"),
+                    ...corsHeaders(request, "text/event-stream; charset=utf-8"),
                     Connection: "keep-alive",
                     "X-Accel-Buffering": "no",
                 },
@@ -275,7 +289,7 @@ async function proxyCline(request: NextRequest, context: RouteContext) {
                 if (payload.success === true && payload.data !== undefined) {
                     return new NextResponse(JSON.stringify(payload.data), {
                         status: upstream.status,
-                        headers: corsHeaders("application/json"),
+                        headers: corsHeaders(request, "application/json"),
                     });
                 }
             } catch {
@@ -284,19 +298,19 @@ async function proxyCline(request: NextRequest, context: RouteContext) {
 
             return new NextResponse(responseText, {
                 status: upstream.status,
-                headers: corsHeaders(upstreamContentType),
+                headers: corsHeaders(request, upstreamContentType),
             });
         }
 
         return new NextResponse(upstream.body, {
             status: upstream.status,
-            headers: corsHeaders(upstreamContentType),
+            headers: corsHeaders(request, upstreamContentType),
         });
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         return NextResponse.json(
             { error: `Cline proxy request failed: ${message}` },
-            { status: 502, headers: corsHeaders() },
+            { status: 502, headers: corsHeaders(request) },
         );
     }
 }
@@ -311,13 +325,13 @@ export async function POST(request: NextRequest, context: RouteContext) {
 
 export async function OPTIONS(request: NextRequest) {
     if (!isAllowedBrowserOrigin(request)) {
-        return new NextResponse(null, { status: 403, headers: corsHeaders() });
+        return new NextResponse(null, { status: 403, headers: corsHeaders(request) });
     }
 
     return new NextResponse(null, {
         status: 204,
         headers: {
-            ...corsHeaders(),
+            ...corsHeaders(request),
             "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
             "Access-Control-Allow-Headers": "Authorization,Content-Type",
             "Access-Control-Max-Age": "86400",

@@ -5,6 +5,27 @@
 import type { ApiConfig } from "./settings-types";
 
 const SIMPLE_ANTHROPIC_AUTO_MAX_TOKENS = 8192;
+const BOVITA_VERCEL_PROXY_ORIGIN = "https://bovita-float.vercel.app";
+
+function normalizeBovitaProxyBaseUrl(baseUrl: string): string {
+    const trimmed = baseUrl.trim();
+    const relativeMatch = trimmed.match(/^(\/api\/(?:cline|opencode)-proxy(?:\/.*)?)$/i);
+    if (relativeMatch) return `${BOVITA_VERCEL_PROXY_ORIGIN}${relativeMatch[1]}`;
+
+    try {
+        const url = new URL(trimmed);
+        const isBovitaHost = url.hostname === "bovita.netlify.app"
+            || url.hostname === "bovita-float.vercel.app";
+        const isBovitaProxy = /^\/api\/(?:cline|opencode)-proxy(?:\/|$)/i.test(url.pathname);
+        if (isBovitaHost && isBovitaProxy) {
+            return `${BOVITA_VERCEL_PROXY_ORIGIN}${url.pathname}${url.search}`;
+        }
+    } catch {
+        // Keep non-URL custom provider values unchanged; validation happens later.
+    }
+
+    return trimmed;
+}
 
 /**
  * Resolve the base URL for an API config.
@@ -12,7 +33,7 @@ const SIMPLE_ANTHROPIC_AUTO_MAX_TOKENS = 8192;
  * Supports all 11 UI providers + Custom (relies on baseUrl field).
  */
 export function determineBaseUrl(config: { provider: string; baseUrl?: string }): string {
-    if (config.baseUrl) return config.baseUrl;
+    if (config.baseUrl) return normalizeBovitaProxyBaseUrl(config.baseUrl);
     switch (config.provider) {
         case "OpenAI":      return "https://api.openai.com/v1";
         case "Anthropic":   return "https://api.anthropic.com/v1";

@@ -1,9 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
-export const maxDuration = 120;
+export const maxDuration = 300;
 
 const OPENCODE_GO_ORIGIN = "https://opencode.ai/zen/go";
+const ALLOWED_BROWSER_ORIGINS = new Set([
+    "https://bovita.netlify.app",
+    "https://bovita-float.vercel.app",
+]);
 const ALLOWED_PATHS = new Set([
     "v1/models",
     "v1/chat/completions",
@@ -15,23 +19,42 @@ type RouteContext = {
     params: Promise<{ path?: string[] }>;
 };
 
-function responseHeaders(contentType?: string | null): Record<string, string> {
+function allowedBrowserOrigin(request: NextRequest): string | null {
+    const origin = request.headers.get("origin");
+    if (!origin) return null;
+
+    const requestOrigin = new URL(request.url).origin;
+    return origin === requestOrigin || ALLOWED_BROWSER_ORIGINS.has(origin)
+        ? origin
+        : null;
+}
+
+function responseHeaders(request: NextRequest, contentType?: string | null): Record<string, string> {
+    const origin = allowedBrowserOrigin(request);
     return {
         "Content-Type": contentType || "application/json",
         "Cache-Control": "no-store",
         "X-Content-Type-Options": "nosniff",
-        "Access-Control-Allow-Origin": "*",
+        ...(origin ? { "Access-Control-Allow-Origin": origin } : {}),
+        Vary: "Origin",
     };
 }
 
 async function proxyOpenCodeGo(request: NextRequest, context: RouteContext) {
+    if (!allowedBrowserOrigin(request)) {
+        return NextResponse.json(
+            { error: "Origin is not allowed." },
+            { status: 403, headers: responseHeaders(request) },
+        );
+    }
+
     const { path = [] } = await context.params;
     const proxyPath = path.join("/");
 
     if (!ALLOWED_PATHS.has(proxyPath)) {
         return NextResponse.json(
             { error: "Unsupported OpenCode Go endpoint." },
-            { status: 404, headers: responseHeaders() },
+            { status: 404, headers: responseHeaders(request) },
         );
     }
 
@@ -39,7 +62,7 @@ async function proxyOpenCodeGo(request: NextRequest, context: RouteContext) {
     if (!authorization) {
         return NextResponse.json(
             { error: "Missing Authorization header." },
-            { status: 401, headers: responseHeaders() },
+            { status: 401, headers: responseHeaders(request) },
         );
     }
 
@@ -137,7 +160,7 @@ async function proxyOpenCodeGo(request: NextRequest, context: RouteContext) {
             return new NextResponse(stream, {
                 status: 200,
                 headers: {
-                    ...responseHeaders("text/event-stream; charset=utf-8"),
+                    ...responseHeaders(request, "text/event-stream; charset=utf-8"),
                     Connection: "keep-alive",
                     "X-Accel-Buffering": "no",
                 },
@@ -154,13 +177,13 @@ async function proxyOpenCodeGo(request: NextRequest, context: RouteContext) {
 
         return new NextResponse(upstream.body, {
             status: upstream.status,
-            headers: responseHeaders(upstream.headers.get("content-type")),
+            headers: responseHeaders(request, upstream.headers.get("content-type")),
         });
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         return NextResponse.json(
             { error: `OpenCode Go proxy request failed: ${message}` },
-            { status: 502, headers: responseHeaders() },
+            { status: 502, headers: responseHeaders(request) },
         );
     }
 }
@@ -173,15 +196,18 @@ export async function POST(request: NextRequest, context: RouteContext) {
     return proxyOpenCodeGo(request, context);
 }
 
-export async function OPTIONS() {
+export async function OPTIONS(request: NextRequest) {
+    if (!allowedBrowserOrigin(request)) {
+        return new NextResponse(null, { status: 403, headers: responseHeaders(request) });
+    }
+
     return new NextResponse(null, {
         status: 204,
         headers: {
-            "Access-Control-Allow-Origin": "*",
+            ...responseHeaders(request),
             "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
             "Access-Control-Allow-Headers": "Authorization,Content-Type",
             "Access-Control-Max-Age": "86400",
-            "Cache-Control": "no-store",
         },
     });
 }
