@@ -17,6 +17,7 @@ import {
     deleteMascotMessageWithLinkedTools,
     deleteMascotSession,
     getMascotChatSnapshot,
+    generateMascotReply,
     hasMascotToolHistoryMessages,
     hydrateMascotChat,
     renameMascotSession,

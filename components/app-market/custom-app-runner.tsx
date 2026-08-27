@@ -112,6 +112,7 @@ type CustomAppRunnerProps = {
 type BridgeResult = unknown;
 
 const CUSTOM_APP_BACKGROUND_RUNNER_TIMEOUT_MS = 5 * 60_000;
+const EMPTY_CUSTOM_APP_SRC_DOC = "<!doctype html><html><head><meta charset=\"utf-8\"></head><body></body></html>";
 
 function normalizeAssetRef(value: string): string {
   return value.replace(/\\/g, "/").replace(/^\.?\//, "").replace(/^\/+/, "");

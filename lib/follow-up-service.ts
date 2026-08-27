@@ -23,6 +23,16 @@ import {
 } from "./chat-storage";
 import type { ChatMessage, StateValue, ProactiveMessageSchedule } from "./chat-storage";
 import { generateChatCompletion, flattenCompletionResult } from "./chat-engine";
+import { armFollowUpBailout, armIdleReconnectBailout, cancelBailoutKey, cancelBailoutPrefix, cancelFollowUpBailout, startBailoutHeartbeat } from "./push-bailout-client";
+import { isWithinPushQuietHours } from "./push-client";
+import {
+    IDLE_RECONNECT_MAX_CONSECUTIVE,
+    loadIdleReconnectRules,
+    markIdleReconnectFired,
+    resetIdleReconnectForSession,
+    suppressIdleReconnectUntil,
+    type IdleReconnectRule,
+} from "./idle-reconnect-storage";
 import { loadFollowUpConfig, resolveUserIdentity } from "./settings-storage";
 import { parseAIResponse } from "./rich-message-parser";
 import type { ParsedMessagePart } from "./rich-message-parser";
@@ -107,6 +117,14 @@ function isBackgroundGenerationCancelled(sessionId: string): boolean {
 
 let lastPeriodCarePollAt = 0;
 let lastProactivePollAt = 0;
+let scheduledOutboxGraceUntil = 0;
+let scheduledOutboxVisibilityHandler: (() => void) | null = null;
+let scheduledOutboxFocusHandler: (() => void) | null = null;
+let scheduledOutboxPageShowHandler: (() => void) | null = null;
+
+function extendScheduledOutboxGrace(): void {
+    scheduledOutboxGraceUntil = Math.max(scheduledOutboxGraceUntil, Date.now() + SCHEDULED_OUTBOX_GRACE_MS);
+}
 
 // ── Public API ─────────────────────────────────────────────
 

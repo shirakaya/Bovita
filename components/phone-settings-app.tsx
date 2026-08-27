@@ -250,7 +250,7 @@ export function PhoneSettingsApp({ onClose, onNotice }: SettingsPageProps) {
         label: imageGenerationItem.label,
         desc: imageGenerationItem.desc,
         iconColor: imageGenerationItem.iconColor,
-        glassIcon: imageGenerationItem.glass,
+        glassIcon: "glass" in imageGenerationItem && typeof imageGenerationItem.glass === "string" ? imageGenerationItem.glass : undefined,
         onClick: () => setCurrentPage("imageGeneration"),
     };
 
@@ -271,7 +271,7 @@ export function PhoneSettingsApp({ onClose, onNotice }: SettingsPageProps) {
         label: bindingItem.label,
         desc: bindingItem.desc,
         iconColor: bindingItem.iconColor,
-        glassIcon: bindingItem.glass,
+        glassIcon: "glass" in bindingItem && typeof bindingItem.glass === "string" ? bindingItem.glass : undefined,
         onClick: () => setCurrentPage("binding"),
     };
 

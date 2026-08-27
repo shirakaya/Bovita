@@ -184,7 +184,7 @@ async function proxyCline(request: NextRequest, context: RouteContext) {
 
                     void (async () => {
                         try {
-                            const reader = upstream.body.getReader();
+                            const reader = upstream.body!.getReader();
                             const decoder = new TextDecoder();
                             let pending = "";
                             while (true) {

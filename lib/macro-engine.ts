@@ -24,6 +24,7 @@ export class MacroEngine {
     stateStr: string = "";
     followUpCount: number = 0;
     followUpDelay: number = 0;
+    proactiveIdleMinutes: string = "";
     timedWakeElapsedMinutes: string = "";
     timedWakeIntent: string = "";
     periodCareContext: string = "";

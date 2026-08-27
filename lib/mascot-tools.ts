@@ -1913,6 +1913,13 @@ async function handleUpdateCharacterField(args: Record<string, unknown>, ctx: Ma
     } else {
         return { name: "更新角色字段", success: false, error: `不支持的字段：${field}` };
     }
+    // 同一轮小卷任务里，同一角色只在首次写入前备份。
+    const backupIds = ctx.characterBackupIds ?? (ctx.characterBackupIds = new Set<string>());
+    const didBackup = !backupIds.has(chars[idx].id);
+    const nextVersion = didBackup
+        ? backupCharacterVersion(chars[idx], "mascot", "小卷本次任务修改前自动备份")
+        : getCharacterCurrentVersion(chars[idx].id);
+    backupIds.add(chars[idx].id);
     char.updatedAt = now;
     chars[idx] = char as typeof chars[number];
     saveCharacters(chars);

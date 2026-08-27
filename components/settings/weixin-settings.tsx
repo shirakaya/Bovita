@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { Plus, Trash2, Wifi, WifiOff, AlertCircle, MessageSquare, Loader2, RefreshCw, Cloud, CloudUpload, ChevronDown, PlayCircle } from "lucide-react";
+import { Plus, Trash2, Wifi, WifiOff, AlertCircle, MessageSquare, Loader2, RefreshCw, Cloud, CloudUpload, Copy, Download, ChevronDown, PlayCircle } from "lucide-react";
 import QRCode from "qrcode";
 import {
     loadWeixinBots,
@@ -15,6 +15,9 @@ import {
     fetchWeixinCloudAssistantHeartbeat,
     setWeixinCloudAssistantScheduled,
     loadWeixinCloudSyncConfig,
+    buildWeixinLocalAssistantConfigCode,
+    pullWeixinCloudMessagesFromCloud,
+    saveWeixinCloudSyncConfig,
     syncAllWeixinBotRuntimesToCloud,
     syncWeixinBotRuntimeToCloud,
     testWeixinCloudAssistantOnce,
@@ -31,6 +34,40 @@ import { ConfirmDialog, ContentDialog } from "@/components/ui/modal";
 import { Alert } from "@/components/ui/feedback";
 
 type AddStep = "select-character" | "scanning" | "done";
+
+const LOCAL_ASSISTANT_CARD_ASSETS = [
+    "generic-red-packet-card-v1.png",
+    "generic-transfer-card-v1.png",
+    "generic-music-card-v1.png",
+    "generic-photo-card-v1.png",
+];
+
+async function copyTextToClipboard(text: string): Promise<void> {
+    if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(text);
+    const input = document.createElement("textarea");
+    input.value = text;
+    input.style.position = "fixed";
+    input.style.opacity = "0";
+    document.body.appendChild(input);
+    input.focus();
+    input.select();
+    document.execCommand("copy");
+    input.remove();
+}
+
+function buildLocalAssistantStartBat(once = false): string {
+    const flag = once ? " --once" : "";
+    return [
+        "@echo off", "setlocal", "cd /d \"%~dp0\"",
+        "if exist \"runtime\\node.exe\" (", `  \"runtime\\node.exe\" assistant.mjs${flag}`, "  pause", "  exit /b %errorlevel%", ")",
+        "where node.exe >NUL 2>&1", "if errorlevel 1 (", "  echo Node.js was not found.", "  echo Please install Node.js 20+.", "  pause", "  exit /b 1", ")",
+        `node.exe assistant.mjs${flag}`, "pause", "exit /b %errorlevel%", "",
+    ].join("\r\n");
+}
+
+function buildLocalAssistantReadme(): string {
+    return "AI Phone 微信本地助手\n\n解压后双击「启动助手.bat」。\n角色、API、预设、世界书或记忆改动后，请重新下载。\nconfig.txt 包含私密密钥，请勿公开。\n";
+}
 
 function formatCloudSyncBytes(bytes: number): string {
     if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
@@ -54,6 +91,7 @@ export function WeixinSettings({ onOpenCloudServices }: { onOpenCloudServices?: 
     const [cloudSyncConfig, setCloudSyncConfig] = useState<WeixinCloudSyncConfig>(loadWeixinCloudSyncConfig);
     const [cloudSyncingId, setCloudSyncingId] = useState<string | null>(null);
     const [cloudSyncNotice, setCloudSyncNotice] = useState<{ ok: boolean; text: string } | null>(null);
+    const [showLocalAssistantAdvanced, setShowLocalAssistantAdvanced] = useState(false);
     const [cloudScheduledOn, setCloudScheduledOn] = useState(() => loadWeixinCloudScheduled());
     const [cloudAssistantBusy, setCloudAssistantBusy] = useState<string | null>(null);
     const [showCloudAssistantNotes, setShowCloudAssistantNotes] = useState(false);
@@ -99,6 +137,12 @@ export function WeixinSettings({ onOpenCloudServices }: { onOpenCloudServices?: 
         window.dispatchEvent(new CustomEvent("weixin-config-changed"));
     };
 
+    const updateCloudSyncConfig = (patch: Partial<WeixinCloudSyncConfig>) => {
+        const next = { ...cloudSyncConfig, ...patch };
+        setCloudSyncConfig(next);
+        saveWeixinCloudSyncConfig(next);
+    };
+
     const handleSyncRuntime = async (botId: string) => {
         if (cloudSyncingId) return;
         setCloudSyncNotice(null);
@@ -110,6 +154,90 @@ export function WeixinSettings({ onOpenCloudServices }: { onOpenCloudServices?: 
                 ok: true,
                 text: `已同步「${result.snapshot.character.name}」运行包：${result.snapshot.stats.messageCount} 条消息，${formatCloudSyncBytes(result.bytes)}。`,
             });
+        } catch (err) {
+            setCloudSyncNotice({ ok: false, text: err instanceof Error ? err.message : String(err) });
+        } finally {
+            setCloudSyncingId(null);
+        }
+    };
+
+    const handleSyncAllRuntimes = async () => {
+        if (cloudSyncingId) return;
+        setCloudSyncNotice(null);
+        setCloudSyncingId("all");
+        try {
+            const results = await syncAllWeixinBotRuntimesToCloud();
+            setCloudSyncConfig(loadWeixinCloudSyncConfig());
+            const totalBytes = results.reduce((sum, item) => sum + item.bytes, 0);
+            setCloudSyncNotice(results.length
+                ? { ok: true, text: `已同步当前微信运行包，共 ${formatCloudSyncBytes(totalBytes)}。` }
+                : { ok: false, text: "没有可同步的已启用微信 Bot。" });
+        } catch (err) {
+            setCloudSyncNotice({ ok: false, text: err instanceof Error ? err.message : String(err) });
+        } finally {
+            setCloudSyncingId(null);
+        }
+    };
+
+    const handlePullCloudMessages = async () => {
+        if (cloudSyncingId) return;
+        setCloudSyncNotice(null);
+        setCloudSyncingId("pull");
+        try {
+            const result = await pullWeixinCloudMessagesFromCloud();
+            setCloudSyncNotice({
+                ok: result.errors.length === 0,
+                text: `已拉取同步消息：新增 ${result.added}，跳过 ${result.skipped}${result.errors.length ? `，错误 ${result.errors.length}` : ""}。`,
+            });
+            for (const sessionId of result.sessionIds) {
+                window.dispatchEvent(new CustomEvent("weixin-messages-updated", { detail: { sessionId } }));
+            }
+        } catch (err) {
+            setCloudSyncNotice({ ok: false, text: err instanceof Error ? err.message : String(err) });
+        } finally {
+            setCloudSyncingId(null);
+        }
+    };
+
+    const handleCopyLocalAssistantConfig = async () => {
+        try {
+            await copyTextToClipboard(buildWeixinLocalAssistantConfigCode({ pollIntervalSeconds: 5 }));
+            setCloudSyncNotice({ ok: true, text: "已复制本地助手配置码。配置码包含私密密钥，请勿公开。" });
+        } catch (err) {
+            setCloudSyncNotice({ ok: false, text: err instanceof Error ? err.message : String(err) });
+        }
+    };
+
+    const handleDownloadLocalAssistantPackage = async () => {
+        if (cloudSyncingId) return;
+        setCloudSyncNotice(null);
+        setCloudSyncingId("package");
+        try {
+            const results = await syncAllWeixinBotRuntimesToCloud();
+            if (!results.length) throw new Error("没有可同步的已启用微信 Bot。");
+            const [scriptRes, coreRes] = await Promise.all([
+                fetch("/weixin-local-assistant/assistant.mjs", { cache: "no-store" }),
+                fetch("/weixin-local-assistant/assistant-core.mjs", { cache: "no-store" }),
+            ]);
+            if (!scriptRes.ok || !coreRes.ok) throw new Error("下载助手脚本失败，请重新部署后再试。");
+            const JSZip = (await import("jszip")).default;
+            const { downloadFile } = await import("@/lib/download-utils");
+            const zip = new JSZip();
+            zip.file("assistant.mjs", await scriptRes.text());
+            zip.file("assistant-core.mjs", await coreRes.text());
+            zip.file("config.txt", buildWeixinLocalAssistantConfigCode({ pollIntervalSeconds: 5 }));
+            zip.file("启动助手.bat", buildLocalAssistantStartBat());
+            zip.file("测试一次.bat", buildLocalAssistantStartBat(true));
+            zip.file("README.txt", buildLocalAssistantReadme());
+            for (const fileName of LOCAL_ASSISTANT_CARD_ASSETS) {
+                const response = await fetch(`/weixin-local-assistant/generated-cards/${fileName}`, { cache: "no-store" });
+                if (!response.ok) throw new Error(`下载助手卡片素材失败：${fileName}`);
+                zip.file(`generated-cards/${fileName}`, await response.arrayBuffer(), { binary: true, compression: "STORE" });
+            }
+            const blob = await zip.generateAsync({ type: "blob", compression: "DEFLATE", compressionOptions: { level: 6 } });
+            await downloadFile(blob, `ai-phone-weixin-local-assistant-${new Date().toISOString().slice(0, 10)}.zip`);
+            setCloudSyncConfig(loadWeixinCloudSyncConfig());
+            setCloudSyncNotice({ ok: true, text: "已生成本地助手包。" });
         } catch (err) {
             setCloudSyncNotice({ ok: false, text: err instanceof Error ? err.message : String(err) });
         } finally {

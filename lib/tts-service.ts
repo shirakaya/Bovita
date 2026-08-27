@@ -70,6 +70,21 @@ async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = TTS_
 
 // ── Minimax TTS ─────────────────────────────────────
 
+const MINIMAX_SPEED_MIN = 0.5;
+const MINIMAX_SPEED_MAX = 2.0;
+const MINIMAX_PITCH_MIN = -12;
+const MINIMAX_PITCH_MAX = 12;
+
+function normalizeMinimaxSpeed(speed: number | undefined): number {
+    if (typeof speed !== "number" || !Number.isFinite(speed)) return 1.0;
+    return Math.min(MINIMAX_SPEED_MAX, Math.max(MINIMAX_SPEED_MIN, speed));
+}
+
+function normalizeMinimaxPitch(pitch: number | undefined): number {
+    if (typeof pitch !== "number" || !Number.isFinite(pitch)) return 0;
+    return Math.min(MINIMAX_PITCH_MAX, Math.max(MINIMAX_PITCH_MIN, Math.round(pitch)));
+}
+
 async function synthesizeMinimax(text: string, config: VoiceApiConfig, emotion?: string): Promise<Blob | null> {
     if (!config.apiKey) throw new Error("Minimax API Key 未配置");
 

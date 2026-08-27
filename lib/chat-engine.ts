@@ -1284,8 +1284,6 @@ export async function sendLLMToolRequest(
         }
         rawOutput = await applyChatPluginLlmResponse(rawOutput, pluginPurpose, options?.debugSessionId);
 
-        rawOutput = await applyChatPluginLlmResponse(rawOutput, pluginPurpose, options?.debugSessionId);
-
         if (!rawOutput && parsed.toolCalls.length === 0) {
             const emptyDetails = emptyResponseDetails(parsed.raw);
             console.warn("[ChatEngine] Empty native tool response from API!", {
@@ -2472,34 +2470,18 @@ async function generateChatCompletionCore(
     const meta = { characterName: character.name, userName: userIdentity?.name };
     const actionContext = { characterId: session.contactId, sessionId: session.id, sourceEngine: "chat" as const, signal: options?.signal };
 
-    const sendChatRound = async (): Promise<string> => {
-        let reasoning = "";
-        const result = await sendLLMStreamRequest(
-            config,
-            preset,
-            llmMessages,
-            regexes,
-            meta,
-            {
+    const maxToolRounds = getMaxToolRounds();
+    for (let round = 0; round < maxToolRounds; round++) {
+        let filteredOutput: string;
+        try {
+            filteredOutput = await sendLLMRequest(config, preset, llmMessages, regexes, meta, {
                 appId: options?.appId ?? "chat",
                 appTags: requestAppTags,
                 followUpCount: options?.followUpCount,
                 debugSessionId: session.id,
                 signal: options?.signal,
-            },
-            {
-                onReasoningDelta: (delta) => { reasoning += delta; },
-            },
-        );
-        if (reasoning) callbacks?.onReasoning?.(reasoning);
-        return result.content;
-    };
-
-    const maxToolRounds = getMaxToolRounds();
-    for (let round = 0; round < maxToolRounds; round++) {
-        let filteredOutput: string;
-        try {
-            filteredOutput = await sendChatRound();
+                onReasoning: callbacks?.onReasoning,
+            });
         } catch (err) {
             const errMsg = `⚠️ 回复生成失败: ${err instanceof Error ? err.message : String(err)}`;
             if (parts.length > 0) {
@@ -2685,7 +2667,14 @@ async function generateChatCompletionCore(
             // Last round — one final call
             if (round === maxToolRounds - 1) {
                 try {
-                    const finalOutput = await sendChatRound();
+                    const finalOutput = await sendLLMRequest(config, preset, llmMessages, regexes, meta, {
+                        appId: options?.appId ?? "chat",
+                        appTags: requestAppTags,
+                        followUpCount: options?.followUpCount,
+                        debugSessionId: session.id,
+                        signal: options?.signal,
+                        onReasoning: callbacks?.onReasoning,
+                    });
                     throwIfAborted(options?.signal);
                     await callbacks?.onTextPart?.(finalOutput);
                     parts.push({ text: finalOutput });
