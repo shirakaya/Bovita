@@ -160,29 +160,6 @@ async function proxyCline(request: NextRequest, context: RouteContext) {
         }
 
         if (isStreamingChatRequest) {
-            const upstream = await fetch(target, {
-                method: request.method,
-                headers,
-                body,
-                cache: "no-store",
-                redirect: "follow",
-            });
-
-            if (!upstream.ok) {
-                const errorBody = await upstream.text();
-                return new NextResponse(errorBody, {
-                    status: upstream.status,
-                    headers: corsHeaders(request, upstream.headers.get("content-type")),
-                });
-            }
-
-            if (!upstream.body) {
-                return NextResponse.json(
-                    { error: "Cline returned an empty response body." },
-                    { status: 502, headers: corsHeaders(request) },
-                );
-            }
-
             const encoder = new TextEncoder();
             const stream = new ReadableStream<Uint8Array>({
                 start(controller) {
@@ -198,7 +175,28 @@ async function proxyCline(request: NextRequest, context: RouteContext) {
 
                     void (async () => {
                         try {
-                            const reader = upstream.body!.getReader();
+                            const upstream = await fetch(target, {
+                                method: request.method,
+                                headers,
+                                body,
+                                cache: "no-store",
+                                redirect: "follow",
+                            });
+                            if (!upstream.ok) {
+                                const errorBody = await upstream.text();
+                                controller.enqueue(encoder.encode(
+                                    `data: ${JSON.stringify({ error: { message: `Cline API error ${upstream.status}: ${errorBody}`, status: upstream.status } })}\n\n`,
+                                ));
+                                return;
+                            }
+                            if (!upstream.body) {
+                                controller.enqueue(encoder.encode(
+                                    `data: ${JSON.stringify({ error: { message: "Cline returned an empty response body." } })}\n\n`,
+                                ));
+                                return;
+                            }
+
+                            const reader = upstream.body.getReader();
                             const decoder = new TextDecoder();
                             let pending = "";
                             while (true) {

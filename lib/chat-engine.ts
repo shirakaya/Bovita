@@ -51,7 +51,7 @@ import {
     type LlmToolDefinition,
 } from "./llm-provider-adapter";
 import { setDebugPromptSnapshot, type DebugPromptSnapshot } from "./debug-store";
-import { extractFinishReason } from "./api-helpers";
+import { determineBaseUrl, extractFinishReason } from "./api-helpers";
 import { loadMemoryConfig, incrementEventCounter } from "./memory-storage";
 import { retrieveCoreMemoriesForPrompt, retrieveMemoriesForPrompt } from "./memory-service";
 import { formatCoreMemories, formatLongTermMemories } from "./memory-injector";
@@ -722,6 +722,15 @@ async function readSseStream(
     // 容错解析：中转把长 JSON 行切开时做碎片重组，不再静默丢增量（见 sse-json.ts）
     const sseParser = createSseJsonParser();
     const handleParsed = async (parsed: unknown) => {
+        if (parsed && typeof parsed === "object" && "error" in parsed) {
+            const errorValue = (parsed as { error?: unknown }).error;
+            const message = typeof errorValue === "string"
+                ? errorValue
+                : errorValue && typeof errorValue === "object" && "message" in errorValue
+                    ? String((errorValue as { message?: unknown }).message || "未知错误")
+                    : JSON.stringify(errorValue);
+            throw new ChatEngineError(`API Stream Error: ${message}`);
+        }
         const parts = parseProviderStreamDelta(providerKind, parsed);
         if (parts.reasoning) {
             await callbacks?.onReasoningDelta?.(parts.reasoning);
@@ -2470,18 +2479,40 @@ async function generateChatCompletionCore(
     const meta = { characterName: character.name, userName: userIdentity?.name };
     const actionContext = { characterId: session.contactId, sessionId: session.id, sourceEngine: "chat" as const, signal: options?.signal };
 
+    const useClineStream = /\/api\/cline-proxy(?:\/|$)/i.test(determineBaseUrl(config));
+    const sendChatRound = async (): Promise<string> => {
+        const requestOptions = {
+            appId: options?.appId ?? "chat",
+            appTags: requestAppTags,
+            followUpCount: options?.followUpCount,
+            debugSessionId: session.id,
+            signal: options?.signal,
+        };
+        if (useClineStream) {
+            let reasoning = "";
+            const result = await sendLLMStreamRequest(
+                config,
+                preset,
+                llmMessages,
+                regexes,
+                meta,
+                requestOptions,
+                { onReasoningDelta: delta => { reasoning += delta; } },
+            );
+            if (reasoning) callbacks?.onReasoning?.(reasoning);
+            return result.content;
+        }
+        return sendLLMRequest(config, preset, llmMessages, regexes, meta, {
+            ...requestOptions,
+            onReasoning: callbacks?.onReasoning,
+        });
+    };
+
     const maxToolRounds = getMaxToolRounds();
     for (let round = 0; round < maxToolRounds; round++) {
         let filteredOutput: string;
         try {
-            filteredOutput = await sendLLMRequest(config, preset, llmMessages, regexes, meta, {
-                appId: options?.appId ?? "chat",
-                appTags: requestAppTags,
-                followUpCount: options?.followUpCount,
-                debugSessionId: session.id,
-                signal: options?.signal,
-                onReasoning: callbacks?.onReasoning,
-            });
+            filteredOutput = await sendChatRound();
         } catch (err) {
             const errMsg = `⚠️ 回复生成失败: ${err instanceof Error ? err.message : String(err)}`;
             if (parts.length > 0) {
@@ -2667,14 +2698,7 @@ async function generateChatCompletionCore(
             // Last round — one final call
             if (round === maxToolRounds - 1) {
                 try {
-                    const finalOutput = await sendLLMRequest(config, preset, llmMessages, regexes, meta, {
-                        appId: options?.appId ?? "chat",
-                        appTags: requestAppTags,
-                        followUpCount: options?.followUpCount,
-                        debugSessionId: session.id,
-                        signal: options?.signal,
-                        onReasoning: callbacks?.onReasoning,
-                    });
+                    const finalOutput = await sendChatRound();
                     throwIfAborted(options?.signal);
                     await callbacks?.onTextPart?.(finalOutput);
                     parts.push({ text: finalOutput });
