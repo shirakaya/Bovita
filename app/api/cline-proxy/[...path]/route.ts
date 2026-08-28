@@ -64,6 +64,71 @@ function normalizeSsePayload(rawData: string): string {
     }
 }
 
+type ClineStreamDiagnostics = {
+    eventCount: number;
+    doneSeen: boolean;
+    contentCandidateEvents: number;
+    errorCandidateEvents: number;
+    shapes: Set<string>;
+};
+
+function inspectSsePayloadStructure(rawData: string, diagnostics: ClineStreamDiagnostics): void {
+    diagnostics.eventCount += 1;
+    if (rawData === "[DONE]") {
+        diagnostics.doneSeen = true;
+        return;
+    }
+
+    try {
+        const parsed = JSON.parse(rawData) as Record<string, unknown>;
+        const envelope = parsed.success === true && parsed.data && typeof parsed.data === "object"
+            ? parsed.data as Record<string, unknown>
+            : parsed;
+        const choice = Array.isArray(envelope.choices) && envelope.choices[0] && typeof envelope.choices[0] === "object"
+            ? envelope.choices[0] as Record<string, unknown>
+            : {};
+        const delta = choice.delta && typeof choice.delta === "object"
+            ? choice.delta as Record<string, unknown>
+            : {};
+        const message = choice.message && typeof choice.message === "object"
+            ? choice.message as Record<string, unknown>
+            : {};
+        const dataKeys = parsed.data && typeof parsed.data === "object" && !Array.isArray(parsed.data)
+            ? Object.keys(parsed.data as Record<string, unknown>).sort().slice(0, 12)
+            : [];
+        const shape = [
+            `top=${Object.keys(parsed).sort().slice(0, 12).join(",") || "-"}`,
+            `data=${dataKeys.join(",") || "-"}`,
+            `choice=${Object.keys(choice).sort().slice(0, 12).join(",") || "-"}`,
+            `delta=${Object.keys(delta).sort().slice(0, 12).join(",") || "-"}`,
+            `message=${Object.keys(message).sort().slice(0, 12).join(",") || "-"}`,
+        ].join("|");
+        if (diagnostics.shapes.size < 12) diagnostics.shapes.add(shape);
+
+        const contentCandidates = [
+            delta.content,
+            message.content,
+            choice.text,
+            envelope.content,
+            envelope.text,
+            envelope.response,
+            envelope.output,
+        ];
+        if (contentCandidates.some(value =>
+            (typeof value === "string" && value.length > 0)
+            || (Array.isArray(value) && value.length > 0)
+            || (value && typeof value === "object")
+        )) {
+            diagnostics.contentCandidateEvents += 1;
+        }
+        if (parsed.error !== undefined || envelope.error !== undefined || parsed.success === false) {
+            diagnostics.errorCandidateEvents += 1;
+        }
+    } catch {
+        if (diagnostics.shapes.size < 12) diagnostics.shapes.add("non-json");
+    }
+}
+
 type RouteContext = {
     params: Promise<{ path?: string[] }>;
 };
@@ -150,10 +215,12 @@ async function proxyCline(request: NextRequest, context: RouteContext) {
         }
 
         let isStreamingChatRequest = false;
+        let requestModel = "";
         if (proxyPath === "v1/chat/completions" && body) {
             try {
-                const payload = JSON.parse(new TextDecoder().decode(body)) as { stream?: unknown };
+                const payload = JSON.parse(new TextDecoder().decode(body)) as { stream?: unknown; model?: unknown };
                 isStreamingChatRequest = payload.stream === true;
+                requestModel = typeof payload.model === "string" ? payload.model : "";
             } catch {
                 // Forward malformed JSON so Cline can return its normal API error.
             }
@@ -161,8 +228,19 @@ async function proxyCline(request: NextRequest, context: RouteContext) {
 
         if (isStreamingChatRequest) {
             const encoder = new TextEncoder();
+            const diagnostics: ClineStreamDiagnostics = {
+                eventCount: 0,
+                doneSeen: false,
+                contentCandidateEvents: 0,
+                errorCandidateEvents: 0,
+                shapes: new Set<string>(),
+            };
             const stream = new ReadableStream<Uint8Array>({
                 start(controller) {
+                    const enqueueNormalizedPayload = (rawData: string) => {
+                        inspectSsePayloadStructure(rawData, diagnostics);
+                        controller.enqueue(encoder.encode(normalizeSsePayload(rawData)));
+                    };
                     controller.enqueue(encoder.encode(": cline-proxy-connected\n\n"));
 
                     const heartbeat = setInterval(() => {
@@ -213,13 +291,9 @@ async function proxyCline(request: NextRequest, context: RouteContext) {
                                         .map((line) => line.slice(5).trimStart());
 
                                     if (dataLines.length > 0) {
-                                        controller.enqueue(encoder.encode(
-                                            normalizeSsePayload(dataLines.join("\n")),
-                                        ));
+                                        enqueueNormalizedPayload(dataLines.join("\n"));
                                     } else if (event.trim().startsWith("{")) {
-                                        controller.enqueue(encoder.encode(
-                                            normalizeSsePayload(event.trim()),
-                                        ));
+                                        enqueueNormalizedPayload(event.trim());
                                     }
                                 }
 
@@ -235,9 +309,7 @@ async function proxyCline(request: NextRequest, context: RouteContext) {
                                     ? dataLines.join("\n")
                                     : pending.trim();
                                 if (rawData === "[DONE]" || rawData.startsWith("{")) {
-                                    controller.enqueue(encoder.encode(
-                                        normalizeSsePayload(rawData),
-                                    ));
+                                    enqueueNormalizedPayload(rawData);
                                 }
                             }
                         } catch (error) {
@@ -246,6 +318,14 @@ async function proxyCline(request: NextRequest, context: RouteContext) {
                                 `data: ${JSON.stringify({ error: { message: `Cline proxy request failed: ${message}` } })}\n\n`,
                             ));
                         } finally {
+                            console.info("[cline-proxy] stream summary", {
+                                model: requestModel,
+                                eventCount: diagnostics.eventCount,
+                                doneSeen: diagnostics.doneSeen,
+                                contentCandidateEvents: diagnostics.contentCandidateEvents,
+                                errorCandidateEvents: diagnostics.errorCandidateEvents,
+                                shapes: [...diagnostics.shapes],
+                            });
                             clearInterval(heartbeat);
                             controller.close();
                         }
