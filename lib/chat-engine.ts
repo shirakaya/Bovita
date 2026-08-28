@@ -814,19 +814,39 @@ export async function sendLLMStreamRequest(
     const detachExternalAbort = attachExternalAbort(llmAbort, options?.signal);
 
     try {
-        const response = await fetch(request.url, {
-            method: "POST",
-            headers: request.headers,
-            body: requestBodyJson,
-            signal: llmAbort.signal,
-        });
-        if (!response.ok) {
-            const errorText = await response.text();
-            throw new ChatEngineError(`API Stream Error ${response.status}: ${errorText}`);
+        const maxAttempts = /\/api\/cline-proxy(?:\/|$)/i.test(request.url) ? 2 : 1;
+        let streamedContent = "";
+        let rawResponse = "";
+
+        for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+            const response = await fetch(request.url, {
+                method: "POST",
+                headers: request.headers,
+                body: requestBodyJson,
+                signal: llmAbort.signal,
+            });
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new ChatEngineError(`API Stream Error ${response.status}: ${errorText}`);
+            }
+
+            const streamed = await readSseStream(
+                response,
+                request.providerKind,
+                pluginCallbacks ?? callbacks,
+                !options?.skipTimestampStrip,
+            );
+            streamedContent = streamed.content;
+            rawResponse = streamed.rawResponse;
+            if (streamedContent.trim()) break;
+
+            if (attempt < maxAttempts) {
+                console.warn("[ChatEngine] Cline stream ended without text; retrying once.");
+            }
         }
-        const { content: streamedContent, rawResponse } = await readSseStream(response, request.providerKind, pluginCallbacks ?? callbacks, !options?.skipTimestampStrip);
+
         if (!streamedContent.trim()) {
-            throw new ChatEngineError("流式响应没有解析到文本增量。");
+            throw new ChatEngineError("流式响应重试后仍没有解析到文本增量。");
         }
         let rawOutput = stripHallucinatedTimestamps(streamedContent.trim());
         rawOutput = await applyChatPluginLlmResponse(rawOutput, pluginPurpose, options?.debugSessionId);
