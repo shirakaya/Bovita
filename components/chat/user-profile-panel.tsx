@@ -127,6 +127,56 @@ function ProfileSettingsSliderItem({
     );
 }
 
+function ProactiveNumberInput({
+    value,
+    min,
+    max,
+    fallback,
+    unit,
+    onCommit,
+}: {
+    value: number;
+    min: number;
+    max: number;
+    fallback: number;
+    unit: string;
+    onCommit: (value: number) => void;
+}) {
+    const [draft, setDraft] = useState(String(value));
+
+    useEffect(() => {
+        setDraft(String(value));
+    }, [value]);
+
+    const commit = () => {
+        const parsed = draft.trim() === "" ? fallback : Number(draft);
+        const next = Number.isFinite(parsed)
+            ? Math.max(min, Math.min(max, Math.trunc(parsed)))
+            : fallback;
+        setDraft(String(next));
+        if (next !== value) onCommit(next);
+    };
+
+    return (
+        <div className="menu-right proactive-number-control">
+            <input
+                type="number"
+                inputMode="numeric"
+                min={min}
+                max={max}
+                value={draft}
+                onChange={event => setDraft(event.target.value)}
+                onBlur={commit}
+                onKeyDown={event => {
+                    if (event.key === "Enter") event.currentTarget.blur();
+                }}
+                className="proactive-number-input"
+            />
+            <span className="proactive-number-unit">{unit}</span>
+        </div>
+    );
+}
+
 function readBrowserNotificationPermissionHint(): string {
     if (typeof window === "undefined") return "当前浏览器权限：未知（服务端渲染）";
     if (!("Notification" in window)) return "当前浏览器权限：不支持 Notification API";
@@ -608,13 +658,13 @@ function FollowUpSettingsEditor({ onBack }: { onBack: () => void }) {
                     />
                 </div>
 
-                <p className="menu-group-desc mx-2">冷场主动消息</p>
+                <p className="menu-group-desc mx-2">在线冷场主动消息</p>
                 <div className="menu-group">
                     <div className="menu-item">
                         <ProfileSettingsIcon icon={MessageSquareDashed} color={BINDING_ACCENTS.preset} />
                         <div className="menu-label-group">
                             <span className="menu-label">允许角色主动发消息</span>
-                            <span className="menu-desc">冷场达到随机等待时间后，由角色决定发送或静默</span>
+                            <span className="menu-desc">Float 保持前台时，冷场达到随机等待时间后由角色决定发送或静默</span>
                         </div>
                         <div className="menu-right">
                             <Toggle
@@ -629,18 +679,14 @@ function FollowUpSettingsEditor({ onBack }: { onBack: () => void }) {
                             <span className="menu-label">允许时段开始</span>
                             <span className="menu-desc">0–23；起止相同表示全天允许</span>
                         </div>
-                        <div className="menu-right proactive-number-control">
-                            <input
-                                type="number"
-                                inputMode="numeric"
-                                min={0}
-                                max={23}
-                                value={config.proactiveStartHour}
-                                onChange={event => updateConfig({ proactiveStartHour: Math.max(0, Math.min(23, Number(event.target.value) || 0)) })}
-                                className="proactive-number-input"
-                            />
-                            <span className="proactive-number-unit">点</span>
-                        </div>
+                        <ProactiveNumberInput
+                            value={config.proactiveStartHour}
+                            min={0}
+                            max={23}
+                            fallback={9}
+                            unit="点"
+                            onCommit={proactiveStartHour => updateConfig({ proactiveStartHour })}
+                        />
                     </div>
                     <div className="menu-item">
                         <ProfileSettingsIcon icon={Clock} color={CONTENT_APP_ACCENTS.calendar} />
@@ -648,18 +694,14 @@ function FollowUpSettingsEditor({ onBack }: { onBack: () => void }) {
                             <span className="menu-label">允许时段结束</span>
                             <span className="menu-desc">支持跨午夜，例如 22–7</span>
                         </div>
-                        <div className="menu-right proactive-number-control">
-                            <input
-                                type="number"
-                                inputMode="numeric"
-                                min={0}
-                                max={23}
-                                value={config.proactiveEndHour}
-                                onChange={event => updateConfig({ proactiveEndHour: Math.max(0, Math.min(23, Number(event.target.value) || 0)) })}
-                                className="proactive-number-input"
-                            />
-                            <span className="proactive-number-unit">点</span>
-                        </div>
+                        <ProactiveNumberInput
+                            value={config.proactiveEndHour}
+                            min={0}
+                            max={23}
+                            fallback={20}
+                            unit="点"
+                            onCommit={proactiveEndHour => updateConfig({ proactiveEndHour })}
+                        />
                     </div>
                     <div className="menu-item">
                         <ProfileSettingsIcon icon={Clock} color={BINDING_ACCENTS.voice} />
@@ -667,18 +709,14 @@ function FollowUpSettingsEditor({ onBack }: { onBack: () => void }) {
                             <span className="menu-label">最短冷场等待</span>
                             <span className="menu-desc">1–1440 分钟</span>
                         </div>
-                        <div className="menu-right proactive-number-control">
-                            <input
-                                type="number"
-                                inputMode="numeric"
-                                min={1}
-                                max={1440}
-                                value={config.proactiveMinIdleMinutes}
-                                onChange={event => updateConfig({ proactiveMinIdleMinutes: Math.max(1, Math.min(1440, Number(event.target.value) || 1)) })}
-                                className="proactive-number-input"
-                            />
-                            <span className="proactive-number-unit">分钟</span>
-                        </div>
+                        <ProactiveNumberInput
+                            value={config.proactiveMinIdleMinutes}
+                            min={1}
+                            max={1440}
+                            fallback={30}
+                            unit="分钟"
+                            onCommit={proactiveMinIdleMinutes => updateConfig({ proactiveMinIdleMinutes })}
+                        />
                     </div>
                     <div className="menu-item">
                         <ProfileSettingsIcon icon={Clock} color={BINDING_ACCENTS.voice} />
@@ -686,18 +724,14 @@ function FollowUpSettingsEditor({ onBack }: { onBack: () => void }) {
                             <span className="menu-label">最长冷场等待</span>
                             <span className="menu-desc">1–1440 分钟；区间内随机取值</span>
                         </div>
-                        <div className="menu-right proactive-number-control">
-                            <input
-                                type="number"
-                                inputMode="numeric"
-                                min={1}
-                                max={1440}
-                                value={config.proactiveMaxIdleMinutes}
-                                onChange={event => updateConfig({ proactiveMaxIdleMinutes: Math.max(1, Math.min(1440, Number(event.target.value) || 1)) })}
-                                className="proactive-number-input"
-                            />
-                            <span className="proactive-number-unit">分钟</span>
-                        </div>
+                        <ProactiveNumberInput
+                            value={config.proactiveMaxIdleMinutes}
+                            min={1}
+                            max={1440}
+                            fallback={120}
+                            unit="分钟"
+                            onCommit={proactiveMaxIdleMinutes => updateConfig({ proactiveMaxIdleMinutes })}
+                        />
                     </div>
                     <div className="menu-item">
                         <ProfileSettingsIcon icon={Send} color={CONTENT_APP_ACCENTS.moments} />
@@ -705,18 +739,14 @@ function FollowUpSettingsEditor({ onBack }: { onBack: () => void }) {
                             <span className="menu-label">每日发送上限</span>
                             <span className="menu-desc">每个角色分别计数；静默不占次数</span>
                         </div>
-                        <div className="menu-right proactive-number-control">
-                            <input
-                                type="number"
-                                inputMode="numeric"
-                                min={1}
-                                max={20}
-                                value={config.proactiveDailyLimit}
-                                onChange={event => updateConfig({ proactiveDailyLimit: Math.max(1, Math.min(20, Number(event.target.value) || 1)) })}
-                                className="proactive-number-input"
-                            />
-                            <span className="proactive-number-unit">次</span>
-                        </div>
+                        <ProactiveNumberInput
+                            value={config.proactiveDailyLimit}
+                            min={1}
+                            max={20}
+                            fallback={3}
+                            unit="次"
+                            onCommit={proactiveDailyLimit => updateConfig({ proactiveDailyLimit })}
+                        />
                     </div>
                 </div>
 
