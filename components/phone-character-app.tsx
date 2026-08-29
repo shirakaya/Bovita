@@ -1790,6 +1790,8 @@ function CharArchiveView({
   const [restoreTarget, setRestoreTarget] = useState<CharacterVersion | null>(null);
   const [deleteVersionTarget, setDeleteVersionTarget] = useState<CharacterVersion | null>(null);
   const [name, setName] = useState(char.name || "");
+  const [wechatID, setWechatID] = useState(char.wechatID || "");
+  const [wechatIdError, setWechatIdError] = useState("");
   const [persona, setPersona] = useState(char.persona || "");
   const [personality, setPersonality] = useState(char.personality || "");
   const [briefPersona, setBriefPersona] = useState(char.briefPersona || "");
@@ -1848,6 +1850,7 @@ function CharArchiveView({
   function isDirty(): boolean {
     if (!isEditing) return false;
     if (name !== (char.name || "")) return true;
+    if (wechatID !== (char.wechatID || "")) return true;
     if (persona !== (char.persona || "")) return true;
     if (personality !== (char.personality || "")) return true;
     if (briefPersona !== (char.briefPersona || "")) return true;
@@ -1869,6 +1872,8 @@ function CharArchiveView({
   useEffect(() => {
     if (!isEditing) {
       setName(char.name || "");
+      setWechatID(char.wechatID || "");
+      setWechatIdError("");
       setPersona(char.persona || "");
       setPersonality(char.personality || "");
       setBriefPersona(char.briefPersona || "");
@@ -1903,13 +1908,29 @@ function CharArchiveView({
     setTagInput("");
   }
 
+  function validateWechatID(): string | null {
+    const trimmedWechatID = wechatID.trim();
+    if (!trimmedWechatID) return "WeChat ID 不能为空";
+    const duplicate = loadCharacters().some(character =>
+      character.id !== char.id && (character.wechatID || "").trim() === trimmedWechatID
+    );
+    return duplicate ? "该 WeChat ID 已被其他角色使用" : null;
+  }
+
   function commitSave(createVersion: boolean) {
+    const validationError = validateWechatID();
+    if (validationError) {
+      setWechatIdError(validationError);
+      return;
+    }
+    const trimmedWechatID = wechatID.trim();
     const trimmedTimeZone = timeZone.trim();
     const normalizedTimeZone = trimmedTimeZone ? normalizeTimeZone(trimmedTimeZone) : undefined;
     if (onSave) {
       const trimmedBrief = briefPersona.trim();
       onSave({
         name: name.trim() || char.name || "UNNAMED",
+        wechatID: trimmedWechatID,
         persona,
         personality: personality.trim() || undefined,
         briefPersona: trimmedBrief || undefined,
@@ -1925,6 +1946,12 @@ function CharArchiveView({
   }
 
   function handleSave() {
+    const validationError = validateWechatID();
+    if (validationError) {
+      setWechatIdError(validationError);
+      return;
+    }
+    setWechatIdError("");
     if (isExisting) {
       setShowSaveVersionConfirm(true);
     } else {
@@ -2102,9 +2129,30 @@ function CharArchiveView({
               </div>
               <div className="char-archive-cell" style={{ flex: 1.5 }}>
                 <span className="char-archive-label">WeChat</span>
-                <span className="char-archive-val select-text cursor-text tracking-[-0.5px]">
-                  {char.wechatID || "N/A"}
-                </span>
+                {isEditing ? (
+                  <>
+                    <input
+                      className="char-archive-input w-full min-w-0 bg-[var(--c-input)]/50 border border-dashed border-[#666] font-inherit tracking-[-0.5px]"
+                      value={wechatID}
+                      onChange={event => {
+                        setWechatID(event.target.value);
+                        if (wechatIdError) setWechatIdError("");
+                      }}
+                      placeholder="WeChat ID"
+                      maxLength={64}
+                      spellCheck={false}
+                      autoCapitalize="none"
+                      style={{ padding: "2px 4px", fontSize: "11px" }}
+                    />
+                    {wechatIdError && (
+                      <span className="ts-8 mt-1" style={{ color: "#b4233b" }}>{wechatIdError}</span>
+                    )}
+                  </>
+                ) : (
+                  <span className="char-archive-val select-text cursor-text tracking-[-0.5px]">
+                    {wechatID || "N/A"}
+                  </span>
+                )}
               </div>
               <div className="char-archive-cell" style={{ flex: 1.1 }}>
                 <span className="char-archive-label">Update</span>
