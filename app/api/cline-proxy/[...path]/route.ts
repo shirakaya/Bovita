@@ -154,12 +154,15 @@ function corsHeaders(request: NextRequest, contentType?: string | null): Record<
     };
 }
 
-function isAllowedBrowserOrigin(request: NextRequest): boolean {
-    return allowedBrowserOrigin(request) !== null;
+function isAllowedRequestOrigin(request: NextRequest): boolean {
+    const origin = request.headers.get("origin");
+    // 浏览器跨站 POST 会携带 Origin，仍须命中白名单；Supabase Edge Function
+    // 等服务端重放请求通常不带 Origin，由后续 Bearer 鉴权和路径白名单约束。
+    return !origin || allowedBrowserOrigin(request) !== null;
 }
 
 async function proxyCline(request: NextRequest, context: RouteContext) {
-    if (!isAllowedBrowserOrigin(request)) {
+    if (!isAllowedRequestOrigin(request)) {
         return NextResponse.json(
             { error: "Origin is not allowed." },
             { status: 403, headers: corsHeaders(request) },
@@ -402,7 +405,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
 }
 
 export async function OPTIONS(request: NextRequest) {
-    if (!isAllowedBrowserOrigin(request)) {
+    if (!allowedBrowserOrigin(request)) {
         return new NextResponse(null, { status: 403, headers: corsHeaders(request) });
     }
 
