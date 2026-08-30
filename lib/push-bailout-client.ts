@@ -379,6 +379,17 @@ function buildQuietWindowMeta(): { startMin: number; endMin: number; tzOffsetMin
     };
 }
 
+/** 首次冷场预约落在安静时段时，顺延到该时段结束；未命中则保持原时间。 */
+function postponePastPushQuietHours(atMs: number): number {
+    const quiet = buildQuietWindowMeta();
+    if (!quiet || quiet.startMin === quiet.endMin || !isWithinPushQuietHours(atMs)) return atMs;
+
+    const end = new Date(atMs);
+    end.setHours(Math.floor(quiet.endMin / 60), quiet.endMin % 60, 0, 0);
+    if (end.getTime() <= atMs) end.setDate(end.getDate() + 1);
+    return end.getTime();
+}
+
 /** 冷场重连兜底：按「用户最后一条消息 + 间隔」预约服务端触发；
  *  服务端触发一次后会自动排下一发（连发上限内），用户回复后客户端重挂新周期。 */
 export async function armIdleReconnectBailout(rule: IdleReconnectRule): Promise<BailoutArmResult> {
@@ -405,12 +416,8 @@ export async function armIdleReconnectBailout(rule: IdleReconnectRule): Promise<
             rule.lastFiredAt ? rule.lastFiredAt + intervalMs : 0,
             rule.suppressedUntil ?? 0,
         );
-        const fireAt = Math.max(nextDueAt, Date.now() + 30_000);
-        if (isWithinPushQuietHours(fireAt)) {
-            // 首发落在安静时段就不挂（本地醒着时会择机触发），存量任务一并清掉
-            await cancelBailoutPrefix(`idle:${rule.id}:`);
-            return { ok: false, reason: "触发时间落在推送安静时段内" };
-        }
+        // 与服务端续发保持一致：落入安静时段时保留预约，顺延到时段结束再触发。
+        const fireAt = postponePastPushQuietHours(Math.max(nextDueAt, Date.now() + 30_000));
 
         const elapsedMinutes = Math.max(1, Math.round((fireAt - lastUserAt) / 60000));
         const { llmMessages, character, config, preset, regexes, userIdentity } = await buildChatPromptMessages(
