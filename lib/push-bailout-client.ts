@@ -423,7 +423,11 @@ export async function armIdleReconnectBailout(rule: IdleReconnectRule): Promise<
         const { llmMessages, character, config, preset, regexes, userIdentity } = await buildChatPromptMessages(
             session,
             history,
-            { appTags: ["chat", "text", "idle_wake"], timedWakeElapsedMinutes: elapsedMinutes },
+            {
+                appTags: ["chat", "text", "idle_wake"],
+                timedWakeElapsedMinutes: elapsedMinutes,
+                promptTimeAt: fireAt,
+            },
         );
         maybeAppendCallInvite(llmMessages, rule.characterId);
         maybeAppendShortcutCapability(llmMessages);

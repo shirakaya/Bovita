@@ -382,6 +382,8 @@ type ChatPromptBuildOptions = {
     activateAllWorldBooks?: boolean;
     toolsAllowed?: boolean;
     forceEnableTools?: boolean;
+    /** 预约任务生成快照时使用的目标触发时间；普通调用默认使用当前时间。 */
+    promptTimeAt?: number;
 };
 
 function matchesPromptProfileRef(prompt: { identifier: string; name?: string }, refs: Set<string>): boolean {
@@ -1872,7 +1874,10 @@ export async function buildChatPromptMessages(
         ]
         : history;
 
-    const now = new Date();
+    const requestedPromptTime = options?.promptTimeAt;
+    const now = typeof requestedPromptTime === "number" && Number.isFinite(requestedPromptTime)
+        ? new Date(requestedPromptTime)
+        : new Date();
     const promptTimeContext = buildCharacterTimeContext(character.timeZone, now);
     const promptTimestampOptions = getPromptTimestampOptionsForTimeContext(promptTimeContext);
     const memConfig = loadMemoryConfig();
