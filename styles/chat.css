@@ -1031,7 +1031,7 @@
   white-space: nowrap;
 }
 .chat-floating-ctx-menu {
-  position: fixed;
+  position: absolute;
   right: auto !important;
   bottom: auto !important;
   transform: none !important;

@@ -466,6 +466,7 @@ type OfflineActionTarget = {
 type ContextMenuAnchor = {
     x: number;
     y: number;
+    bottomY?: number;
 };
 
 type RenderChatMessage = ChatMessage & {
@@ -1364,33 +1365,49 @@ export function ChatRoom({ session, onBack }: ChatRoomProps) {
         setActiveOfflineTarget(target);
     };
 
+    const getElementContextMenuAnchor = (target: EventTarget | null): ContextMenuAnchor => {
+        if (!(target instanceof HTMLElement)) return { x: 0, y: 0 };
+        const rect = target.getBoundingClientRect();
+        return {
+            x: rect.left + rect.width / 2,
+            y: rect.top,
+            bottomY: rect.bottom,
+        };
+    };
+
     const getContextMenuInitialStyle = () => {
-        const anchor = contextMenuAnchor;
-        if (!anchor) return { left: 0, top: 0 };
-        return { left: anchor.x, top: Math.max(8, anchor.y - 90) };
+        return { left: 0, top: 0, visibility: "hidden" as const };
     };
 
     const positionFloatingContextMenu = (el: HTMLDivElement | null) => {
-        if (!el || !contextMenuAnchor) return;
+        const wrapper = wrapperRef.current;
+        if (!el || !contextMenuAnchor || !wrapper) return;
         const margin = 8;
         const gap = 12;
         const anchor = contextMenuAnchor;
         const menuW = el.offsetWidth;
         const menuH = el.offsetHeight;
-        const viewportW = window.innerWidth;
-        const viewportH = window.innerHeight;
-        let left = anchor.x - menuW / 2;
+        const wrapperRect = wrapper.getBoundingClientRect();
+        const scaleX = wrapper.offsetWidth > 0 ? wrapperRect.width / wrapper.offsetWidth : 1;
+        const scaleY = wrapper.offsetHeight > 0 ? wrapperRect.height / wrapper.offsetHeight : 1;
+        const localX = (anchor.x - wrapperRect.left) / (scaleX || 1);
+        const localTopY = (anchor.y - wrapperRect.top) / (scaleY || 1);
+        const localBottomY = ((anchor.bottomY ?? anchor.y) - wrapperRect.top) / (scaleY || 1);
+        const viewportW = wrapper.clientWidth;
+        const viewportH = wrapper.clientHeight;
+        let left = localX - menuW / 2;
         left = Math.max(margin, Math.min(left, viewportW - menuW - margin));
-        const placeBelow = anchor.y - menuH - gap < margin;
-        let top = placeBelow ? anchor.y + gap : anchor.y - menuH - gap;
+        const placeBelow = localTopY - menuH - gap < margin;
+        let top = placeBelow ? localBottomY + gap : localTopY - menuH - gap;
         top = Math.max(margin, Math.min(top, viewportH - menuH - margin));
         el.style.left = `${left}px`;
         el.style.top = `${top}px`;
         el.style.right = "auto";
         el.style.bottom = "auto";
+        el.style.visibility = "visible";
         const tri = el.querySelector("[data-menu-triangle]") as HTMLElement | null;
         if (tri) {
-            const triLeft = Math.max(14, Math.min(anchor.x - left, menuW - 14));
+            const triLeft = Math.max(14, Math.min(localX - left, menuW - 14));
             tri.style.left = `${triLeft}px`;
             tri.style.right = "auto";
             tri.style.transform = "translateX(-50%)";
@@ -3867,13 +3884,14 @@ export function ChatRoom({ session, onBack }: ChatRoomProps) {
     const handleOfflinePointerDown = (e: React.PointerEvent, target: OfflineActionTarget) => {
         if (e.pointerType === "mouse" && e.button !== 0) return;
         e.preventDefault();
-        const anchor = { x: e.clientX, y: e.clientY };
-        startPosRef.current = anchor;
+        const pointerStart = { x: e.clientX, y: e.clientY };
+        const menuAnchor = getElementContextMenuAnchor(e.currentTarget);
+        startPosRef.current = pointerStart;
         longPressTriggeredRef.current = false;
         if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
         longPressTimerRef.current = setTimeout(() => {
             longPressTriggeredRef.current = true;
-            openOfflineContextMenu(target, anchor);
+            openOfflineContextMenu(target, menuAnchor);
             longPressTimerRef.current = null;
         }, 500);
     };
@@ -4460,14 +4478,15 @@ export function ChatRoom({ session, onBack }: ChatRoomProps) {
         // Prevent text selection on long press
         e.preventDefault();
 
-        const anchor = { x: e.clientX, y: e.clientY };
-        startPosRef.current = anchor;
+        const pointerStart = { x: e.clientX, y: e.clientY };
+        const menuAnchor = getElementContextMenuAnchor(e.currentTarget);
+        startPosRef.current = pointerStart;
         longPressTriggeredRef.current = false;
 
         if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
         longPressTimerRef.current = setTimeout(() => {
             longPressTriggeredRef.current = true;
-            openMessageContextMenu(msgId, anchor);
+            openMessageContextMenu(msgId, menuAnchor);
             longPressTimerRef.current = null;
         }, 500); // 500ms long press
     };
@@ -5251,7 +5270,7 @@ export function ChatRoom({ session, onBack }: ChatRoomProps) {
                                                 if (dx > 10 || dy > 10) handleMessagePointerCancel();
                                             }
                                         }}
-                                        onContextMenu={(e) => { e.preventDefault(); openOfflineContextMenu({ turnId: turn.id, role: "user" }, { x: e.clientX, y: e.clientY }); }}
+                                        onContextMenu={(e) => { e.preventDefault(); openOfflineContextMenu({ turnId: turn.id, role: "user" }, getElementContextMenuAnchor(e.currentTarget)); }}
                                         {...(activeOfflineTarget?.turnId === turn.id && activeOfflineTarget.role === "user" ? { "data-active": "" } : {})}
                                     >
                                         {activeOfflineTarget?.turnId === turn.id && activeOfflineTarget.role === "user" && renderOfflineContextMenu(turn, "user")}
@@ -5282,11 +5301,10 @@ export function ChatRoom({ session, onBack }: ChatRoomProps) {
                                                 onClick={(e) => {
                                                     e.preventDefault();
                                                     e.stopPropagation();
-                                                    const rect = e.currentTarget.getBoundingClientRect();
-                                                    openOfflineContextMenu({ turnId: turn.id, role: "assistant" }, {
-                                                        x: rect.left + rect.width / 2,
-                                                        y: rect.bottom,
-                                                    });
+                                                    openOfflineContextMenu(
+                                                        { turnId: turn.id, role: "assistant" },
+                                                        getElementContextMenuAnchor(e.currentTarget),
+                                                    );
                                                 }}
                                             >
                                                 <MoreHorizontal size={16} strokeWidth={2} />
@@ -5319,7 +5337,7 @@ export function ChatRoom({ session, onBack }: ChatRoomProps) {
                                                 if (dx > 10 || dy > 10) handleMessagePointerCancel();
                                             }
                                         }}
-                                        onContextMenu={(e) => { e.preventDefault(); openOfflineContextMenu({ turnId: turn.id, role: "assistant" }, { x: e.clientX, y: e.clientY }); }}
+                                        onContextMenu={(e) => { e.preventDefault(); openOfflineContextMenu({ turnId: turn.id, role: "assistant" }, getElementContextMenuAnchor(e.currentTarget)); }}
                                         {...(activeOfflineTarget?.turnId === turn.id && activeOfflineTarget.role === "assistant" ? { "data-active": "" } : {})}
                                     >
                                         {activeOfflineTarget?.turnId === turn.id && activeOfflineTarget.role === "assistant" && renderOfflineContextMenu(turn, "assistant")}
@@ -5399,7 +5417,7 @@ export function ChatRoom({ session, onBack }: ChatRoomProps) {
                                             if (dx > 10 || dy > 10) handleMessagePointerCancel();
                                         }
                                     }}
-                                    onContextMenu={(e) => { e.preventDefault(); openMessageContextMenu(`vc-${vcGroup.startId}`, { x: e.clientX, y: e.clientY }); }}
+                                    onContextMenu={(e) => { e.preventDefault(); openMessageContextMenu(`vc-${vcGroup.startId}`, getElementContextMenuAnchor(e.currentTarget)); }}
                                     onClick={() => {
                                         if (activeMessageId === `vc-${vcGroup.startId}`) return;
                                         setExpandedVoiceCallIds(prev => {
@@ -5451,7 +5469,7 @@ export function ChatRoom({ session, onBack }: ChatRoomProps) {
                                                                 if (dx > 10 || dy > 10) handleMessagePointerCancel();
                                                             }
                                                         }}
-                                                        onContextMenu={(e) => { e.preventDefault(); openMessageContextMenu(gMsg.id, { x: e.clientX, y: e.clientY }); }}
+                                                        onContextMenu={(e) => { e.preventDefault(); openMessageContextMenu(gMsg.id, getElementContextMenuAnchor(e.currentTarget)); }}
                                                         className="chat-sys-msg relative cursor-pointer"
                                                         {...(activeMessageId === gMsg.id ? { "data-active": "" } : {})}
                                                     >
@@ -5477,7 +5495,7 @@ export function ChatRoom({ session, onBack }: ChatRoomProps) {
                                                                     if (dx > 10 || dy > 10) handleMessagePointerCancel();
                                                                 }
                                                             }}
-                                                            onContextMenu={(e) => { e.preventDefault(); openMessageContextMenu(gMsg.id, { x: e.clientX, y: e.clientY }); }}
+                                                            onContextMenu={(e) => { e.preventDefault(); openMessageContextMenu(gMsg.id, getElementContextMenuAnchor(e.currentTarget)); }}
                                                             className={`chat-bubble-role-${gMsg.role} py-2 px-3 rounded-md break-words relative cursor-pointer`}
                                                             {...(activeMessageId === gMsg.id ? { "data-active": "" } : {})}
                                                         >
@@ -5594,7 +5612,7 @@ export function ChatRoom({ session, onBack }: ChatRoomProps) {
                                                 if (dx > 10 || dy > 10) handleMessagePointerCancel();
                                             }
                                         }}
-                                        onContextMenu={(e) => { e.preventDefault(); openMessageContextMenu(msg.id, { x: e.clientX, y: e.clientY }); }}
+                                        onContextMenu={(e) => { e.preventDefault(); openMessageContextMenu(msg.id, getElementContextMenuAnchor(e.currentTarget)); }}
                                         className={isSystemInstruction
                                             ? "chat-system-instruction-card relative cursor-pointer"
                                             : `chat-sys-msg break-all max-w-[90%] relative cursor-pointer${
@@ -5641,7 +5659,7 @@ export function ChatRoom({ session, onBack }: ChatRoomProps) {
                                                 if (dx > 10 || dy > 10) handleMessagePointerCancel();
                                             }
                                         }}
-                                        onContextMenu={(e) => { e.preventDefault(); openMessageContextMenu(msg.id, { x: e.clientX, y: e.clientY }); }}
+                                        onContextMenu={(e) => { e.preventDefault(); openMessageContextMenu(msg.id, getElementContextMenuAnchor(e.currentTarget)); }}
                                         className="chat-sys-msg mx-auto relative cursor-pointer"
                                         {...(activeMessageId === msg.id ? { "data-active": "" } : {})}
                                     >
@@ -5665,7 +5683,7 @@ export function ChatRoom({ session, onBack }: ChatRoomProps) {
                                                             if (dx > 10 || dy > 10) handleMessagePointerCancel();
                                                         }
                                                     }}
-                                                    onContextMenu={(e) => { e.preventDefault(); openMessageContextMenu(msg.id, { x: e.clientX, y: e.clientY }); }}
+                                                    onContextMenu={(e) => { e.preventDefault(); openMessageContextMenu(msg.id, getElementContextMenuAnchor(e.currentTarget)); }}
                                                     onClick={(e) => {
                                                         if (activeMessageId === msg.id) return;
                                                         e.stopPropagation();
@@ -5725,7 +5743,7 @@ export function ChatRoom({ session, onBack }: ChatRoomProps) {
                                                         if (dx > 10 || dy > 10) handleMessagePointerCancel();
                                                     }
                                                 },
-                                                onContextMenu: (e: React.MouseEvent) => { e.preventDefault(); openMessageContextMenu(msg.id, { x: e.clientX, y: e.clientY }); },
+                                                onContextMenu: (e: React.MouseEvent) => { e.preventDefault(); openMessageContextMenu(msg.id, getElementContextMenuAnchor(e.currentTarget)); },
                                             } : {})}
                                             className={`chat-bubble-role-${msg.role} ${isMediaBubble ? "chat-bubble-media" : ""} ${isStandaloneHtmlPreview ? "chat-bubble-html-preview" : ""} ${renderMsg.mediaType === "music_share" ? "chat-bubble-music-share" : ""} ${renderMsg.mediaType === "gift" || renderMsg.mediaType === "image" || isStandaloneHtmlPreview ? "rounded-none" : "rounded-md"} break-words relative cursor-pointer select-none`}
                                             style={isStandaloneHtmlPreview ? STANDALONE_CARD_BUBBLE_STYLE : undefined}
