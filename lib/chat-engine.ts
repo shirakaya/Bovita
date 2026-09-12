@@ -819,11 +819,6 @@ export async function sendLLMStreamRequest(
     const detachExternalAbort = attachExternalAbort(llmAbort, options?.signal);
 
     try {
-        const response = await fetchLlmPayload(request, { signal: llmAbort.signal });
-        if (!response.ok) {
-            const errorText = await response.text();
-            throw new ChatEngineError(`API Stream Error ${response.status}: ${errorText}`);
-        }
         // 流式路径收集思维链原文：readSseStream 只通过 onReasoningDelta 回调透传，
         // 不额外包一层的话日志里就只有清洗后的回复正文，思维链被吞。
         // 注意：必须无条件创建回调对象（不能 callbacks 为空就不传），否则思维链收集不到。
@@ -835,9 +830,36 @@ export async function sendLLMStreamRequest(
                 await (pluginCallbacks ?? callbacks)?.onReasoningDelta?.(text);
             },
         };
-        const { content: streamedContent, rawResponse } = await readSseStream(response, request.providerKind, streamLogCallbacks, !options?.skipTimestampStrip);
+        const maxAttempts = /\/api\/cline-proxy(?:\/|$)/i.test(request.url) ? 2 : 1;
+        let streamedContent = "";
+        let rawResponse = "";
+
+        for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+            const response = await fetchLlmPayload(request, { signal: llmAbort.signal });
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new ChatEngineError(`API Stream Error ${response.status}: ${errorText}`);
+            }
+
+            const streamed = await readSseStream(
+                response,
+                request.providerKind,
+                streamLogCallbacks,
+                !options?.skipTimestampStrip,
+            );
+            streamedContent = streamed.content;
+            rawResponse = streamed.rawResponse;
+            if (streamedContent.trim()) break;
+
+            if (attempt < maxAttempts) {
+                console.warn("[ChatEngine] Cline stream ended without text; retrying once.");
+            }
+        }
+
         if (!streamedContent.trim()) {
-            throw new ChatEngineError("流式响应没有解析到文本增量。");
+            throw new ChatEngineError(maxAttempts > 1
+                ? "流式响应重试后仍没有解析到文本增量。"
+                : "流式响应没有解析到文本增量。");
         }
         let rawOutput = options?.skipTimestampStrip ? streamedContent.trim() : stripHallucinatedTimestamps(streamedContent.trim());
         rawOutput = await applyChatPluginLlmResponse(rawOutput, pluginPurpose, options?.debugSessionId);

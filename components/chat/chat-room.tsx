@@ -1,6758 +1,1873 @@
-"use client";
-
-import { forwardRef, Fragment, memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ChatSession, ChatMessage, CHAT_APP_SETTINGS_UPDATED_EVENT, CHAT_INITIAL_VISIBLE_MESSAGE_COUNT, CHAT_LOAD_MORE_MESSAGE_COUNT, CHAT_REQUEST_REPLY_EVENT, loadChatAppSettings, loadChatMessages, loadChatContacts, loadChatSessions, saveChatSessions, pushChatMessage, updateChatMessage, deleteChatMessage, deleteChatMessagesFrom, deleteChatMessagesByIds, retractChatMessage, editChatMessage, updateMessageMediaData, replaceResponseBatchWithParts, replaceGroupResponseRound, isReadingDiscussMessage, isSystemInstructionMessage, createResponseBatchId, createResponseRoundId, getLatestStateValues, getLatestCharacterStateValues, compareChatMessages, isSessionStreamingEnabled } from "@/lib/chat-storage";
-import { cleanStreamText, splitStreamPreviewSegments, stripLiteralTexts, stripXmlTagBlocks } from "@/lib/stream-preview";
-import type { StateValue } from "@/lib/chat-storage";
-import { parseStateValues, mergeStateValues } from "@/lib/state-value-parser";
-import { parseAIResponse, type ParsedMessagePart } from "@/lib/rich-message-parser";
-import { isKnownStickerLabel } from "@/lib/sticker-data";
-import { translateReasoningText } from "@/lib/reasoning-translate";
-import { MessageBubble, MediaDetailModal, prewarmStickerCache, BilingualTextBlock, isStandaloneHtmlPreviewContent, normalizeTextBubbleContent } from "./message-bubble";
-import { GeneratedImageErrorDialog } from "./generated-image-error-dialog";
-import { PhotoInputModal, TextPhotoModal, VoiceRecordModal, RedPacketModal, LocationInputModal, SystemInstructionModal } from "./rich-input-modals";
-import { EmojiPanel, StickerPanel } from "./emoji-panel";
-import { StickerSearchSuggest } from "./sticker-search-suggest";
-import { StateValuesPanel } from "./state-values-panel";
-import { generateChatCompletion, generateOfflineChatCompletion, flattenCompletionResult, ChatEngineError } from "@/lib/chat-engine";
-import { formatOfflineTurnXml as formatOfflineTurnXmlShared, buildOfflinePromptHistory as buildOfflinePromptHistoryShared } from "@/lib/offline-prompt-builder";
-import { getStatusRegionConfig, isCustomStatusRegionActive } from "@/lib/chat-status-region";
-import { CustomStatusFrame } from "@/components/chat/custom-status-frame";
-import { sendBrowserNotification } from "@/lib/browser-notification";
-import { dispatchChatMessageNotice } from "@/lib/chat-notification-events";
-import { shouldSendChatInputOnEnter } from "@/lib/chat-input-keyboard";
-import { useChatBottomReserve } from "./use-chat-bottom-reserve";
-import ReactMarkdown from "react-markdown";
-import rehypeRaw from "rehype-raw";
-import remarkGfm from "remark-gfm";
-import { createPortal } from "react-dom";
-
-import { loadCharacters } from "@/lib/character-storage";
-import { Character } from "@/lib/character-types";
-import { loadCustomAppChatPlusActions, type RegisteredCustomAppChatPlusAction } from "@/lib/custom-app-chat-directives";
-import { CUSTOM_APPS_UPDATED_EVENT, getInstalledCustomApp } from "@/lib/custom-app-storage";
-import { toCustomAppIconId, type InstalledCustomApp } from "@/lib/custom-app-types";
-import { CustomAppRunner } from "@/components/app-market/custom-app-runner";
-import { CustomAppForegroundBoundary } from "@/components/app-market/custom-app-failure";
-
-import { ChatSettingsPanel } from "./chat-settings-panel";
-import { VoiceCallScreen } from "./voice-call-screen";
-import { VideoCallScreen } from "./video-call-screen";
-import { GroupCallScreen } from "./group-call-screen";
-import { TransferTargetModal } from "./transfer-target-modal";
-import { GiftPickerModal } from "./gift-picker-modal";
-import { ConfirmDialog } from "@/components/ui/modal";
-import { deleteWeixinCloudMessagesFromCloud, emitWeixinSyncToast, syncAllWeixinBotRuntimesToCloud } from "@/lib/weixin-cloud-sync";
-import { loadBindingConfig, loadPresets, loadRegexes, resolveBinding, resolveUserIdentity } from "@/lib/settings-storage";
-import { generateGroupChatCompletion, generateGroupOfflineChatCompletion, parseGroupChatResponse, buildEditableGroupRoundText } from "@/lib/group-chat-engine";
-import { appendChatOfflineTurn, deleteChatOfflineTurn, deleteChatOfflineTurnsFrom, extractThinkingTag, loadChatOfflineTurns, parseOfflineResponse, saveChatOfflineTurns, updateChatOfflineTurn, type ChatOfflineTurn } from "@/lib/chat-offline-storage";
-import { applyDisplayRegex, applyEditRegex } from "@/lib/llm-prompt-assembler";
-import { scheduleFollowUp, cancelFollowUp, cancelBackgroundGeneration, isBackgroundReplyGenerating } from "@/lib/follow-up-service";
-import { useKeyboardDismissAutoSend } from "@/components/chat/use-keyboard-dismiss-auto-send";
-import { cancelBailoutKey } from "@/lib/push-bailout-client";
-import { PENDING_REPLY_PREFIX } from "@/lib/friend-request-engine";
-import type { UserIdentity } from "@/components/settings/user-identity";
-import { AlertCircle, Blocks, Check, Trash2, User, ChevronLeft, ChevronRight, Clapperboard, Clock, Gift, Languages, Loader2, MoreHorizontal, X } from "lucide-react";
-import { setDebugChatState } from "@/lib/debug-store";
-import { SessionCustomCSS } from "@/components/ui/session-custom-css";
-import { setChatActive } from "@/lib/music-action-queue";
-import { getMusicControlBridge } from "@/lib/music-control-bridge";
-import { findPlayableMatch, getNeteaseLyrics, getNeteaseSongDetail } from "@/lib/music-service";
-import { approveMemoryWriteRequest } from "@/lib/tool-executor";
-import type { MemoryWriteRequest, ToolResult } from "@/lib/tool-executor";
-import { formatChatUiTime } from "@/lib/chat-time";
-import { parseActionTags } from "@/lib/action-parser";
-import { kvGet, kvSet, kvRemove } from "@/lib/kv-db";
-import { creditWalletBalance, payWithWalletBalance } from "@/lib/wallet-storage";
-import { loadDeliveredShoppingGifts, type ShoppingGiftCandidate } from "@/lib/shopping-gift-utils";
-import { settleShoppingPaymentRequest } from "@/lib/shopping-payment-request";
-import type { RegexConfig } from "@/lib/settings-types";
-import { MacroEngine } from "@/lib/macro-engine";
-import {
-    createPendingChatGeneratedImageData,
-    generateAndApplyChatGeneratedImage,
-    isPendingChatGeneratedImageMessage,
-} from "@/lib/generated-image-retry";
-import { scrollElementWithinContainer } from "@/lib/dom-scroll";
-import { ChatFallbackAvatar } from "./chat-fallback-avatar";
-import { ChatScreenEffectOverlay, type ActiveScreenEffect } from "./chat-screen-effect";
-import {
-    formatChatDiceResultMessage,
-    isDiceOnlyMessage,
-    matchChatScreenEffectRule,
-    rollChatDiceFace,
-} from "@/lib/chat-screen-effects";
-import { abortableDelay, throwIfAborted } from "@/lib/abort-utils";
-import { GROUP_SELF_KEY, canGroupAdminAct, applyGroupAdminAction, buildGroupAdminNoticeText, getGroupMemberDisplayName, getGroupMuteRemainingMs, getGroupRole, isGroupMuted, formatMuteRemainingLabel, resolveGroupMemberKeyByName, type GroupAdminAction } from "@/lib/group-admin";
-import { extractTextToolDirectiveText } from "@/lib/text-tool-protocol";
-import { emitChatPluginEvent, getChatPluginHookBus, runChatPluginTransform } from "@/lib/chat-plugin-hooks";
-import { CHAT_PLUGIN_TOAST_EVENT, getChatPluginRuntime } from "@/lib/chat-plugin-runtime";
-import { ChatPluginSlot } from "@/components/chat/chat-plugin-slot";
-
-// â”€â”€ Call system message detection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// Call messages are stored with user/assistant role for correct prompt alternation,
-// but should render as centered system notifications in the UI.
-const CALL_SYS_RE = /\[æˆ‘(?:å‘.+)?(?:å‘èµ·äº†|æŒ‚æ–­äº†|æ‹’ç»äº†|å–æ¶ˆäº†)(?:ç¾¤?(?:è¯­éŸ³|è§†é¢‘)é€šè¯)/;
-function isCallSysMsg(msg: ChatMessage): boolean {
-    return CALL_SYS_RE.test(msg.content);
-}
-/** Returns the effective UI role: call messages render as "system" regardless of stored role */
-const ACTION_MEDIA_TYPES = new Set(["poke", "accept_red_packet", "decline_red_packet", "accept_transfer", "decline_transfer", "accept_payment_request", "decline_payment_request", "group_admin_notice"]);
-// æ‹ä¸€æ‹/ç¾¤ç®¡ç†é€šçŸ¥/é€šè¯ç•™ç—•æ¸²æŸ“æˆç°è‰²ç³»ç»Ÿå°å­—ï¼Œæ²¡æœ‰ ğŸ’­ é¢æ¿å…¥å£â€”â€”
-// çŠ¶æ€æ /å†…å¿ƒç‹¬ç™½/çŠ¶æ€å€¼æŒ‚ä¸Šå»ä¼šè¢«æ˜¾ç¤ºå±‚åæ‰ï¼ŒæŒ‚è½½æ—¶å¿…é¡»è·³è¿‡å®ƒä»¬
-function canCarryFoldedPanel(part: { content?: string; mediaType?: ChatMessage["mediaType"] }): boolean {
-    if (part.mediaType === "poke" || part.mediaType === "group_admin_notice") return false;
-    return !CALL_SYS_RE.test(part.content || "");
-}
-function uiRole(msg: ChatMessage): string {
-    if (msg.role === "system" || ACTION_MEDIA_TYPES.has(msg.mediaType || "")) return "system";
-    if (isCallSysMsg(msg)) return "system";
-    return msg.role;
-}
-
-function isChatRoomElementVisible(element: HTMLElement | null): boolean {
-    if (!element || !element.isConnected) return false;
-    const rect = element.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) return false;
-    const style = window.getComputedStyle(element);
-    return style.display !== "none" && style.visibility !== "hidden";
-}
-
-function splitOfflineParagraphs(text: string): string[] {
-    const normalized = text.replace(/\r\n?/g, "\n").trim();
-    if (!normalized) return [];
-    const splitPlainText = (value: string) => value
-        .split(/\n\s*\n+/)
-        .map(part => part.trim())
-        .filter(Boolean);
-
-    const parts: string[] = [];
-    const fenceRx = /(^|\n)([ \t]*)(```|~~~)[^\n]*\n[\s\S]*?\n[ \t]*\3(?=\n|$)/g;
-    let cursor = 0;
-    let match: RegExpExecArray | null;
-
-    while ((match = fenceRx.exec(normalized)) !== null) {
-        const fenceStart = match.index + match[1].length;
-        const before = normalized.slice(cursor, fenceStart);
-        parts.push(...splitPlainText(before));
-
-        const fencedBlock = normalized.slice(fenceStart, fenceRx.lastIndex).trim();
-        if (fencedBlock) parts.push(fencedBlock);
-        cursor = fenceRx.lastIndex;
-    }
-
-    parts.push(...splitPlainText(normalized.slice(cursor)));
-    return parts;
-}
-
-function hasOfflineHtmlPreview(text: string): boolean {
-    return splitOfflineParagraphs(text).some(part => isStandaloneHtmlPreviewContent(part));
-}
-
-const OfflineAssistantTextBlock = memo(function OfflineAssistantTextBlock({
-    text,
-    defaultExpanded,
-}: {
-    text: string;
-    defaultExpanded: boolean;
-}) {
-    const paragraphs = useMemo(() => splitOfflineParagraphs(text), [text]);
-    if (paragraphs.length <= 1) {
-        return <BilingualTextBlock text={text} mode="markdown" defaultExpanded={defaultExpanded} htmlFrameVariant="offline" />;
-    }
-    return (
-        <div className="chat-offline-paragraph-stack">
-            {paragraphs.map((paragraph, index) => (
-                <div className="chat-offline-paragraph" key={`${index}-${paragraph.slice(0, 16)}`}>
-                    <BilingualTextBlock text={paragraph} mode="markdown" defaultExpanded={defaultExpanded} htmlFrameVariant="offline" />
-                </div>
-            ))}
-        </div>
-    );
-});
-
-const CHAT_VISUAL_MEDIA_TYPES = new Set([
-    "sticker",
-    "dice",
-    "red_packet",
-    "transfer",
-    "payment_request",
-    "gift",
-    "contact_card",
-    "image",
-    "location",
-    "music_share",
-    "xiaohongshu_note_share",
-    "app_card",
-    "audio",
-    "video",
-    "quote",
-    "media_file",
-]);
-
-const WEIXIN_CLOUD_DELETE_TIMEOUT_MS = 15000;
-
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
-    return new Promise<T>((resolve, reject) => {
-        const timer = window.setTimeout(() => reject(new Error(message)), timeoutMs);
-        promise.then(
-            value => {
-                window.clearTimeout(timer);
-                resolve(value);
-            },
-            error => {
-                window.clearTimeout(timer);
-                reject(error);
-            },
-        );
-    });
-}
-
-function getWeixinCloudDeleteTargetCount(messages: ChatMessage[]): number {
-    const targets = new Set<string>();
-    for (const message of messages) {
-        const sync = message.cloudSync;
-        if (sync?.source !== "weixin-cloud") continue;
-        if (!sync.botId || !sync.externalId) continue;
-        targets.add(`${sync.botId}\u0000${sync.externalId}`);
-    }
-    return targets.size;
-}
-
-const CHAT_MEDIA_BUBBLE_TYPES = new Set([
-    "sticker",
-    "dice",
-    "red_packet",
-    "transfer",
-    "payment_request",
-    "gift",
-    "contact_card",
-    "image",
-    "location",
-    "music_share",
-    "xiaohongshu_note_share",
-    "app_card",
-    "media_file",
-]);
-
-const STANDALONE_CARD_BUBBLE_STYLE = {
-    background: "transparent",
-    border: "none",
-    boxShadow: "none",
-    backdropFilter: "none",
-    WebkitBackdropFilter: "none",
-    padding: 0,
-    overflow: "visible",
-} as const;
-
-function getChatFlowVisibleContent(msg: ChatMessage, displayContent?: string): string {
-    return normalizeTextBubbleContent(displayContent ?? msg.content);
-}
-
-function isChatVisualMedia(msg: ChatMessage): boolean {
-    return !!msg.mediaType && CHAT_VISUAL_MEDIA_TYPES.has(msg.mediaType);
-}
-/** æ€ç»´é“¾è§¦å‘æ¡çš„å•è¡Œæ‘˜è¦ï¼šå–é¦–ä¸ªéç©ºè¡Œå¹¶å‰¥ç¦» markdown æ ‡è®°ï¼ˆ**ã€`ã€# ç­‰ï¼‰ï¼Œé¿å…æ˜Ÿå·åŸæ ·æ˜¾ç¤º */
-function reasoningPreviewLine(text: string): string {
-    for (const rawLine of text.split("\n")) {
-        const line = rawLine
-            .replace(/```+/g, "")
-            .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
-            .replace(/\*\*([^*]+)\*\*/g, "$1")
-            .replace(/__([^_]+)__/g, "$1")
-            .replace(/\*([^*]+)\*/g, "$1")
-            .replace(/`([^`]+)`/g, "$1")
-            .replace(/^\s*#{1,6}\s+/, "")
-            .replace(/^\s*>\s+/, "")
-            .replace(/^\s*[-*+]\s+/, "")
-            .replace(/[*`]+/g, "")
-            .trim();
-        if (line) return line;
-    }
-    return "æ€è€ƒè¿‡ç¨‹";
-}
-
-function isHiddenChatFlowMessage(msg: ChatMessage, displayContent?: string): boolean {
-    if (msg.mediaType === "tool_result" || msg.mediaType === "tool_call") return true;
-    return !isChatVisualMedia(msg)
-        && !getChatFlowVisibleContent(msg, displayContent)
-        && uiRole(msg) !== "system"
-        && !msg.statusPanel
-        && !msg.innerMonologue
-        && !msg.reasoningText;
-}
-
-// â”€â”€ Background generation tracking â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-const GENERATING_PREFIX = "chat-generating:";
-const CHAT_BG_COMPLETE = "chat-bg-complete";
-const CHAT_OFFLINE_MODE_PREFIX = "chat-offline-mode:";
-const CHAT_THEATER_MODE_PREFIX = "chat-theater-mode:";
-const GENERATING_LOCK_TTL_MS = 5 * 60 * 1000;
-const OFFLINE_INITIAL_LOAD = 10;
-const OFFLINE_LOAD_MORE_COUNT = 10;
-
-type PendingNativeToolCall = {
-    id: string;
-    name: string;
-};
-
-type ActiveGenerationRun = {
-    runId: string;
-    controller: AbortController;
-    pendingNativeToolCalls: PendingNativeToolCall[];
-};
-
-type GenerationRunGuard = {
-    signal?: AbortSignal;
-    isActive?: () => boolean;
-};
-
-type AssistantMessageDraft = Omit<ChatMessage, "id" | "createdAt" | "status"> & { status?: ChatMessage["status"] };
-
-type ManagedGenerationOptions = {
-    history: ChatMessage[];
-    errorPrefix?: string;
-    onDecline?: () => void | Promise<void>;
-};
-
-const activeGenerationRuns = new Map<string, ActiveGenerationRun>();
-const activeOfflineGenerationRuns = new Map<string, Omit<ActiveGenerationRun, "pendingNativeToolCalls">>();
-
-function generationLockKey(sessionId: string): string {
-    return GENERATING_PREFIX + sessionId;
-}
-
-function setGenerationLock(sessionId: string): void {
-    kvSet(generationLockKey(sessionId), JSON.stringify({ startedAt: Date.now() }));
-}
-
-function clearGenerationLock(sessionId: string): void {
-    kvRemove(generationLockKey(sessionId));
-}
-
-function hasActiveGenerationLock(sessionId: string): boolean {
-    const key = generationLockKey(sessionId);
-    const raw = kvGet(key);
-    if (!raw) return false;
-    let startedAt = 0;
-    try {
-        const parsed = JSON.parse(raw);
-        startedAt = Number(parsed?.startedAt) || 0;
-    } catch {
-        startedAt = 0;
-    }
-    if (!startedAt || Date.now() - startedAt > GENERATING_LOCK_TTL_MS) {
-        kvRemove(key);
-        return false;
-    }
-    return true;
-}
-
-function createGenerationRun(sessionId: string): ActiveGenerationRun {
-    const existing = activeGenerationRuns.get(sessionId);
-    existing?.controller.abort();
-    const run: ActiveGenerationRun = {
-        runId: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-        controller: new AbortController(),
-        pendingNativeToolCalls: [],
-    };
-    activeGenerationRuns.set(sessionId, run);
-    return run;
-}
-
-function isGenerationRunActive(sessionId: string, runId: string): boolean {
-    const run = activeGenerationRuns.get(sessionId);
-    return Boolean(run && run.runId === runId && !run.controller.signal.aborted);
-}
-
-function finishGenerationRun(sessionId: string, runId: string): boolean {
-    const run = activeGenerationRuns.get(sessionId);
-    if (!run || run.runId !== runId) return false;
-    activeGenerationRuns.delete(sessionId);
-    return true;
-}
-
-function trackNativeToolCalls(sessionId: string, runId: string, calls: PendingNativeToolCall[]): void {
-    const run = activeGenerationRuns.get(sessionId);
-    if (!run || run.runId !== runId) return;
-    const existingIds = new Set(run.pendingNativeToolCalls.map(call => call.id));
-    for (const call of calls) {
-        if (call.id && !existingIds.has(call.id)) {
-            run.pendingNativeToolCalls.push(call);
-            existingIds.add(call.id);
-        }
-    }
-}
-
-function resolveNativeToolCall(sessionId: string, runId: string, toolCallId: string): void {
-    const run = activeGenerationRuns.get(sessionId);
-    if (!run || run.runId !== runId) return;
-    run.pendingNativeToolCalls = run.pendingNativeToolCalls.filter(call => call.id !== toolCallId);
-}
-
-function cancelGenerationRun(sessionId: string): ActiveGenerationRun | null {
-    const run = activeGenerationRuns.get(sessionId);
-    if (!run) return null;
-    run.controller.abort();
-    activeGenerationRuns.delete(sessionId);
-    return run;
-}
-
-function isAbortLikeError(error: unknown): boolean {
-    if (!error) return false;
-    if (error instanceof DOMException && error.name === "AbortError") return true;
-    if (error instanceof Error) {
-        return error.name === "AbortError" || /aborted|abort/i.test(error.message);
-    }
-    return false;
-}
-
-function throwIfGenerationStopped(guard?: GenerationRunGuard): void {
-    throwIfAborted(guard?.signal);
-    if (guard?.isActive && !guard.isActive()) {
-        throw new DOMException("Aborted", "AbortError");
-    }
-}
-
-function createOfflineGenerationRun(sessionId: string): Omit<ActiveGenerationRun, "pendingNativeToolCalls"> {
-    const existing = activeOfflineGenerationRuns.get(sessionId);
-    existing?.controller.abort();
-    const run = {
-        runId: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-        controller: new AbortController(),
-    };
-    activeOfflineGenerationRuns.set(sessionId, run);
-    return run;
-}
-
-function isOfflineGenerationRunActive(sessionId: string, runId: string): boolean {
-    const run = activeOfflineGenerationRuns.get(sessionId);
-    return Boolean(run && run.runId === runId && !run.controller.signal.aborted);
-}
-
-function finishOfflineGenerationRun(sessionId: string, runId: string): boolean {
-    const run = activeOfflineGenerationRuns.get(sessionId);
-    if (!run || run.runId !== runId) return false;
-    activeOfflineGenerationRuns.delete(sessionId);
-    return true;
-}
-
-function cancelOfflineGenerationRun(sessionId: string): boolean {
-    const run = activeOfflineGenerationRuns.get(sessionId);
-    if (!run) return false;
-    run.controller.abort();
-    activeOfflineGenerationRuns.delete(sessionId);
-    return true;
-}
-
-// â”€â”€ Rich media reprocessing on mount â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
-const TIME_GAP = 1 * 60 * 1000;
-
-function shouldShowTimestamp(currentMsg: string, prevMsg: string | null): boolean {
-    if (!prevMsg) return true; // First message always shows time
-    return new Date(currentMsg).getTime() - new Date(prevMsg).getTime() > TIME_GAP;
-}
-
-type ChatRoomProps = {
-    session: ChatSession;
-    onBack: () => void;
-    /** ä¼šè¯åœ¨è®¾ç½®é¡µè¢«åˆ é™¤åå›è°ƒï¼šç”±å¤–å±‚å¸è½½æœ¬èŠå¤©å®¤å¹¶å›åˆ°åˆ—è¡¨ */
-    onDeleted?: () => void;
-};
-
-type OfflineActionTarget = {
-    turnId: string;
-    role: "user" | "assistant";
-};
-
-type ContextMenuAnchor = {
-    x: number;
-    y: number;
-};
-
-type RenderChatMessage = ChatMessage & {
-    displayProjected?: boolean;
-    displaySourceId?: string;
-};
-
-type ScrollAnchorSnapshot = {
-    messageId: string;
-    offsetDelta: number;
-};
-
-type PendingMessageJump = {
-    messageId: string;
-    fallbackMessageId?: string;
-};
-
-const TRANSIENT_MESSAGE_PREFIX = "ui-transient-";
-type RichModalKind = "photo" | "text_photo" | "red_packet" | "transfer" | "location" | "transfer_target" | "voice_msg" | "gift" | "system_instruction";
-type ChatTextInputHandle = {
-    appendText: (text: string, options?: { focus?: boolean }) => void;
-    clear: () => void;
-};
-type OfflineTextInputHandle = {
-    clear: () => void;
-    setText: (text: string) => void;
-    restoreIfEmpty: (text: string) => void;
-};
-
-function isTransientMessage(msg: Pick<ChatMessage, "id"> | string): boolean {
-    return (typeof msg === "string" ? msg : msg.id).startsWith(TRANSIENT_MESSAGE_PREFIX);
-}
-
-function copyTextToClipboard(text: string): void {
-    const fallbackCopy = () => {
-        const ta = document.createElement("textarea");
-        ta.value = text;
-        ta.style.cssText = "position:fixed;left:-9999px;top:-9999px;opacity:0";
-        document.body.appendChild(ta);
-        ta.focus();
-        ta.select();
-        try { document.execCommand("copy"); } catch {}
-        document.body.removeChild(ta);
-    };
-    if (navigator.clipboard?.writeText) {
-        navigator.clipboard.writeText(text).catch(fallbackCopy);
-    } else {
-        fallbackCopy();
-    }
-}
-
-function MemoryWriteRequestCard({
-    msg,
-    onApprove,
-    onIgnore,
-}: {
-    msg: ChatMessage;
-    onApprove: (msg: ChatMessage) => void | Promise<void>;
-    onIgnore: (msg: ChatMessage) => void;
-}) {
-    const status = msg.mediaData?.memoryRequestStatus || "pending";
-    const content = msg.mediaData?.memoryContent || msg.content;
-    const reason = msg.mediaData?.memoryReason;
-    const importance = msg.mediaData?.memoryImportance;
-    const statusText = status === "approved" ? "å·²å†™å…¥é•¿æœŸè®°å¿†" : status === "ignored" ? "å·²å¿½ç•¥æœ¬æ¬¡å†™å…¥" : "ç­‰å¾…ä½ ç¡®è®¤";
-
-    return (
-        <div className="w-[280px] rounded-2xl border border-[var(--c-border)] bg-[var(--c-card)]/95 backdrop-blur px-4 py-3 flex flex-col gap-3 ui-bubble-shadow">
-            <div className="flex items-center justify-between gap-3">
-                <span className="menu-label">å¯¹æ–¹æƒ³è®°ä½è¿™ä»¶äº‹</span>
-                <span className="menu-desc !mt-0 shrink-0">{statusText}</span>
-            </div>
-            <div className="rounded-xl bg-[var(--c-input)]/70 px-3 py-2">
-                <p className="menu-desc !mt-0 leading-6 whitespace-pre-wrap">{content}</p>
-            </div>
-            {(reason || typeof importance === "number") && (
-                <div className="flex flex-col gap-1">
-                    {reason && <span className="menu-desc !mt-0">åŸå› ï¼š{reason}</span>}
-                    {typeof importance === "number" && <span className="menu-desc !mt-0">é‡è¦æ€§ï¼š{importance.toFixed(2)}</span>}
-                </div>
-            )}
-            {status === "pending" ? (
-                <div className="flex gap-2">
-                    <button onClick={() => void onApprove(msg)} className="ui-btn ui-btn-primary flex-1">ç¡®è®¤å†™å…¥</button>
-                    <button onClick={() => onIgnore(msg)} className="ui-btn ui-btn-outline flex-1">å¿½ç•¥</button>
-                </div>
-            ) : null}
-        </div>
-    );
-}
-
-function SystemInstructionCard({ content }: { content: string }) {
-    return (
-        <>
-            <div className="chat-system-instruction-head">
-                <span className="chat-system-instruction-title">ç³»ç»ŸæŒ‡ä»¤</span>
-            </div>
-            <div className="chat-system-instruction-body">{content}</div>
-        </>
-    );
-}
-
-type CustomChatPlusPresentation = "panel" | "modal" | "fullscreen" | "none";
-
-type ActiveCustomChatPlus = {
-    app: InstalledCustomApp;
-    action: RegisteredCustomAppChatPlusAction;
-    presentation: Exclude<CustomChatPlusPresentation, "fullscreen">;
-    launchContext: Record<string, unknown>;
-};
-
-function getCustomChatPlusPresentation(action: RegisteredCustomAppChatPlusAction): CustomChatPlusPresentation {
-    if (action.presentation === "fullscreen" || action.presentation === "app") return "fullscreen";
-    if (action.presentation === "modal") return "modal";
-    if (action.presentation === "none") return "none";
-    return "panel";
-}
-
-function normalizeCustomPanelHeight(value: unknown): string | undefined {
-    const text = String(value ?? "").trim();
-    if (!text) return undefined;
-    if (/^\d{2,3}$/.test(text)) return `${Math.max(220, Math.min(680, Number(text)))}px`;
-    if (/^\d{2,3}px$/.test(text)) return text;
-    if (/^\d{2,3}vh$/.test(text)) return text;
-    if (/^calc\([^)]+\)$/.test(text)) return text;
-    return undefined;
-}
-
-const ChatTextInputBar = memo(forwardRef<ChatTextInputHandle, {
-    characterName: string;
-    characterId: string;
-    stickerCharacterIds?: string[];
-    isGroup: boolean;
-    isSpectator: boolean;
-    muteUntilMs: number;
-    isGenerating: boolean;
-    theaterMode: boolean;
-    enterToSendEnabled: boolean;
-    quotingMessage: ChatMessage | null;
-    showEmojiPanel: boolean;
-    showStickerPanel: boolean;
-    showPlusMenu: boolean;
-    customPlusActions: RegisteredCustomAppChatPlusAction[];
-    onClearQuote: () => void;
-    onToggleOfflineMode: () => void;
-    onClosePanels: () => void;
-    onToggleEmojiPanel: () => void;
-    onToggleStickerPanel: () => void;
-    onTogglePlusMenu: () => void;
-    onToggleTheaterMode: () => void;
-    onCloseTheaterMode: () => void;
-    onOpenRichModal: (modal: RichModalKind) => void;
-    onOpenCustomPlusAction: (action: RegisteredCustomAppChatPlusAction) => void;
-    onStartVideoCall: () => void;
-    onStartVoiceCall: () => void;
-    onSendText: (text: string, options?: { autoReply?: boolean }) => boolean;
-    onStopGeneration: () => void;
-    onTriggerAIResponse: () => void;
-	onSendSticker: (name: string, url?: string) => void;
-}>(function ChatTextInputBar({
-    characterName,
-    characterId,
-    stickerCharacterIds,
-    isGroup,
-    isSpectator,
-    muteUntilMs,
-    isGenerating,
-    theaterMode,
-    enterToSendEnabled,
-    quotingMessage,
-    showEmojiPanel,
-    showStickerPanel,
-    showPlusMenu,
-    customPlusActions,
-    onClearQuote,
-    onToggleOfflineMode,
-    onClosePanels,
-    onToggleEmojiPanel,
-    onToggleStickerPanel,
-    onTogglePlusMenu,
-    onToggleTheaterMode,
-    onCloseTheaterMode,
-    onOpenRichModal,
-    onOpenCustomPlusAction,
-    onStartVideoCall,
-    onStartVoiceCall,
-    onSendText,
-    onStopGeneration,
-    onTriggerAIResponse,
-    onSendSticker,
-}, ref) {
-    const [inputText, setInputText] = useState("");
-    const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-    // è¡¨æƒ…åŒ…æœç´¢è”æƒ³ï¼šESC/å¤±ç„¦ç½® true éšè—ï¼Œè¾“å…¥å˜åŒ–é‡æ–°å¼€å¯
-    const [suggestClosed, setSuggestClosed] = useState(false);
-    // å›´è§‚ç¾¤/è¢«ç¦è¨€ï¼šè¾“å…¥ä¸å¯Œåª’ä½“å…¥å£å…¨éƒ¨é”å®šï¼Œåªç•™çº¿ä¸‹åˆ‡æ¢å’Œç”ŸæˆæŒ‰é’®
-    const [muteNowTick, setMuteNowTick] = useState(() => Date.now());
-    useEffect(() => {
-        if (!muteUntilMs || muteUntilMs <= Date.now()) return;
-        const timer = window.setInterval(() => setMuteNowTick(Date.now()), 30000);
-        return () => window.clearInterval(timer);
-    }, [muteUntilMs]);
-    const muteRemainingMs = muteUntilMs > muteNowTick ? muteUntilMs - muteNowTick : 0;
-    const inputLocked = isSpectator || muteRemainingMs > 0;
-
-    const resetTextareaHeight = () => {
-        if (textareaRef.current) textareaRef.current.style.height = "auto";
-    };
-
-    const appendText = useCallback((text: string, options?: { focus?: boolean }) => {
-        setInputText(prev => prev + text);
-        requestAnimationFrame(() => {
-            const ta = textareaRef.current;
-            if (!ta) return;
-            ta.style.height = "auto";
-            ta.style.height = Math.min(ta.scrollHeight, 120) + "px";
-            if (options?.focus !== false) ta.focus();
-        });
-    }, []);
-
-    useImperativeHandle(ref, () => ({
-        appendText,
-        clear: () => {
-            setInputText("");
-            resetTextareaHeight();
-        },
-    }), [appendText]);
-
-    const handleSubmit = () => {
-        if (inputLocked) return;
-        if (isGenerating) {
-            onStopGeneration();
-            return;
-        }
-        const trimmed = inputText.trim();
-        if (!trimmed) return;
-        if (!onSendText(trimmed)) return;
-        setInputText("");
-        resetTextareaHeight();
-        onClosePanels();
-    };
-
-    const panelOpen = showEmojiPanel || showStickerPanel || showPlusMenu;
-    const suggestCharacterIds = useMemo(
-        () => (isGroup ? (stickerCharacterIds || []) : characterId ? [characterId] : []),
-        [isGroup, stickerCharacterIds, characterId],
-    );
-    const suggestEnabled = !inputLocked && !panelOpen && !suggestClosed && inputText.trim().length > 0;
-    const plusMenuItems = [
-        { icon: <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--c-text)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2" /><circle cx="8.5" cy="8.5" r="1.5" /><polyline points="21 15 16 10 5 21" /></svg>, label: "ç…§ç‰‡å¢™", onClick: () => onOpenRichModal("photo") },
-        { icon: <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--c-text)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2" /><line x1="7" y1="8" x2="17" y2="8" /><line x1="7" y1="12" x2="14" y2="12" /><line x1="7" y1="16" x2="11" y2="16" /></svg>, label: "æ–‡å­—å›¾ç‰‡", onClick: () => onOpenRichModal("text_photo") },
-        { icon: <AlertCircle size={22} strokeWidth={1.5} color="var(--c-text)" />, label: "ç³»ç»ŸæŒ‡ä»¤", onClick: () => onOpenRichModal("system_instruction") },
-        { icon: <Clapperboard size={22} strokeWidth={1.5} color={theaterMode ? "var(--c-icon-active)" : "var(--c-text)"} />, label: "ç•ªå¤–æŒ‡ä»¤æ¨¡å¼", active: theaterMode, onClick: onToggleTheaterMode },
-        { icon: <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--c-text)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M23 7l-7 5 7 5V7z" /><rect x="1" y="5" width="15" height="14" rx="2" ry="2" /></svg>, label: "è§†é¢‘é€šè¯", onClick: onStartVideoCall },
-        { icon: <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--c-text)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /><line x1="12" y1="19" x2="12" y2="22" /></svg>, label: "è¯­éŸ³é€šè¯", onClick: onStartVoiceCall },
-        { icon: <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--c-text)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="5" width="20" height="14" rx="2" /><line x1="2" y1="10" x2="22" y2="10" /></svg>, label: "çº¢åŒ…", onClick: () => onOpenRichModal("red_packet") },
-        { icon: <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--c-text)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><text x="12" y="16" textAnchor="middle" fontSize="12" fill="var(--c-text)" stroke="none">Â¥</text></svg>, label: "è½¬è´¦", onClick: () => onOpenRichModal(isGroup ? "transfer_target" : "transfer") },
-        { icon: <Gift size={22} strokeWidth={1.5} color="var(--c-text)" />, label: "ç¤¼ç‰©", onClick: () => onOpenRichModal("gift") },
-        { icon: <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--c-text)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" /><circle cx="12" cy="10" r="3" /></svg>, label: "ä½ç½®", onClick: () => onOpenRichModal("location") },
-        { icon: <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--c-text)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /><line x1="12" y1="19" x2="12" y2="22" /><line x1="8" y1="22" x2="16" y2="22" /></svg>, label: "è¯­éŸ³æ¡", onClick: () => onOpenRichModal("voice_msg") },
-        ...customPlusActions.map(action => ({
-            icon: action.appIconDataUrl
-                ? <span className="chat-plus-custom-app-icon" style={{ backgroundImage: `url(${action.appIconDataUrl})` }} aria-hidden="true" />
-                : <Blocks size={22} strokeWidth={1.5} color="var(--c-text)" />,
-            label: action.label,
-            onClick: () => onOpenCustomPlusAction(action),
-        })),
-    ];
-
-    return (
-        <div className="chat-input-bar chat-room-main-pane flex flex-col" data-ui="input">
-            {theaterMode && (
-                <div className="chat-theater-mode-strip" role="status">
-                    <span className="chat-theater-mode-icon" aria-hidden="true">
-                        <Clapperboard size={16} strokeWidth={1.8} />
-                    </span>
-                    <span className="chat-theater-mode-title">ç•ªå¤–æŒ‡ä»¤æ¨¡å¼</span>
-                    <button
-                        type="button"
-                        className="chat-theater-mode-close"
-                        onClick={onCloseTheaterMode}
-                        aria-label="å…³é—­ç•ªå¤–æŒ‡ä»¤æ¨¡å¼"
-                        title="å…³é—­ç•ªå¤–æŒ‡ä»¤æ¨¡å¼"
-                    >
-                        <X size={14} strokeWidth={2} />
-                    </button>
-                </div>
-            )}
-            {quotingMessage && (
-                <div className="chat-quote-bar">
-                    <div className="flex-1 ts-12 text-[var(--c-icon)] overflow-hidden text-ellipsis whitespace-nowrap">
-                        å¼•ç”¨ {quotingMessage.role === "user" ? "ä½ " : characterName}: {quotingMessage.content.slice(0, 40)}
-                    </div>
-                    <button onClick={onClearQuote} className="ui-bare-btn text-[var(--c-icon)] ts-16 leading-none p-[2px]">âœ•</button>
-                </div>
-            )}
-
-            {suggestEnabled && (
-                <StickerSearchSuggest
-                    query={inputText}
-                    characterIds={suggestCharacterIds}
-                    onSend={(name, url) => {
-                        onSendSticker(name, url);
-                        setInputText("");
-                        resetTextareaHeight();
-                    }}
-                    onClose={() => setSuggestClosed(true)}
-                />
-            )}
-            <textarea
-                ref={textareaRef}
-                rows={1}
-                value={inputText}
-                onChange={e => {
-                    setInputText(e.target.value);
-                    setSuggestClosed(false);
-                    e.target.style.height = "auto";
-                    e.target.style.height = Math.min(e.target.scrollHeight, 120) + "px";
-                }}
-                onFocus={(e) => {
-                    if (panelOpen) {
-                        e.target.blur();
-                        onClosePanels();
-                        const target = e.target as HTMLTextAreaElement;
-                        requestAnimationFrame(() => requestAnimationFrame(() => target.focus()));
-                    }
-                    setSuggestClosed(false);
-                }}
-                onBlur={() => setSuggestClosed(true)}
-                onKeyDown={e => {
-                    if (e.key === "Escape") {
-                        setSuggestClosed(true);
-                        return;
-                    }
-                    if (shouldSendChatInputOnEnter(e, enterToSendEnabled)) {
-                        e.preventDefault();
-                        handleSubmit();
-                    }
-                }}
-                enterKeyHint={enterToSendEnabled ? "send" : "enter"}
-                className="chat-input-textarea"
-                disabled={inputLocked}
-                placeholder={inputLocked
-                    ? (isSpectator ? "å›´è§‚ä¸­ï¼Œä½ ä¸åœ¨è¿™ä¸ªç¾¤é‡Œ" : `ç¦è¨€ä¸­ï¼Œå‰©ä½™${Math.ceil(muteRemainingMs / 60000)}åˆ†é’Ÿ`)
-                    : (theaterMode ? "å†™ä¸‹ç•ªå¤–æŒ‡ä»¤..." : undefined)}
-            />
-
-            <div className="chat-input-actions">
-                <button
-                    onClick={onToggleOfflineMode}
-                    className="ui-bare-btn text-[var(--c-text)] chat-offline-toggle"
-                    aria-label="çº¿ä¸‹æ¨¡å¼"
-                    title="çº¿ä¸‹æ¨¡å¼"
-                >
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                        <path d="M21 10c0 7-9 13-9 13S3 17 3 10a9 9 0 0 1 18 0Z" />
-                        <circle cx="12" cy="10" r="3" />
-                    </svg>
-                </button>
-                <button onClick={onToggleEmojiPanel} disabled={inputLocked} className="ui-bare-btn text-[var(--c-text)]" style={inputLocked ? { opacity: 0.35 } : undefined}>
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><path d="M8 14s1.5 2 4 2 4-2 4-2" /><line x1="9" y1="9" x2="9.01" y2="9" /><line x1="15" y1="9" x2="15.01" y2="9" /></svg>
-                </button>
-                <button onClick={onToggleStickerPanel} disabled={inputLocked} className="ui-bare-btn text-[var(--c-text)]" style={inputLocked ? { opacity: 0.35 } : undefined}>
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M15.5 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8.5L15.5 3Z" /><polyline points="14 3 14 8 21 8" /><path d="M8 13h0" /><path d="M16 13h0" /><path d="M10 17c.5.3 1.2.5 2 .5s1.5-.2 2-.5" /></svg>
-                </button>
-                <button onClick={onTogglePlusMenu} disabled={inputLocked} className="ui-bare-btn text-[var(--c-text)]" style={inputLocked ? { opacity: 0.35 } : undefined}>
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="16" /><line x1="8" y1="12" x2="16" y2="12" /></svg>
-                </button>
-                <button
-                    onClick={handleSubmit}
-                    disabled={!isGenerating && (inputLocked || !inputText.trim())}
-                    style={inputLocked && !isGenerating ? { opacity: 0.35 } : undefined}
-                    className="ui-bare-btn text-[var(--c-text)]"
-                    aria-label={isGenerating ? "åœæ­¢æœ¬è½®ç”Ÿæˆ" : "å‘é€"}
-                    title={isGenerating ? "åœæ­¢æœ¬è½®ç”Ÿæˆ" : "å‘é€"}
-                >
-                    {isGenerating ? (
-                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                            <circle cx="12" cy="12" r="10" />
-                            <rect x="9" y="9" width="6" height="6" rx="1" />
-                        </svg>
-                    ) : (
-                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" /></svg>
-                    )}
-                </button>
-                {!isGenerating && (
-                    <button
-                        className="ui-bare-btn text-[var(--c-text)]"
-                        title={!inputLocked && inputText.trim() ? "å‘é€è¾“å…¥æ¡†å†…å®¹å¹¶è§¦å‘å›å¤" : "è§¦å‘ AI ä¸»åŠ¨å›å¤"}
-                        onClick={() => {
-                            const trimmed = inputText.trim();
-                            // è¾“å…¥æ¡†å·²æœ‰æ–‡å­—ï¼šå‘é€è¾“å…¥æ¡†å†…å®¹å¹¶ç«‹å³è§¦å‘æ¨¡å‹å›å¤ï¼ˆä¸€æ¬¡æŒ‰é”®å®Œæˆï¼‰ï¼Œ
-                            // é¿å…ã€Œæ‰“å®Œå­—å´å¿˜è®°å‘é€ã€ï¼›æ²¡æ–‡å­—æ—¶æ‰åªè§¦å‘ AI ä¸»åŠ¨å›å¤
-                            if (!inputLocked && trimmed) {
-                                if (!onSendText(trimmed, { autoReply: true })) return;
-                                setInputText("");
-                                resetTextareaHeight();
-                            } else {
-                                onTriggerAIResponse();
-                            }
-                            onClosePanels();
-                        }}
-                    >
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                            <path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.582a.5.5 0 0 1 0 .963L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z" />
-                            <path d="M20 3v4" /><path d="M22 5h-4" />
-                        </svg>
-                    </button>
-                )}
-            </div>
-
-            {showPlusMenu && (
-                <div className="chat-plus-menu">
-                    {plusMenuItems.map((item, i) => (
-                        <div key={`${item.label}-${i}`} onClick={item.onClick} className="chat-plus-menu-item flex flex-col items-center gap-1.5 cursor-pointer" {...(item.active ? { "data-active": "" } : {})}>
-                            <div className="chat-plus-icon-box">
-                                {item.icon}
-                            </div>
-                            <span className="ts-11 text-[var(--c-text)]">{item.label}</span>
-                        </div>
-                    ))}
-                </div>
-            )}
-            {showPlusMenu && (
-                <ChatPluginSlot name="chat.inputToolbar" slotProps={{ isGroup }} className="chat-plugin-input-toolbar" />
-            )}
-
-            {showEmojiPanel && (
-                <EmojiPanel
-                    onSelect={(emoji) => appendText(emoji, { focus: false })}
-                    onEffectSend={(text) => {
-                        if (inputLocked || isGenerating) return;
-                        onSendText(text);
-                        onClosePanels();
-                    }}
-                />
-            )}
-
-            {showStickerPanel && (
-                <StickerPanel
-                    onSend={onSendSticker}
-                    characterId={characterId}
-                    characterIds={stickerCharacterIds}
-                />
-            )}
-        </div>
-    );
-}));
-
-const OfflineTextInputBar = memo(forwardRef<OfflineTextInputHandle, {
-    isOfflineGenerating: boolean;
-    isSpectator: boolean;
-    showEmojiPanel: boolean;
-    enterToSendEnabled: boolean;
-    onToggleOfflineMode: () => void;
-    onCloseEmojiPanel: () => void;
-    onToggleEmojiPanel: () => void;
-    onSendText: (text: string) => boolean;
-    onStopGeneration: () => void;
-}>(function OfflineTextInputBar({
-    isOfflineGenerating,
-    isSpectator,
-    showEmojiPanel,
-    enterToSendEnabled,
-    onToggleOfflineMode,
-    onCloseEmojiPanel,
-    onToggleEmojiPanel,
-    onSendText,
-    onStopGeneration,
-}, ref) {
-    const [inputText, setInputText] = useState("");
-    const inputTextRef = useRef("");
-    const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-
-    const resetTextareaHeight = () => {
-        if (textareaRef.current) textareaRef.current.style.height = "auto";
-    };
-
-    const resizeTextarea = useCallback(() => {
-        const ta = textareaRef.current;
-        if (!ta) return;
-        ta.style.height = "auto";
-        ta.style.height = Math.min(ta.scrollHeight, 120) + "px";
-    }, []);
-
-    const setTextAndResize = useCallback((text: string) => {
-        inputTextRef.current = text;
-        setInputText(text);
-        requestAnimationFrame(resizeTextarea);
-    }, [resizeTextarea]);
-
-    const appendText = useCallback((text: string, options?: { focus?: boolean }) => {
-        const nextText = inputTextRef.current + text;
-        inputTextRef.current = nextText;
-        setInputText(nextText);
-        requestAnimationFrame(() => {
-            resizeTextarea();
-            if (options?.focus !== false) textareaRef.current?.focus();
-        });
-    }, [resizeTextarea]);
-
-    useImperativeHandle(ref, () => ({
-        clear: () => {
-            inputTextRef.current = "";
-            setInputText("");
-            resetTextareaHeight();
-        },
-        setText: setTextAndResize,
-        restoreIfEmpty: (text: string) => {
-            if (inputTextRef.current.trim()) return;
-            setTextAndResize(text);
-        },
-    }), [setTextAndResize]);
-
-    const handleSubmit = () => {
-        if (isOfflineGenerating) {
-            onSendText(inputTextRef.current);
-            return;
-        }
-        const trimmed = inputTextRef.current.trim();
-        if (!trimmed && !isSpectator) return;
-        if (!onSendText(trimmed)) return;
-        inputTextRef.current = "";
-        setInputText("");
-        resetTextareaHeight();
-    };
-
-    return (
-        <div className="chat-input-bar chat-room-main-pane flex flex-col" data-ui="input">
-            <textarea
-                ref={textareaRef}
-                rows={1}
-                value={inputText}
-                onChange={e => {
-                    inputTextRef.current = e.target.value;
-                    setInputText(e.target.value);
-                    e.target.style.height = "auto";
-                    e.target.style.height = Math.min(e.target.scrollHeight, 120) + "px";
-                }}
-                onFocus={(e) => {
-                    if (showEmojiPanel) {
-                        e.target.blur();
-                        onCloseEmojiPanel();
-                        const target = e.target as HTMLTextAreaElement;
-                        requestAnimationFrame(() => requestAnimationFrame(() => target.focus()));
-                    }
-                }}
-                onKeyDown={e => {
-                    if (shouldSendChatInputOnEnter(e, enterToSendEnabled)) {
-                        e.preventDefault();
-                        handleSubmit();
-                    }
-                }}
-                enterKeyHint={enterToSendEnabled ? "send" : "enter"}
-                className="chat-input-textarea"
-                disabled={isSpectator}
-                placeholder={isSpectator ? "å›´è§‚ä¸­ï¼Œç‚¹å³ä¾§æŒ‰é’®æ¨è¿›ä»–ä»¬çš„çº¿ä¸‹äº’åŠ¨" : undefined}
-            />
-            <div className="chat-input-actions">
-                <button
-                    type="button"
-                    onClick={onToggleOfflineMode}
-                    disabled={isOfflineGenerating}
-                    className="ui-bare-btn text-[var(--c-text)]"
-                    aria-label="è¿”å›çº¿ä¸Šæ¨¡å¼"
-                    title="è¿”å›çº¿ä¸Šæ¨¡å¼"
-                >
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                        <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4Z" />
-                        <path d="M8 9h8" />
-                        <path d="M8 13h5" />
-                    </svg>
-                </button>
-                <button
-                    onClick={onToggleEmojiPanel}
-                    disabled={isSpectator}
-                    className="ui-bare-btn text-[var(--c-text)]"
-                    style={isSpectator ? { opacity: 0.35 } : undefined}
-                    aria-label="è¡¨æƒ…"
-                    title="è¡¨æƒ…"
-                >
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><path d="M8 14s1.5 2 4 2 4-2 4-2" /><line x1="9" y1="9" x2="9.01" y2="9" /><line x1="15" y1="9" x2="15.01" y2="9" /></svg>
-                </button>
-                <button
-                    type="button"
-                    onClick={() => { if (isOfflineGenerating) onStopGeneration(); else handleSubmit(); }}
-                    disabled={!isOfflineGenerating && !isSpectator && !inputText.trim()}
-                    className="ui-bare-btn text-[var(--c-text)]"
-                    aria-label={isOfflineGenerating ? "åœæ­¢çº¿ä¸‹ç”Ÿæˆ" : "å‘é€"}
-                    title={isOfflineGenerating ? "åœæ­¢çº¿ä¸‹ç”Ÿæˆ" : "å‘é€"}
-                >
-                    {isOfflineGenerating ? (
-                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                            <circle cx="12" cy="12" r="10" />
-                            <rect x="9" y="9" width="6" height="6" rx="1" />
-                        </svg>
-                    ) : (
-                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" /></svg>
-                    )}
-                </button>
-            </div>
-            {showEmojiPanel && (
-                <EmojiPanel onSelect={(emoji) => appendText(emoji, { focus: false })} />
-            )}
-        </div>
-    );
-}));
-
-export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
-    const [liveCSS, setLiveCSS] = useState(session.customCSS || "");
-    const [messages, setMessages] = useState<ChatMessage[]>([]);
-    const [transientMessages, setTransientMessages] = useState<ChatMessage[]>([]);
-    const [stickerReady, setStickerReady] = useState(false);
-    const [character, setCharacter] = useState<Character | null>(() => {
-        const chars = loadCharacters();
-        return chars.find(c => c.id === session.contactId) || null;
-    });
-    const [isGenerating, setIsGenerating] = useState(false);
-    const [offlineMode, setOfflineMode] = useState(false);
-    const [theaterMode, setTheaterMode] = useState(() => kvGet(CHAT_THEATER_MODE_PREFIX + session.id) === "1");
-    const [offlineTurns, setOfflineTurns] = useState<ChatOfflineTurn[]>([]);
-    const [offlineVisibleCount, setOfflineVisibleCount] = useState(OFFLINE_INITIAL_LOAD);
-    const [pendingOfflineUserText, setPendingOfflineUserText] = useState("");
-    const [isOfflineGenerating, setIsOfflineGenerating] = useState(false);
-    // æµå¼ç”Ÿæˆé¢„è§ˆï¼šçº¿ä¸Šï¼ˆå•èŠ/ç¾¤èŠï¼‰ä¸çº¿ä¸‹å„ä¸€ä»½ï¼Œç”Ÿæˆä¸­å®æ—¶åˆ·æ–°ï¼Œç»“æŸåæ¸…ç©º
-    const [streamPreview, setStreamPreview] = useState<null | {
-        /** å•èŠï¼šæŒ‰ç©ºè¡Œå®šå‹çš„åˆ†æ®µæ°”æ³¡åˆ—è¡¨ï¼Œæœ€åä¸€æ®µåœ¨æ‰“å­— */
-        texts?: string[];
-        parts?: { characterId: string; characterName: string; texts: string[] }[];
-    }>(null);
-    const [offlineStreamPreview, setOfflineStreamPreview] = useState<null | { content: string; summary: string }>(null);
-    const streamAccumRef = useRef("");
-    const offlineStreamAccumRef = useRef("");
-    // ç¾¤èŠ/å•èŠæµå¼é¢„è§ˆè§£æçš„ rAF åˆå¹¶å¸§ï¼ˆé™é¢‘ï¼šä¸€å¸§æœ€å¤šè§£æä¸€æ¬¡å…¨æ–‡ï¼‰
-    const streamParseFrameRef = useRef(0);
-    // çº¿ä¸‹æ¨¡å¼æµå¼é¢„è§ˆè§£æçš„ rAF åˆå¹¶å¸§ï¼ˆç‹¬ç«‹äºçº¿ä¸Šï¼Œé¿å…äº’ç›¸å¹²æ‰°ï¼‰
-    const offlineStreamFrameRef = useRef(0);
-    const [activeOfflineTarget, setActiveOfflineTarget] = useState<OfflineActionTarget | null>(null);
-    const [editingOfflineTarget, setEditingOfflineTarget] = useState<OfflineActionTarget | null>(null);
-    const [editingOfflineContent, setEditingOfflineContent] = useState("");
-    const [regexRevision, setRegexRevision] = useState(0);
-    // Whether there are unsent user messages waiting for AI generation
-    const [pendingGenerate, setPendingGenerate] = useState(false);
-    const [chatToast, setChatToast] = useState<string | null>(null);
-    const chatToastTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
-    // è‡ªåŠ¨ç”Ÿå›¾å¤±è´¥ï¼šå¼¹ä¸€æ¬¡å¼¹çª—æç¤ºï¼Œå…³æ‰å³æ¶ˆå¤±ï¼ˆåŒä¸€è½®é‡Œå¤šå¼ å¤±è´¥åªæç¤ºç¬¬ä¸€æ¡ï¼‰
-    const [imageGenerationFailure, setImageGenerationFailure] = useState<string | null>(null);
-    const [cloudDeletePending, setCloudDeletePending] = useState<{ count: number } | null>(null);
-    const [showPlusMenu, setShowPlusMenu] = useState(false);
-    const [customPlusActions, setCustomPlusActions] = useState<RegisteredCustomAppChatPlusAction[]>(() => loadCustomAppChatPlusActions());
-    const [activeCustomChatPlus, setActiveCustomChatPlus] = useState<ActiveCustomChatPlus | null>(null);
-    const [showSettings, setShowSettings] = useState(false);
-    const [showVoiceCall, setShowVoiceCall] = useState(false);
-    const [showVideoCall, setShowVideoCall] = useState(false);
-    const [callMinimized, setCallMinimized] = useState(false);
-    const [callInitiator, setCallInitiator] = useState<"user" | "character">("user");
-    const [callInitiatorName, setCallInitiatorName] = useState<string>("");
-    const [userIdentity, setUserIdentity] = useState<UserIdentity | null>(null);
-    const [enterToSendEnabled, setEnterToSendEnabled] = useState(() => loadChatAppSettings().enterToSendEnabled === true);
-
-    // Rich media input modals
-    const [richModal, setRichModal] = useState<RichModalKind | null>(null);
-    const [transferTarget, setTransferTarget] = useState<Character | null>(null);
-    // Media detail modal (red packet / transfer detail view)
-    const [mediaDetailMsg, setMediaDetailMsg] = useState<ChatMessage | null>(null);
-    // Quote reply
-    const [quotingMessage, setQuotingMessage] = useState<ChatMessage | null>(null);
-    // Emoji panel
-    const [showEmojiPanel, setShowEmojiPanel] = useState(false);
-    const [showStickerPanel, setShowStickerPanel] = useState(false);
-    const chatTextInputRef = useRef<ChatTextInputHandle | null>(null);
-    const offlineTextInputRef = useRef<OfflineTextInputHandle | null>(null);
-
-    useEffect(() => {
-        const syncEnterToSend = () => {
-            setEnterToSendEnabled(loadChatAppSettings().enterToSendEnabled === true);
-        };
-        window.addEventListener(CHAT_APP_SETTINGS_UPDATED_EVENT, syncEnterToSend);
-        return () => window.removeEventListener(CHAT_APP_SETTINGS_UPDATED_EVENT, syncEnterToSend);
-    }, []);
-
-    useEffect(() => {
-        const syncCustomPlusActions = () => setCustomPlusActions(loadCustomAppChatPlusActions());
-        window.addEventListener(CUSTOM_APPS_UPDATED_EVENT, syncCustomPlusActions);
-        return () => window.removeEventListener(CUSTOM_APPS_UPDATED_EVENT, syncCustomPlusActions);
-    }, []);
-
-    useEffect(() => {
-        setTheaterMode(kvGet(CHAT_THEATER_MODE_PREFIX + session.id) === "1");
-    }, [session.id]);
-
-    // èŠå¤©æ’ä»¶ï¼šè¿›å…¥èŠå¤©å¹¿æ’­ session.opened
-    useEffect(() => {
-        emitChatPluginEvent("session.opened", { sessionId: session.id, isGroup: !!session.isGroup });
-    }, [session.id, session.isGroup]);
-
-    // èŠå¤©æ’ä»¶ï¼šç›‘å¬æ’ä»¶ toastï¼ˆæ”¯æŒå¸¸é©»åŠ è½½æ€ + æ‰‹åŠ¨å…³é—­ï¼‰
-    const chatToastIdRef = useRef<string | null>(null);
-    useEffect(() => {
-        const handler = (e: Event) => {
-            const detail = (e as CustomEvent<{ id?: string; text: string; durationMs?: number; close?: boolean }>).detail || { text: "" };
-            // å…³é—­è¯·æ±‚ï¼šä»…å½“å…³é—­çš„æ˜¯å½“å‰æ­£åœ¨æ˜¾ç¤ºçš„é‚£æ¡æ—¶æ‰æ¸…é™¤
-            if (detail.close) {
-                if (chatToastIdRef.current === detail.id) {
-                    clearTimeout(chatToastTimer.current);
-                    setChatToast(null);
-                    chatToastIdRef.current = null;
-                }
-                return;
-            }
-            if (!detail.text) return;
-            clearTimeout(chatToastTimer.current);
-            chatToastIdRef.current = detail.id ?? null;
-            setChatToast(detail.text);
-            // durationMs <= 0 è¡¨ç¤ºå¸¸é©»ï¼ˆåŠ è½½æ€ï¼‰ï¼Œä¸è‡ªåŠ¨æ¶ˆå¤±ï¼›ç¼ºçœç”¨ 2400ms
-            if (detail.durationMs === undefined || detail.durationMs > 0) {
-                chatToastTimer.current = setTimeout(() => {
-                    setChatToast(null);
-                    chatToastIdRef.current = null;
-                }, detail.durationMs ?? 2400);
-            }
-        };
-        window.addEventListener(CHAT_PLUGIN_TOAST_EVENT, handler);
-        return () => window.removeEventListener(CHAT_PLUGIN_TOAST_EVENT, handler);
-    }, []);
-
-    const [bgImageResolved, setBgImageResolved] = useState<string | null>(null);
-    const [bgLoading, setBgLoading] = useState(!!session.backgroundImage);
-
-    const wrapperRef = useRef<HTMLDivElement>(null);
-
-    // å…¨å±ç‰¹æ•ˆï¼šå‘½ä¸­è§¦å‘è¯çš„æ–°æ¶ˆæ¯æ’­æ”¾è¡¨æƒ…é›¨/ç¤¼èŠ±ï¼ˆå¾®ä¿¡åŒæ¬¾ï¼‰
-    const [activeScreenEffect, setActiveScreenEffect] = useState<ActiveScreenEffect | null>(null);
-    const screenFxSeenRef = useRef<Set<string>>(new Set());
-    const screenFxMountedAtRef = useRef(Date.now());
-
-    useEffect(() => {
-        const seen = screenFxSeenRef.current;
-        let fired = activeScreenEffect !== null;
-        for (const msg of messages) {
-            if (seen.has(msg.id)) continue;
-            seen.add(msg.id);
-            if (msg.role !== "user" && msg.role !== "assistant") continue;
-            // åªå¯¹æœ¬æ¬¡æ‰“å¼€èŠå¤©å®¤ä¹‹åäº§ç”Ÿçš„æ¶ˆæ¯ç”Ÿæ•ˆï¼Œå†å²åŠ è½½/ç¿»é¡µä¸è§¦å‘
-            if (new Date(msg.createdAt).getTime() < screenFxMountedAtRef.current) continue;
-            // éª°å­æ°”æ³¡ï¼šæ°”æ³¡è‡ªå·±ç¿»æ»šå®šæ ¼ï¼Œè¿™é‡ŒåŒæ­¥æ’­å…¨å±éª°å­ï¼ˆç‚¹æ•°ä¸€è‡´ï¼‰
-            if (msg.mediaType === "dice") {
-                if (fired) continue;
-                const face = Math.min(6, Math.max(1, Number(msg.mediaData?.diceFace) || 1));
-                setActiveScreenEffect({ runId: msg.id, effect: "dice", emojis: "", diceFace: face });
-                fired = true;
-                continue;
-            }
-            if (msg.mediaType || !msg.content) continue;
-            const hit = matchChatScreenEffectRule(msg.content);
-            if (!hit) continue;
-            if (hit.effect === "dice") {
-                // å•ç‹¬ä¸€æ¡éª°å­å›¾æ ‡ï¼ˆè§’è‰²å‘çš„ï¼‰ï¼šåŸåœ°è½¬æˆéª°å­æ°”æ³¡ï¼ˆå†…å®¹ä¿æŒå›¾æ ‡ï¼‰ï¼Œ
-                // ç‚¹æ•°ç”±ç³»ç»Ÿæ—ç™½å…¬å¸ƒï¼Œé¿å…ç»“æœæŒ‚åœ¨è§’è‰²æ¶ˆæ¯ä¸Šè¢«æ¨¡ä»¿
-                const face = rollChatDiceFace();
-                const patch = {
-                    mediaType: "dice" as const,
-                    mediaData: { ...msg.mediaData, diceFace: face },
-                };
-                updateChatMessage(msg.id, patch);
-                setMessages(prev => prev.map(m => (m.id === msg.id ? { ...m, ...patch } : m)));
-                const diceAside = pushChatMessage({
-                    sessionId: session.id,
-                    role: "system",
-                    content: formatChatDiceResultMessage(face),
-                });
-                setMessages(prev => [...prev, diceAside]);
-                if (!fired) {
-                    setActiveScreenEffect({ runId: msg.id, effect: "dice", emojis: "", diceFace: face });
-                    fired = true;
-                }
-                continue;
-            }
-            if (fired) continue;
-            setActiveScreenEffect({ runId: msg.id, ...hit });
-            fired = true;
-        }
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [messages]);
-
-    useEffect(() => {
-        if (!session.backgroundImage) {
-            setBgImageResolved(null);
-            setBgLoading(false);
-            return;
-        }
-        if (session.backgroundImage.startsWith("data:") || session.backgroundImage.startsWith("http")) {
-            setBgImageResolved(session.backgroundImage);
-            setBgLoading(false);
-            return;
-        }
-        // It's an ID â€” load from IndexedDB
-        setBgLoading(true);
-        import("@/lib/chat-asset-storage").then(({ getChatImageFromIndexedDB }) => {
-            getChatImageFromIndexedDB(session.backgroundImage!).then(dataUrl => {
-                if (dataUrl) {
-                    setBgImageResolved(dataUrl);
-                }
-                setBgLoading(false);
-            });
-        });
-    }, [session.backgroundImage]);
-
-    // Message Actions state
-    const [activeMessageId, setActiveMessageId] = useState<string | null>(null);
-    const [contextMenuAnchor, setContextMenuAnchor] = useState<ContextMenuAnchor | null>(null);
-    const [isMultiSelectMode, setIsMultiSelectMode] = useState(false);
-    const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(new Set());
-    const [showConfirmMultiDelete, setShowConfirmMultiDelete] = useState(false);
-    const [expandedMonologueId, setExpandedThinkingId] = useState<string | null>(null);
-    // æ€ç»´é“¾åº•éƒ¨å¼¹çª—ï¼šå­˜å½“å‰æŸ¥çœ‹çš„ reasoning æ–‡æœ¬ï¼Œnull = å…³é—­
-    const [reasoningSheetText, setReasoningSheetText] = useState<string | null>(null);
-    // æ€ç»´é“¾ç¿»è¯‘ï¼ˆå¼¹çª—å†…ç‚¹å‡»ç¿»è¯‘æŒ‰é’®ç”Ÿæˆï¼Œåˆ‡æ¢å¼¹çª—å†…å®¹æ—¶é‡ç½®ï¼‰
-    const [reasoningTranslation, setReasoningTranslation] = useState<string | null>(null);
-    const [reasoningTranslating, setReasoningTranslating] = useState(false);
-    const [reasoningTranslateError, setReasoningTranslateError] = useState<string | null>(null);
-    // è¯‘æ–‡æ˜¾ç¤ºæ¨¡å¼ï¼šå¯¹ç…§ï¼ˆä¸­æ–‡åœ¨ä¸Šï¼‰/ ä»…ä¸­æ–‡ / ä»…åŸæ–‡
-    const [reasoningViewMode, setReasoningViewMode] = useState<"both" | "zh" | "orig">("both");
-    useEffect(() => {
-        setReasoningTranslation(null);
-        setReasoningTranslating(false);
-        setReasoningTranslateError(null);
-        setReasoningViewMode("both");
-    }, [reasoningSheetText]);
-    const handleTranslateReasoning = async () => {
-        if (!reasoningSheetText || reasoningTranslating) return;
-        if (reasoningTranslation) { setReasoningTranslation(null); setReasoningViewMode("both"); return; }
-        setReasoningTranslating(true);
-        setReasoningTranslateError(null);
-        try {
-            const result = await translateReasoningText(reasoningSheetText);
-            if (result.content) { setReasoningTranslation(result.content); setReasoningViewMode("both"); }
-            else setReasoningTranslateError(result.error || "ç¿»è¯‘å¤±è´¥ï¼Œè¯·é‡è¯•");
-        } catch {
-            setReasoningTranslateError("ç¿»è¯‘å¤±è´¥ï¼Œè¯·é‡è¯•");
-        } finally {
-            setReasoningTranslating(false);
-        }
-    };
-    const [voiceTextIds, setVoiceTextIds] = useState<Set<string>>(new Set());
-    const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
-    const [editingContent, setEditingContent] = useState("");
-    const [editingResponseBatchId, setEditingResponseBatchId] = useState<string | null>(null);
-    const [editingResponseRoundId, setEditingResponseRoundId] = useState<string | null>(null);
-    const [editingResponseContent, setEditingResponseContent] = useState("");
-    const [expandedVoiceCallIds, setExpandedVoiceCallIds] = useState<Set<string>>(new Set());
-    const [highlightMessageId, setHighlightMessageId] = useState<string | null>(null);
-    const [hasMore, setHasMore] = useState(false);
-    const INITIAL_LOAD = CHAT_INITIAL_VISIBLE_MESSAGE_COUNT;
-    const LOAD_MORE_COUNT = CHAT_LOAD_MORE_MESSAGE_COUNT;
-
-
-    const longPressTimerRef = useRef<NodeJS.Timeout | null>(null);
-    const startPosRef = useRef<{ x: number, y: number } | null>(null);
-    const longPressTriggeredRef = useRef(false);
-
-    const scrollRef = useRef<HTMLDivElement>(null);
-    const mountedRef = useRef(true);
-    const isGeneratingRef = useRef(false);
-    const visibleMessagesRef = useRef<ChatMessage[]>([]);
-    const hasMoreRef = useRef(false);
-    const offlineGenerationInputRef = useRef("");
-    useEffect(() => () => { mountedRef.current = false; }, []);
-    useEffect(() => { visibleMessagesRef.current = messages; }, [messages]);
-    useEffect(() => { hasMoreRef.current = hasMore; }, [hasMore]);
-    useChatBottomReserve(
-        wrapperRef,
-        scrollRef,
-        `${session.id}:${offlineMode}:${isMultiSelectMode}:${showEmojiPanel}:${showStickerPanel}:${showPlusMenu}:${theaterMode}:${!!quotingMessage}`,
-    );
-
-    const selectStoredMessageWindow = useCallback((allMsgs: ChatMessage[]) => {
-        if (allMsgs.length <= INITIAL_LOAD) {
-            return { nextMessages: allMsgs, nextHasMore: false };
-        }
-
-        const visibleStoredMessages = visibleMessagesRef.current.filter(msg => !isTransientMessage(msg));
-        const currentVisibleCount = Math.max(visibleStoredMessages.length, INITIAL_LOAD);
-
-        if (!hasMoreRef.current && visibleStoredMessages.length >= allMsgs.length) {
-            return { nextMessages: allMsgs, nextHasMore: false };
-        }
-
-        const firstVisibleId = visibleStoredMessages[0]?.id;
-        const firstVisibleIndex = firstVisibleId
-            ? allMsgs.findIndex(msg => msg.id === firstVisibleId)
-            : -1;
-        const startIndex = firstVisibleIndex >= 0
-            ? firstVisibleIndex
-            : Math.max(0, allMsgs.length - currentVisibleCount);
-
-        return {
-            nextMessages: allMsgs.slice(startIndex),
-            nextHasMore: startIndex > 0,
-        };
-    }, []);
-
-    const applyStoredMessageWindow = useCallback((allMsgs: ChatMessage[]) => {
-        const { nextMessages, nextHasMore } = selectStoredMessageWindow(allMsgs);
-        visibleMessagesRef.current = nextMessages;
-        hasMoreRef.current = nextHasMore;
-        setHasMore(nextHasMore);
-        setMessages(nextMessages);
-    }, [selectStoredMessageWindow]);
-
-    const syncMessagesFromStorage = useCallback(() => {
-        applyStoredMessageWindow(loadChatMessages(session.id));
-    }, [applyStoredMessageWindow, session.id]);
-
-    const closeContextMenu = () => {
-        setActiveMessageId(null);
-        setActiveOfflineTarget(null);
-        setContextMenuAnchor(null);
-    };
-
-    const openMessageContextMenu = (msgId: string, anchor: ContextMenuAnchor) => {
-        setActiveOfflineTarget(null);
-        setContextMenuAnchor(anchor);
-        setActiveMessageId(msgId);
-    };
-
-    const openOfflineContextMenu = (target: OfflineActionTarget, anchor: ContextMenuAnchor) => {
-        setActiveMessageId(null);
-        setContextMenuAnchor(anchor);
-        setActiveOfflineTarget(target);
-    };
-
-    const getContextMenuInitialStyle = () => {
-        const anchor = contextMenuAnchor;
-        if (!anchor) return { left: 0, top: 0 };
-        return { left: anchor.x, top: Math.max(8, anchor.y - 90) };
-    };
-
-    const positionFloatingContextMenu = (el: HTMLDivElement | null) => {
-        if (!el || !contextMenuAnchor) return;
-        const margin = 8;
-        const gap = 12;
-        const anchor = contextMenuAnchor;
-        const menuW = el.offsetWidth;
-        const menuH = el.offsetHeight;
-        const viewportW = window.innerWidth;
-        const viewportH = window.innerHeight;
-        let left = anchor.x - menuW / 2;
-        left = Math.max(margin, Math.min(left, viewportW - menuW - margin));
-        const placeBelow = anchor.y - menuH - gap < margin;
-        let top = placeBelow ? anchor.y + gap : anchor.y - menuH - gap;
-        top = Math.max(margin, Math.min(top, viewportH - menuH - margin));
-        el.style.left = `${left}px`;
-        el.style.top = `${top}px`;
-        el.style.right = "auto";
-        el.style.bottom = "auto";
-        const tri = el.querySelector("[data-menu-triangle]") as HTMLElement | null;
-        if (tri) {
-            const triLeft = Math.max(14, Math.min(anchor.x - left, menuW - 14));
-            tri.style.left = `${triLeft}px`;
-            tri.style.right = "auto";
-            tri.style.transform = "translateX(-50%)";
-            if (placeBelow) {
-                tri.style.top = "-6px";
-                tri.style.bottom = "auto";
-                tri.style.borderTop = "none";
-                tri.style.borderBottom = "6px solid var(--ctx-menu-bg, #2c2c2c)";
-            } else {
-                tri.style.top = "auto";
-                tri.style.bottom = "-6px";
-                tri.style.borderBottom = "none";
-                tri.style.borderTop = "6px solid var(--ctx-menu-bg, #2c2c2c)";
-            }
-        }
-    };
-
-    // --- Music action queue: send music operations as system messages ---
-    useEffect(() => {
-        const flushCallback = (text: string) => {
-            const sysMsg = pushChatMessage({ sessionId: session.id, role: "system", content: text });
-            setMessages(prev => [...prev, sysMsg]);
-        };
-        setChatActive(true, flushCallback);
-        return () => { setChatActive(false); };
-    }, [session.id]);
-
-    // --- Follow-up: listen for background service events ---
-    useEffect(() => {
-        const onStarted = (e: Event) => {
-            const detail = (e as CustomEvent).detail;
-            if (detail?.sessionId === session.id) {
-                console.log("[ChatRoom] followup-started received, setting isGenerating=true");
-                setIsGenerating(true);
-            }
-        };
-        const onMessageSaved = (e: Event) => {
-            const detail = (e as CustomEvent<{ sessionId?: string; message?: ChatMessage }>).detail;
-            if (detail?.sessionId !== session.id || !detail.message) return;
-            setMessages(prev => (
-                prev.some(item => item.id === detail.message!.id)
-                    ? prev
-                    : [...prev, detail.message!]
-            ));
-        };
-        const onFired = (e: Event) => {
-            const detail = (e as CustomEvent).detail;
-            if (detail?.sessionId === session.id) {
-                console.log("[ChatRoom] followup-fired received, reloading messages, setting isGenerating=false");
-                // Reload messages from storage (the service already saved them)
-                syncMessagesFromStorage();
-                setIsGenerating(false);
-            }
-        };
-        window.addEventListener("followup-started", onStarted);
-        window.addEventListener("followup-message-saved", onMessageSaved);
-        window.addEventListener("followup-fired", onFired);
-        // ç”Ÿæˆä¸­é€”æ‰è¿›å…¥èŠå¤©å®¤ä¼šé”™è¿‡ followup-started äº‹ä»¶ï¼Œ
-        // æŒ‚è½½æ—¶ä¸»åŠ¨æŸ¥ä¸€æ¬¡åå°ç”ŸæˆçŠ¶æ€ï¼ŒæŠŠã€Œæ­£åœ¨è¾“å…¥ã€è¡¥å›æ¥
-        if (isBackgroundReplyGenerating(session.id)) {
-            setIsGenerating(true);
-        }
-        return () => {
-            window.removeEventListener("followup-started", onStarted);
-            window.removeEventListener("followup-message-saved", onMessageSaved);
-            window.removeEventListener("followup-fired", onFired);
-        };
-    }, [session.id, syncMessagesFromStorage]);
-
-    // Listen for live CSS updates from å°å·
-    useEffect(() => {
-        const onCSSUpdate = (e: Event) => {
-            const detail = (e as CustomEvent).detail;
-            if (detail?.sessionId === session.id) {
-                setLiveCSS(detail.css || "");
-            }
-        };
-        window.addEventListener("chat-session-css-updated", onCSSUpdate);
-        return () => window.removeEventListener("chat-session-css-updated", onCSSUpdate);
-    }, [session.id]);
-
-    // Listen for WeChat bridge: reload from storage (preserves rich formatting)
-    useEffect(() => {
-        const onWeixinUpdate = (e: Event) => {
-            const detail = (e as CustomEvent).detail;
-            if (detail?.sessionId === session.id) {
-                syncMessagesFromStorage();
-            }
-        };
-        const onWeixinGenerating = (e: Event) => {
-            const detail = (e as CustomEvent).detail;
-            if (detail?.sessionId === session.id) {
-                setIsGenerating(Boolean(detail.generating));
-                isGeneratingRef.current = Boolean(detail.generating);
-            }
-        };
-        window.addEventListener("weixin-messages-updated", onWeixinUpdate);
-        window.addEventListener("weixin-generating", onWeixinGenerating);
-        return () => {
-            window.removeEventListener("weixin-messages-updated", onWeixinUpdate);
-            window.removeEventListener("weixin-generating", onWeixinGenerating);
-        };
-    }, [session.id, syncMessagesFromStorage]);
-
-    // Listen for messages inserted by other apps, such as share-to-chat cards.
-    useEffect(() => {
-        const onExternalMessageUpdate = (e: Event) => {
-            const detail = (e as CustomEvent).detail;
-            if (detail?.sessionId === session.id) {
-                syncMessagesFromStorage();
-            }
-        };
-        window.addEventListener("chat-messages-updated", onExternalMessageUpdate);
-        return () => window.removeEventListener("chat-messages-updated", onExternalMessageUpdate);
-    }, [session.id, syncMessagesFromStorage]);
-
-    // --- Background generation: reload messages when a bg API call completes ---
-    useEffect(() => {
-        const handler = (e: Event) => {
-            const detail = (e as CustomEvent).detail;
-            if (detail?.sessionId === session.id) {
-                syncMessagesFromStorage();
-                isGeneratingRef.current = false;
-                setIsGenerating(false);
-                clearGenerationLock(session.id);
-            }
-        };
-        window.addEventListener(CHAT_BG_COMPLETE, handler);
-        return () => window.removeEventListener(CHAT_BG_COMPLETE, handler);
-    }, [session.id, syncMessagesFromStorage]);
-
-
-    // Group chat: map of characterId â†’ Character for quick lookup
-    const groupCharMap = useMemo(() => {
-        if (!session.isGroup) return new Map<string, Character>();
-        const chars = loadCharacters();
-        const map = new Map<string, Character>();
-        for (const id of session.participantIds || []) {
-            const c = chars.find(ch => ch.id === id);
-            if (c) map.set(id, c);
-        }
-        return map;
-    }, [session.isGroup, session.participantIds]);
-
-    // Flat array of group characters for components that need it
-    const groupCharacters = useMemo(() => [...groupCharMap.values()], [groupCharMap]);
-    const groupCharacterNames = useMemo(() => groupCharacters.map(item => item.name).filter(Boolean).join("ã€"), [groupCharacters]);
-
-    const activeRegexes = useMemo<RegexConfig[]>(() => {
-        const bindings = loadBindingConfig();
-        const activeSlot = resolveBinding(bindings, session.isGroup ? undefined : session.contactId, session.isGroup ? "group_chat" : "chat");
-        const allRegexes = loadRegexes();
-        return (activeSlot.regexIds || [])
-            .map(id => allRegexes.find(regex => regex.id === id))
-            .filter((regex): regex is RegexConfig => Boolean(regex));
-    }, [regexRevision, session.contactId, session.isGroup]);
-
-    // æµå¼é¢„è§ˆçš„æ ‡ç­¾å‡€åŒ–é…ç½®ï¼šä¸å¼•æ“åŒæºï¼ˆå½“å‰ä¼šè¯ç»‘å®šçš„é¢„è®¾ï¼‰ã€‚é¢„è®¾å¼€å¯æ ‡ç­¾å¼æ€ç»´é“¾æ—¶ï¼Œ
-    // ç”Ÿæˆè¿‡ç¨‹ä¸­çš„é¢„è§ˆä¹Ÿè¦æŒ‰åŒä¸€å¥—æ ‡ç­¾å‰¥æ‰æ€è€ƒè¿‡ç¨‹/æ‘˜è¦ï¼Œå¦åˆ™æœ€ç»ˆæ¶ˆæ¯é‡Œè¢«å¼•æ“å‰¥æ‰çš„å†…å®¹
-    // ä¼šå…ˆåœ¨é¢„è§ˆæ°”æ³¡é‡Œé—ªç°ï¼ˆcleanStreamText è‡ªèº«ä¸çŒœé…ç½®å‹æ ‡ç­¾åï¼Œç”±è¿™é‡Œç»Ÿä¸€ä¼ å…¥ï¼‰ã€‚
-    const streamPreviewTagConfig = useMemo(() => {
-        const bindings = loadBindingConfig();
-        const slot = resolveBinding(bindings, session.isGroup ? undefined : session.contactId, session.isGroup ? "group_chat" : "chat");
-        const preset = loadPresets().find(item => item.id === slot.presetId) || null;
-        const withThoughtCompat = (tag: string): string[] => (tag === "thinking" ? ["thinking", "thought", "think"] : [tag]);
-        return {
-            online: preset?.online_thinking_enabled === true
-                ? withThoughtCompat(preset.online_thinking_tag?.trim() || "thinking")
-                : [],
-            offlineThinking: preset?.offline_thinking_enabled === true
-                ? withThoughtCompat(preset.thinking_tag?.trim() || "thinking")
-                : [],
-            summaryTag: preset?.story_summary_tag?.trim() || "summary",
-            // é¢„è®¾ã€Œå‰”é™¤æ–‡æœ¬ã€ï¼šå¼•æ“æœ€ç»ˆä¼šåˆ ï¼Œé¢„è§ˆé˜¶æ®µåŒæ­¥åˆ ï¼Œé¿å…é—ªç°ï¼ˆå­—é¢é‡åˆ é™¤ï¼Œæˆæœ¬æä½ï¼‰
-            stripTexts: (preset?.strip_texts || []).filter(Boolean),
-        };
-    }, [regexRevision, session.contactId, session.isGroup]);
-
-    const displayRegexMacroEngine = useMemo(() => {
-        const charName = session.isGroup
-            ? (session.groupName || groupCharacterNames || "ç¾¤èŠ")
-            : (character?.name || "å¯¹æ–¹");
-        const engine = new MacroEngine(charName, userIdentity?.name || "ä½ ");
-        engine.group = groupCharacterNames || (session.isGroup ? (session.groupName || "ç¾¤èŠ") : "");
-        return engine;
-    }, [character?.name, groupCharacterNames, session.groupName, session.isGroup, userIdentity?.name]);
-
-    const getRegexActiveTags = useCallback((isOffline: boolean) => (
-        session.isGroup
-            ? ["group_chat", isOffline ? "offline" : "text"]
-            : ["chat", isOffline ? "offline" : "text"]
-    ), [session.isGroup]);
-
-    const renderDisplayText = useCallback((
-        text: string,
-        placement: 1 | 2 | 5 | 6,
-        isOffline = false,
-    ) => {
-        if (!text || activeRegexes.length === 0) return text;
-        return applyDisplayRegex(text, activeRegexes, placement, {
-            macroEngine: displayRegexMacroEngine,
-            activeTags: getRegexActiveTags(isOffline),
-        });
-    }, [activeRegexes, displayRegexMacroEngine, getRegexActiveTags]);
-
-    const getMessageDisplayContent = useCallback((message: RenderChatMessage): string => (
-        message.displayProjected
-            ? message.content
-            : renderDisplayText(message.content, message.role === "user" ? 1 : 2, false)
-    ), [renderDisplayText]);
-
-    const applyEditTextRegex = useCallback((
-        text: string,
-        placement: 1 | 2 | 5 | 6,
-        isOffline = false,
-    ) => {
-        if (!text || activeRegexes.length === 0) return text;
-        return applyEditRegex(text, activeRegexes, placement, {
-            macroEngine: displayRegexMacroEngine,
-            activeTags: getRegexActiveTags(isOffline),
-        });
-    }, [activeRegexes, displayRegexMacroEngine, getRegexActiveTags]);
-
-    // ã€Œä¸¢å¼ƒè§’è‰²è¾“å‡ºçš„æ— æ•ˆè¡¨æƒ…åŒ…ã€å¼€å…³ï¼šæ»¤é™¤åç§°ä¸åœ¨è§’è‰²è¡¨æƒ…åŒ…/å†…ç½®è¡¨æƒ…ä¸­çš„ sticker part
-    const stripInvalidStickerParts = useCallback((parts: ParsedMessagePart[], senderCharacterId?: string): ParsedMessagePart[] => {
-        if (session.discardInvalidStickers !== true) return parts;
-        const characterIds = senderCharacterId
-            ? [senderCharacterId]
-            : (session.isGroup ? (session.participantIds ?? []) : [session.contactId]);
-        return parts.filter(part => part.mediaType !== "sticker"
-            || isKnownStickerLabel(part.mediaData?.label || "", characterIds));
-    }, [session.discardInvalidStickers, session.isGroup, session.participantIds, session.contactId]);
-
-    const normalizeDisplayParts = useCallback((parts: ReturnType<typeof parseAIResponse>["parts"]) => {
-        const charN = character?.name || "å¯¹æ–¹";
-        const userN = userIdentity?.name || "ä½ ";
-        return parts.flatMap(part => {
-            if (
-                part.mediaType === "voice_call" ||
-                part.mediaType === "video_call" ||
-                part.mediaType === "accept_red_packet" ||
-                part.mediaType === "decline_red_packet" ||
-                part.mediaType === "accept_transfer" ||
-                part.mediaType === "decline_transfer" ||
-                part.mediaType === "accept_payment_request" ||
-                part.mediaType === "decline_payment_request"
-            ) {
-                return [];
-            }
-            if (part.mediaType === "music") {
-                const title = part.mediaData?.musicTitle || part.mediaData?.label;
-                return title ? [{ content: `[éŸ³ä¹:${title}]` }] : [];
-            }
-            if (part.mediaType === "group_admin_notice") {
-                const d = part.mediaData;
-                if (!d?.adminAction || !d.adminActorName) return [];
-                return [{
-                    content: buildGroupAdminNoticeText(d.adminAction, d.adminActorName, d.adminTargetName || "", d.adminMuteMinutes),
-                    mediaType: "group_admin_notice" as const,
-                    mediaData: d,
-                }];
-            }
-            if (part.mediaType === "poke") {
-                const pokeSender = (part.mediaData?.pokeSender === "æˆ‘" ? charN : part.mediaData?.pokeSender) || charN;
-                const pokeTarget = part.mediaData?.pokeTarget || userN;
-                return [{
-                    content: `${pokeSender} æ‹äº†æ‹ ${pokeTarget}`,
-                    mediaType: "poke" as const,
-                    mediaData: { pokeSender, pokeTarget },
-                }];
-            }
-            return [part];
-        }).filter(part => part.mediaType || part.content.trim());
-    }, [character?.name, userIdentity?.name]);
-
-    useEffect(() => {
-        const refreshRegexes = () => setRegexRevision(value => value + 1);
-        window.addEventListener("settings-regexes-updated", refreshRegexes);
-        window.addEventListener("settings-bindings-updated", refreshRegexes);
-        window.addEventListener("settings-presets-updated", refreshRegexes);
-        return () => {
-            window.removeEventListener("settings-regexes-updated", refreshRegexes);
-            window.removeEventListener("settings-bindings-updated", refreshRegexes);
-            window.removeEventListener("settings-presets-updated", refreshRegexes);
-        };
-    }, []);
-
-    const availableShoppingGifts = useMemo(
-        () => loadDeliveredShoppingGifts(),
-        [messages],
-    );
-
-    useEffect(() => {
-        setUserIdentity(resolveUserIdentity(session.contactId, "chat"));
-        setTransientMessages([]);
-        setOfflineMode(kvGet(CHAT_OFFLINE_MODE_PREFIX + session.id) === "1");
-        setOfflineVisibleCount(OFFLINE_INITIAL_LOAD);
-        offlineTextInputRef.current?.clear();
-        setPendingOfflineUserText("");
-        setIsOfflineGenerating(false);
-        setActiveOfflineTarget(null);
-        setContextMenuAnchor(null);
-        setIsMultiSelectMode(false);
-        setSelectedMessageIds(new Set());
-        setShowConfirmMultiDelete(false);
-        setEditingOfflineTarget(null);
-        setEditingOfflineContent("");
-        setOfflineTurns(loadChatOfflineTurns(session.id));
-
-        // Prewarm sticker cache for all relevant characters, then load messages
-        const allMsgs = loadChatMessages(session.id);
-        const msgs = allMsgs.length > INITIAL_LOAD ? allMsgs.slice(-INITIAL_LOAD) : allMsgs;
-        const nextHasMore = allMsgs.length > INITIAL_LOAD;
-        hasMoreRef.current = nextHasMore;
-        setHasMore(nextHasMore);
-        const charIds = session.isGroup && session.participantIds
-            ? session.participantIds
-            : [session.contactId];
-        Promise.all(charIds.map(id => prewarmStickerCache(id))).then(() => {
-            setStickerReady(true);
-            needsInitialScrollRef.current = true;
-            prevMsgCountRef.current = 0;
-            visibleMessagesRef.current = msgs;
-            setMessages(msgs);
-        });
-
-        // If a background generation is still in progress, show loading indicator.
-        // Old or expired locks are cleared so the room cannot stay frozen forever.
-        if (hasActiveGenerationLock(session.id)) {
-            isGeneratingRef.current = true;
-            setIsGenerating(true);
-        } else {
-            isGeneratingRef.current = false;
-            setIsGenerating(false);
-        }
-
-        // Auto-reply logic for newly added friends with a greeting
-        const freshSession = loadChatSessions().find(s => s.id === session.id);
-        const alreadyReplied = freshSession?.autoReplied;
-
-        if (session.isGroup && !alreadyReplied && msgs.length === 1 && msgs[0].role === "system") {
-            // Group chat initial greeting: single API call for all members
-            const sessions2 = loadChatSessions();
-            const sessIdx2 = sessions2.findIndex(s => s.id === session.id);
-            if (sessIdx2 !== -1) {
-                sessions2[sessIdx2].autoReplied = true;
-                saveChatSessions(sessions2);
-            }
-
-            void runManagedGeneration({ history: msgs });
-        } else if (!session.isGroup && !alreadyReplied &&
-            msgs.length === 2 &&
-            msgs[0].role === "system" && msgs[0].content.includes("å·²æ·»åŠ äº†") &&
-            msgs[1].role === "user") {
-
-            const sessions = loadChatSessions();
-            const sessIdx = sessions.findIndex(s => s.id === session.id);
-            if (sessIdx !== -1) {
-                sessions[sessIdx].autoReplied = true;
-                saveChatSessions(sessions);
-            }
-
-            void runManagedGeneration({ history: msgs, onDecline: triggerReply });
-        }
-
-        // Friend request accepted: trigger AI reply (localStorage flag set by handleAcceptFriendRequest)
-        const pendingKey = PENDING_REPLY_PREFIX + session.id;
-        if (kvGet(pendingKey)) {
-            kvRemove(pendingKey);
-            void runManagedGeneration({ history: msgs, onDecline: triggerReply });
-        }
-    }, [session.id]);
-
-    const needsInitialScrollRef = useRef(true);
-    const prevMsgCountRef = useRef(0);
-    const loadingMoreRef = useRef(false);
-    const loadMoreScrollRestoreRef = useRef<{ scrollHeight: number; scrollTop: number } | null>(null);
-    const offlineLoadMoreRestoreRef = useRef<{ scrollHeight: number; scrollTop: number } | null>(null);
-    const loadMoreAnchorRef = useRef<ScrollAnchorSnapshot | null>(null);
-    const loadMoreResizeObserverRef = useRef<ResizeObserver | null>(null);
-    const loadMoreAnchorTimerRef = useRef<number | null>(null);
-    const initialScrollVersionRef = useRef(0);
-    const pendingSearchJumpRef = useRef<PendingMessageJump | null>(null);
-    const searchJumpHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-    const stopLoadMoreAnchorTracking = useCallback(() => {
-        loadMoreResizeObserverRef.current?.disconnect();
-        loadMoreResizeObserverRef.current = null;
-        if (loadMoreAnchorTimerRef.current !== null) {
-            window.clearTimeout(loadMoreAnchorTimerRef.current);
-            loadMoreAnchorTimerRef.current = null;
-        }
-        loadMoreAnchorRef.current = null;
-    }, []);
-
-    useEffect(() => stopLoadMoreAnchorTracking, [stopLoadMoreAnchorTracking]);
-    useEffect(() => () => {
-        if (searchJumpHighlightTimerRef.current) clearTimeout(searchJumpHighlightTimerRef.current);
-    }, []);
-
-    const flashMessageHighlight = useCallback((messageId: string) => {
-        setHighlightMessageId(messageId);
-        if (searchJumpHighlightTimerRef.current) {
-            clearTimeout(searchJumpHighlightTimerRef.current);
-        }
-        searchJumpHighlightTimerRef.current = setTimeout(() => {
-            setHighlightMessageId(current => current === messageId ? null : current);
-            searchJumpHighlightTimerRef.current = null;
-        }, 2000);
-    }, []);
-
-    const captureScrollAnchor = useCallback((): ScrollAnchorSnapshot | null => {
-        const el = scrollRef.current;
-        if (!el) return null;
-        const containerRect = el.getBoundingClientRect();
-        const candidates = Array.from(el.querySelectorAll<HTMLElement>('[id^="message-"]'));
-        for (const candidate of candidates) {
-            const rect = candidate.getBoundingClientRect();
-            if (rect.bottom <= containerRect.top) continue;
-            if (rect.top >= containerRect.bottom) continue;
-            return {
-                messageId: candidate.id.replace(/^message-/, ""),
-                offsetDelta: candidate.offsetTop - el.scrollTop,
-            };
-        }
-        return null;
-    }, []);
-
-    const restoreScrollAnchor = useCallback((anchor: ScrollAnchorSnapshot | null): boolean => {
-        const el = scrollRef.current;
-        if (!el || !anchor) return false;
-        const target = document.getElementById(`message-${anchor.messageId}`);
-        if (!target) return false;
-        el.scrollTop = target.offsetTop - anchor.offsetDelta;
-        return true;
-    }, []);
-
-    const watchLoadMoreAnchorImages = useCallback((anchor: ScrollAnchorSnapshot | null) => {
-        const el = scrollRef.current;
-        if (!el || !anchor) {
-            stopLoadMoreAnchorTracking();
-            return;
-        }
-        const target = document.getElementById(`message-${anchor.messageId}`);
-        if (!target) {
-            stopLoadMoreAnchorTracking();
-            return;
-        }
-
-        loadMoreResizeObserverRef.current?.disconnect();
-        loadMoreResizeObserverRef.current = null;
-        if (loadMoreAnchorTimerRef.current !== null) {
-            window.clearTimeout(loadMoreAnchorTimerRef.current);
-            loadMoreAnchorTimerRef.current = null;
-        }
-
-        const targetTop = target.getBoundingClientRect().top;
-        const imagesAboveAnchor = Array.from(el.querySelectorAll("img"))
-            .filter(img => img.getBoundingClientRect().top < targetTop);
-
-        if (imagesAboveAnchor.length === 0) {
-            stopLoadMoreAnchorTracking();
-            return;
-        }
-
-        const restoreAfterImageResize = () => {
-            if (loadMoreAnchorRef.current !== anchor) return;
-            restoreScrollAnchor(anchor);
-            requestAnimationFrame(() => restoreScrollAnchor(anchor));
-        };
-
-        if (typeof ResizeObserver !== "undefined") {
-            const observer = new ResizeObserver(restoreAfterImageResize);
-            imagesAboveAnchor.forEach(img => observer.observe(img));
-            loadMoreResizeObserverRef.current = observer;
-        }
-
-        imagesAboveAnchor.forEach(img => {
-            img.addEventListener("load", restoreAfterImageResize, { once: true });
-            img.addEventListener("error", restoreAfterImageResize, { once: true });
-            img.decode?.().then(restoreAfterImageResize).catch(() => {});
-        });
-
-        loadMoreAnchorTimerRef.current = window.setTimeout(() => {
-            if (loadMoreAnchorRef.current === anchor) {
-                stopLoadMoreAnchorTracking();
-            }
-        }, 3000);
-    }, [restoreScrollAnchor, stopLoadMoreAnchorTracking]);
-
-    const loadMore = useCallback(() => {
-        if (!hasMore || loadingMoreRef.current) return;
-        stopLoadMoreAnchorTracking();
-        loadingMoreRef.current = true;
-        initialScrollVersionRef.current += 1;
-        const el = scrollRef.current;
-        if (el) {
-            loadMoreAnchorRef.current = captureScrollAnchor();
-            loadMoreScrollRestoreRef.current = {
-                scrollHeight: el.scrollHeight,
-                scrollTop: el.scrollTop,
-            };
-        }
-        const allMsgs = loadChatMessages(session.id);
-        const currentCount = messages.length;
-        const nextCount = Math.min(currentCount + LOAD_MORE_COUNT, allMsgs.length);
-        if (nextCount <= currentCount) {
-            hasMoreRef.current = false;
-            setHasMore(false);
-            stopLoadMoreAnchorTracking();
-            loadMoreScrollRestoreRef.current = null;
-            loadingMoreRef.current = false;
-            return;
-        }
-        const nextMessages = allMsgs.slice(-nextCount);
-        const nextHasMore = nextCount < allMsgs.length;
-        visibleMessagesRef.current = nextMessages;
-        hasMoreRef.current = nextHasMore;
-        setHasMore(nextHasMore);
-        setMessages(nextMessages);
-    }, [captureScrollAnchor, hasMore, messages.length, session.id, stopLoadMoreAnchorTracking]);
-    // useLayoutEffect: runs synchronously after DOM mutation, before browser paint
-    // Prevents flash of wrong scroll position, works reliably under transform: scale()
-    const displayMessages = useMemo(() => {
-        return [...messages, ...transientMessages]
-            .map((msg, index) => ({ msg, index }))
-            .sort((a, b) => {
-                const orderDiff = compareChatMessages(a.msg, b.msg);
-                return orderDiff !== 0 ? orderDiff : a.index - b.index;
-            })
-            .map(item => item.msg);
-    }, [messages, transientMessages]);
-
-    useLayoutEffect(() => {
-        const el = scrollRef.current;
-        const anchor = loadMoreAnchorRef.current;
-        const loadMoreRestore = loadMoreScrollRestoreRef.current;
-        if (loadMoreRestore) {
-            if (el && !restoreScrollAnchor(anchor)) {
-                el.scrollTop = loadMoreRestore.scrollTop + (el.scrollHeight - loadMoreRestore.scrollHeight);
-            }
-            loadMoreScrollRestoreRef.current = null;
-            loadingMoreRef.current = false;
-            prevMsgCountRef.current = displayMessages.length;
-            watchLoadMoreAnchorImages(anchor);
-            return;
-        }
-
-        const pendingJump = pendingSearchJumpRef.current;
-        if (pendingJump && el) {
-            const jumpIds = pendingJump.fallbackMessageId && pendingJump.fallbackMessageId !== pendingJump.messageId
-                ? [pendingJump.messageId, pendingJump.fallbackMessageId]
-                : [pendingJump.messageId];
-            const targetId = jumpIds.find(id => document.getElementById(`message-${id}`));
-            const target = targetId ? document.getElementById(`message-${targetId}`) as HTMLElement | null : null;
-            if (targetId && target) {
-                pendingSearchJumpRef.current = null;
-                scrollElementWithinContainer(el, target, { behavior: "smooth", block: "center" });
-                flashMessageHighlight(targetId);
-            } else {
-                pendingSearchJumpRef.current = null;
-            }
-            prevMsgCountRef.current = displayMessages.length;
-            return;
-        }
-
-        if (needsInitialScrollRef.current && displayMessages.length > 0 && el) {
-            needsInitialScrollRef.current = false;
-            prevMsgCountRef.current = displayMessages.length;
-            const scrollVersion = ++initialScrollVersionRef.current;
-
-            // Wait for all images inside the scroll container to finish loading, then scroll once
-            const imgs = Array.from(el.querySelectorAll("img"));
-            const pending = imgs.filter(img => !img.complete);
-            console.log(`[SCROLL] imgs total=${imgs.length}, pending=${pending.length}`);
-
-            if (pending.length === 0) {
-                el.scrollTop = el.scrollHeight;
-                console.log(`[SCROLL] done (no pending), sH=${el.scrollHeight}`);
-            } else {
-                let loaded = 0;
-                const onDone = () => {
-                    loaded++;
-                    if (loaded >= pending.length) {
-                        if (initialScrollVersionRef.current !== scrollVersion || loadingMoreRef.current) return;
-                        el.scrollTop = el.scrollHeight;
-                        console.log(`[SCROLL] done (all loaded), sH=${el.scrollHeight}`);
-                    }
-                };
-                for (const img of pending) {
-                    img.addEventListener("load", onDone, { once: true });
-                    img.addEventListener("error", onDone, { once: true });
-                }
-            }
-        } else if (displayMessages.length > prevMsgCountRef.current && el) {
-            el.scrollTop = el.scrollHeight;
-        }
-        prevMsgCountRef.current = displayMessages.length;
-    }, [displayMessages, flashMessageHighlight, restoreScrollAnchor, watchLoadMoreAnchorImages]);
-
-    useLayoutEffect(() => {
-        if (!offlineMode) return;
-        const el = scrollRef.current;
-        if (el) el.scrollTop = el.scrollHeight;
-    }, [offlineMode, offlineTurns.length, isOfflineGenerating, pendingOfflineUserText]);
-
-    // æµå¼é¢„è§ˆå¢é‡æ›´æ–°æ—¶è·Ÿéšæ»šåŠ¨åˆ°åº•ï¼šä»…åœ¨ç”¨æˆ·æœ¬æ¥å°±åœåœ¨åº•éƒ¨é™„è¿‘æ—¶è·Ÿéšï¼Œ
-    // ç”¨æˆ·ä¸Šç¿»å†å²/æŸ¥çœ‹æ—§æ¶ˆæ¯æ—¶ç»ä¸æ‹½å›åº•éƒ¨ï¼ˆå¦åˆ™é•¿å›å¤ç”Ÿæˆä¸­æ ¹æœ¬æ— æ³•é˜…è¯»ï¼‰ã€‚
-    const isNearBottomRef = useRef(true);
-    useEffect(() => {
-        const el = scrollRef.current;
-        if (!el) return;
-        const onScroll = () => {
-            // è·åº•éƒ¨ < 120px è§†ä¸º"åœ¨åº•éƒ¨é™„è¿‘"ï¼›ç”¨æˆ·ä¸Šç¿»å³åœç”¨è‡ªåŠ¨è·Ÿéš
-            isNearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
-        };
-        el.addEventListener("scroll", onScroll, { passive: true });
-        return () => el.removeEventListener("scroll", onScroll);
-    }, []);
-    // åªåœ¨æ¥è¿‘åº•éƒ¨æ—¶æ‰è·Ÿéšï¼Œä¸”ç”¨ rAF åˆå¹¶åˆ°ä¸‹ä¸€å¸§ï¼Œé¿å…æ¯å¸§ setState å layout æŠ–åŠ¨
-    const streamFollowRef = useRef(0);
-    const followStreamScroll = useCallback(() => {
-        if (streamFollowRef.current) return;
-        streamFollowRef.current = window.requestAnimationFrame(() => {
-            streamFollowRef.current = 0;
-            if (!isNearBottomRef.current) return;
-            const el = scrollRef.current;
-            if (el) el.scrollTop = el.scrollHeight;
-        });
-    }, []);
-    useLayoutEffect(() => {
-        if (!streamPreview && !offlineStreamPreview) return;
-        followStreamScroll();
-    }, [streamPreview, offlineStreamPreview, offlineMode, followStreamScroll]);
-
-    // å¸è½½æ—¶æ¸…ç†æŒ‚èµ·çš„æµå¼é¢„è§ˆ rAF å¸§ï¼Œé˜²æ­¢åˆ‡ä¼šè¯åå›è°ƒæ®‹ç•™è§¦å‘ setState
-    useEffect(() => {
-        return () => {
-            if (streamParseFrameRef.current) cancelAnimationFrame(streamParseFrameRef.current);
-            if (offlineStreamFrameRef.current) cancelAnimationFrame(offlineStreamFrameRef.current);
-            if (streamFollowRef.current) cancelAnimationFrame(streamFollowRef.current);
-            streamParseFrameRef.current = 0;
-            offlineStreamFrameRef.current = 0;
-            streamFollowRef.current = 0;
-        };
-    }, []);
-
-    // Sync current session+messages to debug store for DebugPromptPanel
-    useEffect(() => {
-        setDebugChatState({ session, messages });
-        return () => { setDebugChatState(null); };
-    }, [session, messages]);
-
-    // Listen for AI-initiated call triggers from follow-up service
-    useEffect(() => {
-        const handler = (e: Event) => {
-            const detail = (e as CustomEvent).detail;
-            if (detail?.sessionId === session.id) {
-                // Only handle call if this ChatRoom is currently visible
-                if (!isChatRoomElementVisible(wrapperRef.current)) return;
-                setCallInitiator("character");
-                if (detail.type === "voice") setShowVoiceCall(true);
-                else if (detail.type === "video") setShowVideoCall(true);
-                // Dismiss the global incoming-call bar (if showing)
-                window.dispatchEvent(new CustomEvent("incoming-call-dismiss"));
-            }
-        };
-        window.addEventListener("ai-call-trigger", handler);
-        return () => window.removeEventListener("ai-call-trigger", handler);
-    }, [session.id]);
-
-    // Helper: handle AI accepting/declining user's red packet or transfer
-    const buildAssistantActionEditMeta = (rawResponseText: string) => ({
-        responseBatchId: createResponseBatchId(),
-        rawResponseText,
-    });
-
-    const handleAIMediaAction = (actionType: string, charN: string, userN: string) => {
-        // Find the target message in current messages (most recent matching user message with pending status)
-        const targetMediaType = actionType.includes("payment_request")
-            ? "payment_request"
-            : actionType.includes("red_packet") ? "red_packet" : "transfer";
-        const targetMsg = [...messages].reverse().find(
-            m => m.role === "user" && m.mediaType === targetMediaType && m.mediaData?.status === "pending"
-        );
-        if (!targetMsg) return;
-
-        let newStatus: "opened" | "received" | "declined" | "paid";
-        let sysText: string;
-        let rawResponseText: string;
-        if (actionType === "accept_red_packet") {
-            newStatus = "opened";
-            const amt = targetMsg.mediaData?.amount;
-            const amtStr = amt != null ? `ï¼Œé‡‘é¢:${amt}å…ƒ` : "";
-            sysText = `${charN}é¢†å–äº†${userN}çš„çº¢åŒ…${amtStr}`;
-            rawResponseText = `[${charN}é¢†å–äº†${userN}çš„çº¢åŒ…]`;
-        } else if (actionType === "decline_red_packet") {
-            newStatus = "declined";
-            sysText = `${charN}é€€å›äº†${userN}çš„çº¢åŒ…`;
-            rawResponseText = `[${charN}é€€å›äº†${userN}çš„çº¢åŒ…]`;
-        } else if (actionType === "accept_transfer") {
-            newStatus = "received";
-            sysText = `${charN}é¢†å–äº†${userN}çš„è½¬è´¦`;
-            rawResponseText = `[${charN}é¢†å–äº†${userN}çš„è½¬è´¦]`;
-        } else if (actionType === "accept_payment_request") {
-            newStatus = "paid";
-            sysText = `${charN}æ¥å—äº†${userN}çš„ä»£ä»˜è¯·æ±‚`;
-            rawResponseText = `[${charN}æ¥å—äº†${userN}çš„ä»£ä»˜]`;
-            settleShoppingPaymentRequest({
-                orderId: targetMsg.mediaData?.shoppingOrderId,
-                requestId: targetMsg.mediaData?.paymentRequestId,
-                accepted: true,
-                payerCharacterId: session.contactId,
-                payerCharacterName: charN,
-            });
-        } else if (actionType === "decline_payment_request") {
-            newStatus = "declined";
-            sysText = `${charN}æ‹’ç»äº†${userN}çš„ä»£ä»˜è¯·æ±‚`;
-            rawResponseText = `[${charN}æ‹’ç»äº†${userN}çš„ä»£ä»˜]`;
-            settleShoppingPaymentRequest({
-                orderId: targetMsg.mediaData?.shoppingOrderId,
-                requestId: targetMsg.mediaData?.paymentRequestId,
-                accepted: false,
-                payerCharacterId: session.contactId,
-                payerCharacterName: charN,
-            });
-        } else {
-            newStatus = "declined";
-            sysText = `${charN}æ‹’æ”¶äº†${userN}çš„è½¬è´¦`;
-            rawResponseText = `[${charN}æ‹’æ”¶äº†${userN}çš„è½¬è´¦]`;
-        }
-
-        const refundReason = actionType === "decline_red_packet" ? "çº¢åŒ…é€€å›" : actionType === "decline_transfer" ? "è½¬è´¦é€€å›" : null;
-        const updatedMediaData = {
-            ...(refundReason ? refundOutgoingMoneyMessage(targetMsg, refundReason) : targetMsg.mediaData),
-            status: newStatus,
-            ...(targetMediaType === "payment_request" ? {
-                paymentResolvedAt: new Date().toISOString(),
-                paymentPayerId: session.contactId,
-                paymentPayerName: charN,
-            } : {}),
-        };
-        updateMessageMediaData(targetMsg.id, updatedMediaData);
-        setMessages(prev => prev.map(m =>
-            m.id === targetMsg.id ? { ...m, mediaData: updatedMediaData } : m
-        ));
-        // Insert action notification (correct role + mediaType for prompt formatting)
-        const sysMsg = pushChatMessage({
-            sessionId: session.id,
-            role: "assistant",
-            content: sysText,
-            mediaType: actionType as ChatMessage["mediaType"],
-            ...buildAssistantActionEditMeta(rawResponseText),
-        });
-        setMessages(prev => [...prev, sysMsg]);
-    };
-
-    // â”€â”€ ç¾¤èŠçº¢åŒ…/è½¬è´¦åŠ¨ä½œå¤„ç† â”€â”€
-    // è·å–æ¶ˆæ¯å‘é€äººæ˜¾ç¤ºåï¼ˆuserâ†’ç”¨æˆ·åï¼Œassistantâ†’è§’è‰²åï¼‰
-    const getMsgSender = (m: ChatMessage) =>
-        m.role === "user" ? (userIdentity?.name || "ä½ ") : (m.senderName || "æœªçŸ¥");
-
-    // çº¢åŒ…ï¼šæŒ‰ ownerName åŒ¹é…å‘é€äººï¼Œé¢†å–/é€€å›
-    // æ‹¼æ‰‹æ°”çº¢åŒ…ï¼šéšæœºåˆ†é…é‡‘é¢ï¼ˆäºŒå€å‡å€¼æ³•ï¼‰
-    const calcRedPacketShare = (totalAmount: number, claimedAmounts: Record<string, number>, totalRecipients: number): number => {
-        const claimedTotal = Object.values(claimedAmounts).reduce((s, v) => s + v, 0);
-        const remaining = totalAmount - claimedTotal;
-        const claimedCount = Object.keys(claimedAmounts).length;
-        const leftCount = totalRecipients - claimedCount;
-        if (leftCount <= 1) return Math.round(remaining * 100) / 100; // æœ€åä¸€ä¸ªäººæ‹¿å‰©ä½™
-        const avg = remaining / leftCount;
-        const max = avg * 2;
-        const share = Math.max(0.01, Math.random() * max);
-        return Math.round(Math.min(share, remaining - 0.01 * (leftCount - 1)) * 100) / 100;
-    };
-
-    const handleGroupRedPacketAction = (action: "accept" | "decline", claimerName: string, ownerName?: string) => {
-        // ä» localStorage è¯»æœ€æ–°æ•°æ®ï¼Œé¿å… processGroupParts å¾ªç¯ä¸­å¤šäººé¢†å–æ—¶é—­åŒ…è¿‡æœŸ
-        const freshMessages = loadChatMessages(session.id);
-        const targetMsg = [...freshMessages].reverse().find(m => {
-            if (m.mediaType !== "red_packet") return false;
-            if (m.mediaData?.status !== "pending" && m.mediaData?.status !== "opened") return false;
-            // å·²è¢«é¢†å®Œçš„è·³è¿‡
-            if (m.mediaData?.status === "opened") {
-                const cnt = m.mediaData?.count || 1;
-                if ((m.mediaData?.claimedBy?.length || 0) >= cnt) return false;
-            }
-            if (!ownerName) return true;
-            return getMsgSender(m) === ownerName;
-        });
-        if (!targetMsg) return;
-        // å·²é¢†è¿‡çš„ä¸èƒ½é‡å¤é¢†
-        if (targetMsg.mediaData?.claimedBy?.includes(claimerName)) return;
-        const owner = ownerName || getMsgSender(targetMsg);
-        const ownerDisplay = owner === (userIdentity?.name) ? "ä½ " : owner;
-        // å‘çº¢åŒ…çš„äººè‡ªå·±ä¸èƒ½é¢†
-        if (claimerName === owner) return;
-        const totalRecipients = targetMsg.mediaData?.count || 1;
-        // å·²é¢†æ»¡åˆ™æ‹’ç»
-        if ((targetMsg.mediaData?.claimedBy?.length || 0) >= totalRecipients) return;
-        if (action === "accept") {
-            const prevAmounts = targetMsg.mediaData?.claimedAmounts || {};
-            const share = calcRedPacketShare(targetMsg.mediaData?.amount || 0, prevAmounts, totalRecipients);
-            const claimedBy = [...(targetMsg.mediaData?.claimedBy || []), claimerName];
-            const claimedAmounts = { ...prevAmounts, [claimerName]: share };
-            // æ‰€æœ‰äººéƒ½é¢†å®Œæ‰æ ‡è®° openedï¼Œå¦åˆ™ä¿æŒ pending è®©å…¶ä»–äººç»§ç»­é¢†
-            const allClaimed = claimedBy.length >= totalRecipients;
-            const newStatus = allClaimed ? "opened" as const : "pending" as const;
-            const updatedData = { ...targetMsg.mediaData, status: newStatus, claimedBy, claimedAmounts };
-            updateMessageMediaData(targetMsg.id, updatedData);
-            setMessages(prev => prev.map(m => m.id === targetMsg.id ? { ...m, mediaData: updatedData } : m));
-            const sysMsg = pushChatMessage({
-                sessionId: session.id,
-                role: "assistant",
-                content: `${claimerName}é¢†å–äº†${ownerDisplay}çš„çº¢åŒ…ï¼Œé‡‘é¢:${share}å…ƒ`,
-                mediaType: "accept_red_packet",
-                mediaData: { claimer: claimerName, owner: ownerDisplay },
-                senderName: claimerName,
-                ...buildAssistantActionEditMeta(`[${claimerName}é¢†å–äº†${ownerDisplay}çš„çº¢åŒ…]`),
-            });
-            setMessages(prev => [...prev, sysMsg]);
-        } else {
-            const sysMsg = pushChatMessage({
-                sessionId: session.id,
-                role: "assistant",
-                content: `${claimerName}é€€å›äº†${ownerDisplay}çš„çº¢åŒ…`,
-                mediaType: "decline_red_packet",
-                mediaData: { claimer: claimerName, owner: ownerDisplay },
-                senderName: claimerName,
-                ...buildAssistantActionEditMeta(`[${claimerName}é€€å›äº†${ownerDisplay}çš„çº¢åŒ…]`),
-            });
-            setMessages(prev => [...prev, sysMsg]);
-        }
-    };
-
-    // è½¬è´¦ï¼šæŒ‰ ownerName åŒ¹é…å‘é€äººï¼Œä¸”éªŒè¯ claimerName === recipientName
-    const handleGroupTransferAction = (action: "accept" | "decline", claimerName: string, ownerName?: string) => {
-        const freshMessages = loadChatMessages(session.id);
-        const targetMsg = [...freshMessages].reverse().find(m => {
-            if (m.mediaType !== "transfer" || m.mediaData?.status !== "pending") return false;
-            if (!ownerName) return true;
-            const sender = m.mediaData?.senderName || getMsgSender(m);
-            return sender === ownerName;
-        });
-        if (!targetMsg) return;
-        // éªŒè¯ï¼šåªæœ‰æ”¶æ¬¾äººæ‰èƒ½æ¥å—/æ‹’æ”¶
-        const recipient = targetMsg.mediaData?.recipientName;
-        if (recipient && recipient !== claimerName) return; // éæ”¶æ¬¾äººï¼Œæ“ä½œæ— æ•ˆ
-        const owner = ownerName || targetMsg.mediaData?.senderName || getMsgSender(targetMsg);
-        const ownerDisplay = owner === (userIdentity?.name) ? "ä½ " : owner;
-        const newStatus = action === "accept" ? "received" as const : "declined" as const;
-        const refundData = action === "decline" && targetMsg.role === "user"
-            ? refundOutgoingMoneyMessage(targetMsg, "è½¬è´¦é€€å›")
-            : targetMsg.mediaData;
-        const updatedData = { ...refundData, status: newStatus };
-        updateMessageMediaData(targetMsg.id, updatedData);
-        setMessages(prev => prev.map(m => m.id === targetMsg.id ? { ...m, mediaData: updatedData } : m));
-        const isAccept = action === "accept";
-        const sysText = isAccept
-            ? `${claimerName}é¢†å–äº†${ownerDisplay}çš„è½¬è´¦`
-            : `${claimerName}é€€å›äº†${ownerDisplay}çš„è½¬è´¦`;
-        const sysMsg = pushChatMessage({
-            sessionId: session.id,
-            role: "assistant",
-            content: sysText,
-            mediaType: isAccept ? "accept_transfer" : "decline_transfer",
-            mediaData: { claimer: claimerName, owner: ownerDisplay },
-            senderName: claimerName,
-            ...buildAssistantActionEditMeta(
-                isAccept
-                    ? `[${claimerName}é¢†å–äº†${ownerDisplay}çš„è½¬è´¦]`
-                    : `[${claimerName}é€€å›äº†${ownerDisplay}çš„è½¬è´¦]`
-            ),
-        });
-        setMessages(prev => [...prev, sysMsg]);
-    };
-
-    const handleGroupPaymentRequestAction = (action: "accept" | "decline", claimerName: string, ownerName?: string) => {
-        const freshMessages = loadChatMessages(session.id);
-        const targetMsg = [...freshMessages].reverse().find(m => {
-            if (m.mediaType !== "payment_request" || m.mediaData?.status !== "pending") return false;
-            if (!ownerName) return true;
-            const sender = m.mediaData?.paymentRequesterName || m.mediaData?.senderName || getMsgSender(m);
-            return sender === ownerName;
-        });
-        if (!targetMsg) return;
-        const owner = ownerName || targetMsg.mediaData?.paymentRequesterName || targetMsg.mediaData?.senderName || getMsgSender(targetMsg);
-        const ownerDisplay = owner === (userIdentity?.name) ? "ä½ " : owner;
-        const isAccept = action === "accept";
-        const updatedData = {
-            ...targetMsg.mediaData,
-            status: isAccept ? "paid" as const : "declined" as const,
-            paymentResolvedAt: new Date().toISOString(),
-            paymentPayerName: claimerName,
-        };
-        if (targetMsg.role === "user") {
-            settleShoppingPaymentRequest({
-                orderId: targetMsg.mediaData?.shoppingOrderId,
-                requestId: targetMsg.mediaData?.paymentRequestId,
-                accepted: isAccept,
-                payerCharacterName: claimerName,
-            });
-        }
-        updateMessageMediaData(targetMsg.id, updatedData);
-        setMessages(prev => prev.map(m => m.id === targetMsg.id ? { ...m, mediaData: updatedData } : m));
-        const sysText = isAccept
-            ? `${claimerName}æ¥å—äº†${ownerDisplay}çš„ä»£ä»˜è¯·æ±‚`
-            : `${claimerName}æ‹’ç»äº†${ownerDisplay}çš„ä»£ä»˜è¯·æ±‚`;
-        const sysMsg = pushChatMessage({
-            sessionId: session.id,
-            role: "assistant",
-            content: sysText,
-            mediaType: isAccept ? "accept_payment_request" : "decline_payment_request",
-            mediaData: { claimer: claimerName, owner: ownerDisplay },
-            senderName: claimerName,
-            ...buildAssistantActionEditMeta(
-                isAccept
-                    ? `[${claimerName}æ¥å—äº†${ownerDisplay}çš„ä»£ä»˜]`
-                    : `[${claimerName}æ‹’ç»äº†${ownerDisplay}çš„ä»£ä»˜]`
-            ),
-        });
-        setMessages(prev => [...prev, sysMsg]);
-    };
-
-    // Group admin action from AI output: validate permission + apply.
-    // Returns display fields, or null when the tag must be silently dropped.
-    const applyAIGroupAdminAction = (actorCharacterId: string, data: ChatMessage["mediaData"]) => {
-        if (!session.isGroup || !data?.adminAction) return null;
-        const action = data.adminAction as GroupAdminAction;
-        const userN = userIdentity?.name || "ç”¨æˆ·";
-        const actorKey = resolveGroupMemberKeyByName(session, data.adminActorName || "", userN);
-        // æ‰§è¡Œäººå¿…é¡»æ˜¯è¾“å‡ºè¯¥æ ‡ç­¾çš„è§’è‰²æœ¬äºº
-        if (!actorKey || actorKey !== actorCharacterId) return null;
-        const targetKey = resolveGroupMemberKeyByName(session, data.adminTargetName || "", userN, { includeOutsiders: action === "invite" });
-        if (!targetKey) return null;
-        if (!canGroupAdminAct(session, actorKey, action, targetKey)) return null;
-        applyGroupAdminAction(session, action, actorKey, targetKey, data.adminMuteMinutes);
-        const actorDisplay = getGroupMemberDisplayName(actorKey, userN);
-        const targetDisplay = getGroupMemberDisplayName(targetKey, userN);
-        return {
-            content: buildGroupAdminNoticeText(action, actorDisplay, targetDisplay, data.adminMuteMinutes),
-            mediaData: {
-                adminAction: action,
-                adminActorName: actorDisplay,
-                adminTargetName: targetDisplay,
-                ...(action === "mute" ? { adminMuteMinutes: data.adminMuteMinutes || 10 } : {}),
-            } as ChatMessage["mediaData"],
-            senderName: actorDisplay,
-        };
-    };
-
-    // Helper: process group chat AI response parts with media filtering
-    const processGroupParts = async (
-        results: { characterId: string; characterName: string; responseText: string }[],
-        msgsSetter: typeof setMessages,
-        guard?: GenerationRunGuard,
-        roundReasoning?: string,
-        // æµå¼ç”Ÿæˆå·²è®©ç”¨æˆ·çœ‹ç€å†…å®¹é•¿å‡ºæ¥äº†ï¼šè½åº“æ”¹ä¸ºç«‹å³æ”¾å‡ºï¼Œè·³è¿‡ 800ms æ¨¡æ‹Ÿæ‰“å­—èŠ‚å¥ï¼Œ
-        // å¦åˆ™é¢„è§ˆæµå®Œä¸€éåæ¶ˆæ¯åˆé€æ¡ã€Œé‡æ’­ã€ä¸€éï¼Œè§‚æ„Ÿåƒä¸¤æ¬¡æµå¼
-        revealOptions?: { instantReveal?: boolean },
-    ) => {
-        throwIfGenerationStopped(guard);
-        const responseRoundId = createResponseRoundId();
-        const editableResponseText = buildEditableGroupRoundText(results);
-        // ç¾¤èŠä¸€è½®å›å¤åªæœ‰ä¸€ä»½æ€ç»´é“¾ï¼ŒæŒ‚åˆ°æœ¬è½®ç¬¬ä¸€æ¡è½åº“æ¶ˆæ¯ä¸Š
-        let reasoningAttached = !roundReasoning;
-        const takeRoundReasoning = (): string | undefined => {
-            if (reasoningAttached) return undefined;
-            reasoningAttached = true;
-            return roundReasoning;
-        };
-        const imageReplacementTasks: Promise<unknown>[] = [];
-        const currentStateByCharacter = new Map<string, StateValue[]>();
-        const getCurrentStateForCharacter = (characterId: string): StateValue[] => {
-            const cached = currentStateByCharacter.get(characterId);
-            if (cached) return cached;
-            const latest = getLatestCharacterStateValues(characterId);
-            currentStateByCharacter.set(characterId, latest);
-            return latest;
-        };
-        let isFirst = true;
-        for (const r of results) {
-            throwIfGenerationStopped(guard);
-            // è¢«è¸¢å‡ºæˆ–ç¦è¨€ä¸­çš„è§’è‰²æœ¬è½®ä¸å†å‘å£°
-            if (!(session.participantIds || []).includes(r.characterId)) continue;
-            if (isGroupMuted(session, r.characterId)) continue;
-            const responseBatchId = createResponseBatchId();
-            const { parts: rawParts, stateValues, freshStateValues, statusPanel, innerMonologue } = parseAIResponse(r.responseText, getCurrentStateForCharacter(r.characterId));
-            const parts = stripInvalidStickerParts(rawParts, r.characterId);
-            let attachedState = false;
-            let savedAnyPart = false;
-            for (const part of parts) {
-                throwIfGenerationStopped(guard);
-                // Filter action types
-                if (part.mediaType === "voice_call" || part.mediaType === "video_call") {
-                    if (session.isSpectator) continue; // å›´è§‚ç¾¤ä¸èƒ½æŠŠç”¨æˆ·å·è¿›ç¾¤é€šè¯
-                    const callType = part.mediaType === "voice_call" ? "voice" : "video";
-                    const isHidden = !mountedRef.current || !isChatRoomElementVisible(wrapperRef.current);
-                    if (isHidden) {
-                        window.dispatchEvent(new CustomEvent("ai-call-trigger", {
-                            detail: { sessionId: session.id, type: callType, characterName: r.characterName },
-                        }));
-                    } else {
-                        setCallInitiator("character");
-                        setCallInitiatorName(r.characterName);
-                        if (callType === "voice") setShowVoiceCall(true);
-                        else setShowVideoCall(true);
-                    }
-                    continue;
-                }
-                if (part.mediaType === "accept_red_packet") {
-                    throwIfGenerationStopped(guard);
-                    const claimer = part.mediaData?.claimer || r.characterName;
-                    const owner = part.mediaData?.owner;
-                    handleGroupRedPacketAction("accept", claimer, owner);
-                    continue;
-                }
-                if (part.mediaType === "decline_red_packet") {
-                    throwIfGenerationStopped(guard);
-                    const claimer = part.mediaData?.claimer || r.characterName;
-                    const owner = part.mediaData?.owner;
-                    handleGroupRedPacketAction("decline", claimer, owner);
-                    continue;
-                }
-                if (part.mediaType === "accept_transfer") {
-                    throwIfGenerationStopped(guard);
-                    const claimer = part.mediaData?.claimer || r.characterName;
-                    const owner = part.mediaData?.owner;
-                    handleGroupTransferAction("accept", claimer, owner);
-                    continue;
-                }
-                if (part.mediaType === "decline_transfer") {
-                    throwIfGenerationStopped(guard);
-                    const claimer = part.mediaData?.claimer || r.characterName;
-                    const owner = part.mediaData?.owner;
-                    handleGroupTransferAction("decline", claimer, owner);
-                    continue;
-                }
-                if (part.mediaType === "accept_payment_request") {
-                    throwIfGenerationStopped(guard);
-                    const claimer = part.mediaData?.claimer || r.characterName;
-                    const owner = part.mediaData?.owner;
-                    handleGroupPaymentRequestAction("accept", claimer, owner);
-                    continue;
-                }
-                if (part.mediaType === "decline_payment_request") {
-                    throwIfGenerationStopped(guard);
-                    const claimer = part.mediaData?.claimer || r.characterName;
-                    const owner = part.mediaData?.owner;
-                    handleGroupPaymentRequestAction("decline", claimer, owner);
-                    continue;
-                }
-                if (part.mediaType === "group_admin_notice") {
-                    if (!isFirst && !revealOptions?.instantReveal) await abortableDelay(800, guard?.signal);
-                    throwIfGenerationStopped(guard);
-                    const applied = applyAIGroupAdminAction(r.characterId, part.mediaData);
-                    if (!applied) continue; // æ— æƒé™/åå­—ä¸åˆæ³•ï¼šæ•´ä¸ªæ ‡ç­¾é™é»˜ä¸¢å¼ƒ
-                    isFirst = false;
-                    // å¸¦ä¸Šæ®µè½è‡ªå·±çš„ batch å…ƒæ•°æ®ï¼ˆä¸æ‹ä¸€æ‹åŒæ¬¾ï¼‰ï¼š
-                    // æŠ•å½±å±‚æŒ‰ batch è¿ç»­æ’å¸ƒï¼Œç¼ºäº†ä¼šè¢«åç»­æ°”æ³¡æŒ¤åˆ°æ•´æ®µæœ«å°¾
-                    const msg = pushChatMessage({
-                        sessionId: session.id, role: "assistant",
-                        content: applied.content,
-                        mediaType: "group_admin_notice",
-                        mediaData: applied.mediaData,
-                        responseBatchId,
-                        rawResponseText: r.responseText,
-                        responseRoundId,
-                        editableResponseText,
-                        // ç³»ç»Ÿå°å­—æ ·å¼ä¸æ˜¾ç¤ºé¢æ¿ï¼Œä¸åœ¨è¿™é‡ŒæŒ‚è½½ï¼ˆè§ canCarryFoldedPanelï¼‰
-                        senderCharacterId: r.characterId,
-                        senderName: applied.senderName,
-                    });
-                    savedAnyPart = true;
-                    msgsSetter(prev => [...prev, msg]);
-                    continue;
-                }
-                // Poke: keep it as a poke media message so UI renders it as a system notice.
-                if (part.mediaType === "poke") {
-                    const pokeSender = (part.mediaData?.pokeSender === "æˆ‘" ? r.characterName : part.mediaData?.pokeSender) || r.characterName;
-                    const pokeTarget = part.mediaData?.pokeTarget || "æŸäºº";
-                    if (!isFirst && !revealOptions?.instantReveal) await abortableDelay(800, guard?.signal);
-                    throwIfGenerationStopped(guard);
-                    isFirst = false;
-                    const msg = pushChatMessage({
-                        sessionId: session.id, role: "assistant",
-                        content: `${pokeSender} æ‹äº†æ‹ ${pokeTarget}`,
-                        mediaType: "poke",
-                        mediaData: { pokeSender, pokeTarget },
-                        responseBatchId,
-                        rawResponseText: r.responseText,
-                        responseRoundId,
-                        editableResponseText,
-                        // ç³»ç»Ÿå°å­—æ ·å¼ä¸æ˜¾ç¤ºé¢æ¿ï¼Œä¸åœ¨è¿™é‡ŒæŒ‚è½½ï¼ˆè§ canCarryFoldedPanelï¼‰
-                        senderCharacterId: r.characterId,
-                        senderName: pokeSender,
-                    });
-                    savedAnyPart = true;
-                    msgsSetter(prev => [...prev, msg]);
-                    dispatchChatMessageNotice({
-                        sessionId: session.id,
-                        senderName: session.groupName || "ç¾¤èŠ",
-                        body: `${pokeSender}: ${msg.content}`.slice(0, 80),
-                        isGroup: true,
-                    });
-                    continue;
-                }
-                if (!isFirst && !revealOptions?.instantReveal) await abortableDelay(800, guard?.signal);
-                throwIfGenerationStopped(guard);
-                isFirst = false;
-                const attachHere = !attachedState && canCarryFoldedPanel(part);
-                const draft = buildAssistantMessageDraft(part, {
-                    sessionId: session.id,
-                    role: "assistant",
-                    content: part.content,
-                    mediaType: part.mediaType,
-                    mediaData: part.mediaData,
-                    responseBatchId,
-                    rawResponseText: r.responseText,
-                    responseRoundId,
-                    editableResponseText,
-                    statusPanel: attachHere && statusPanel ? statusPanel : undefined,
-                    statusRegionMode: customStatusActive && attachHere && statusPanel ? "custom" as const : undefined,
-                    innerMonologue: attachHere && innerMonologue ? innerMonologue : undefined,
-                    reasoningText: takeRoundReasoning(),
-                    stateValues: attachHere && stateValues.length > 0 ? stateValues : undefined,
-                    freshStateValues: attachHere ? freshStateValues : undefined,
-                    senderCharacterId: r.characterId,
-                    senderName: r.characterName,
-                }, guard);
-                throwIfGenerationStopped(guard);
-                const msg = pushChatMessage(draft);
-                imageReplacementTasks.push(scheduleGeneratedImageReplacement(msg, r.characterId, guard));
-                if (attachHere) attachedState = true;
-                savedAnyPart = true;
-                msgsSetter(prev => [...prev, msg]);
-                const body = msg.content.trim()
-                    || (msg.mediaType === "media_file" && msg.mediaData?.fileType === "image" && msg.mediaData?.label
-                        ? `å‘äº†ä¸€å¼ ç…§ç‰‡: ${msg.mediaData.label}`
-                        : (msg.mediaType ? "å‘æ¥ä¸€æ¡æ¶ˆæ¯" : ""));
-                dispatchChatMessageNotice({
-                    sessionId: session.id,
-                    senderName: session.groupName || "ç¾¤èŠ",
-                    body: `${r.characterName}: ${body}`.slice(0, 80),
-                    isGroup: true,
-                });
-            }
-            // é¢æ¿æ²¡è½åˆ°ä»»ä½•æ­£å¸¸æ°”æ³¡ä¸Šï¼ˆçº¯é™é»˜ï¼Œæˆ–æ•´æ®µåªæœ‰æ‹ä¸€æ‹/ç¾¤ç®¡ç†é€šçŸ¥ï¼‰â†’ è¡¥ç©ºæ¶ˆæ¯é©®é¢æ¿
-            if (!attachedState && (statusPanel || innerMonologue || stateValues.length > 0)) {
-                throwIfGenerationStopped(guard);
-                const msg = pushChatMessage({
-                    sessionId: session.id,
-                    role: "assistant",
-                    content: "",
-                    responseBatchId,
-                    rawResponseText: r.responseText,
-                    responseRoundId,
-                    editableResponseText,
-                    statusPanel,
-                    statusRegionMode: customStatusActive && statusPanel ? "custom" as const : undefined,
-                    innerMonologue,
-                    reasoningText: takeRoundReasoning(),
-                    stateValues: stateValues.length > 0 ? stateValues : undefined,
-                    freshStateValues,
-                    senderCharacterId: r.characterId,
-                    senderName: r.characterName,
-                });
-                msgsSetter(prev => [...prev, msg]);
-            }
-            if (stateValues.length > 0) {
-                currentStateByCharacter.set(r.characterId, stateValues);
-            }
-        }
-        if (imageReplacementTasks.length > 0) {
-            await Promise.allSettled(imageReplacementTasks);
-            throwIfGenerationStopped(guard);
-        }
-    };
-
-    // AI auto-play: search & play a song by title/artist when AI recommends music
-    const autoPlayMusic = async (title: string, charName: string, artist?: string) => {
-        const musicBridge = getMusicControlBridge();
-        if (!musicBridge) { console.warn("[AutoPlay] MusicPlayer not available"); return; }
-        try {
-            const found = await findPlayableMatch(title, artist);
-            if (!found) {
-                const playMsg = pushChatMessage({ sessionId: session.id, role: "system", content: `${charName}æ’­æ”¾äº†ã€Œ${title}ã€`, mediaType: "music_notify" });
-                const failMsg = pushChatMessage({ sessionId: session.id, role: "system", content: "æ²¡æœ‰æ‰¾åˆ°è¿™ä¸ªéŸ³ä¹å“¦~", mediaType: "music_not_found", mediaData: { musicTitle: title } });
-                setMessages(prev => [...prev, playMsg, failMsg]);
-                return;
-            }
-
-            let playedTitle = title;
-            const { result: match, playUrl } = found;
-            if (match.source === "local" && match.localTrack) {
-                await musicBridge.playTrack(match.localTrack);
-                playedTitle = match.localTrack.title;
-            } else if (match.source === "netease" && match.neteaseResult && playUrl) {
-                const r = match.neteaseResult;
-                const detail = await getNeteaseSongDetail(r.id);
-                const lyrics = await getNeteaseLyrics(r.id);
-                playedTitle = detail?.name || r.name;
-                await musicBridge.playTrack({
-                    id: `netease_${r.id}`,
-                    title: playedTitle,
-                    artist: detail?.artists || r.artists,
-                    duration: r.duration / 1000,
-                    coverUrl: detail?.coverUrl,
-                    lyrics,
-                    liked: false,
-                    addedAt: new Date().toISOString(),
-                });
-            }
-            const okMsg = pushChatMessage({ sessionId: session.id, role: "system", content: `${charName}æ’­æ”¾äº†ã€Œ${playedTitle}ã€`, mediaType: "music_notify" });
-            setMessages(prev => [...prev, okMsg]);
-        } catch (err) {
-            console.warn("[AutoPlay] Failed:", err);
-            const playMsg = pushChatMessage({ sessionId: session.id, role: "system", content: `${charName}æ’­æ”¾äº†ã€Œ${title}ã€`, mediaType: "music_notify" });
-            const failMsg = pushChatMessage({ sessionId: session.id, role: "system", content: "æ²¡æœ‰æ‰¾åˆ°è¿™ä¸ªéŸ³ä¹å“¦~" });
-            setMessages(prev => [...prev, playMsg, failMsg]);
-        }
-    };
-
-    // â”€â”€ Toast helper â”€â”€
-    const clearChatToast = () => {
-        clearTimeout(chatToastTimer.current);
-        setChatToast(null);
-    };
-
-    const showChatToast = (text: string, duration = 2000) => {
-        clearTimeout(chatToastTimer.current);
-        setChatToast(text);
-        if (duration > 0) {
-            chatToastTimer.current = setTimeout(() => setChatToast(null), duration);
-        }
-    };
-
-    const showPersistentChatToast = (text: string) => {
-        clearTimeout(chatToastTimer.current);
-        setChatToast(text);
-    };
-
-    const clearStuckGeneration = () => {
-        const cancelledRun = cancelGenerationRun(session.id);
-        cancelBackgroundGeneration(session.id);
-        cancelBailoutKey(`reply:${session.id}`);
-        if (cancelledRun?.pendingNativeToolCalls.length) {
-            for (const call of cancelledRun.pendingNativeToolCalls) {
-                pushChatMessage({
-                    sessionId: session.id,
-                    role: "tool",
-                    content: "æœ¬æ¬¡åŠ¨ä½œå·²è¢«ç”¨æˆ·å–æ¶ˆã€‚",
-                    mediaType: "tool_result",
-                    nativeToolResult: {
-                        toolCallId: call.id,
-                        name: call.name,
-                        content: "æœ¬æ¬¡åŠ¨ä½œå·²è¢«ç”¨æˆ·å–æ¶ˆã€‚",
-                    },
-                });
-            }
-        }
-        isGeneratingRef.current = false;
-        setIsGenerating(false);
-        clearGenerationLock(session.id);
-        setPendingGenerate(true);
-        syncMessagesFromStorage();
-        showChatToast("å·²åœæ­¢æœ¬è½®ç”Ÿæˆ");
-    };
-
-    const clearOfflineGeneration = () => {
-        const cancelled = cancelOfflineGenerationRun(session.id);
-        if (!cancelled && !isOfflineGenerating) return;
-        const pendingText = offlineGenerationInputRef.current || pendingOfflineUserText;
-        offlineTextInputRef.current?.restoreIfEmpty(pendingText);
-        setPendingOfflineUserText("");
-        offlineGenerationInputRef.current = "";
-        setIsOfflineGenerating(false);
-        showChatToast("å·²åœæ­¢çº¿ä¸‹ç”Ÿæˆ");
-    };
-
-    const stripEditableToolTags = (text: string) => text
-        .replace(/\[[^\]]*?(?:è·å–æŒ‡ä»¤|è·å–å·¥å…·)[:ï¼š][^\]]*\]/g, "")
-        .replace(/\[[^\]]*?(?:æ‰§è¡ŒåŠ¨ä½œ|å·¥å…·è°ƒç”¨)[:ï¼š][^\]]*?[ï¼ˆ(][\s\S]*?[)ï¼‰]\]/g, "")
-        .replace(/\n{3,}/g, "\n\n")
-        .trim();
-
-    const cleanEditableAssistantText = (text: string) => {
-        const { cleanText } = parseActionTags(text);
-        return stripEditableToolTags(cleanText);
-    };
-
-    const hasKnownGroupSenderPrefix = (text: string) => {
-        return groupCharacters.some((groupCharacter) => {
-            const escapedName = groupCharacter.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-            return new RegExp(`^\\[${escapedName}\\]:\\s*`, "m").test(text);
-        });
-    };
-
-    const buildAssistantMessageDraft = (
-        part: ParsedMessagePart,
-        draft: AssistantMessageDraft,
-        guard?: GenerationRunGuard,
-    ): AssistantMessageDraft => {
-        if (draft.mediaType === "tool_notice" || part.mediaType !== "image") return draft;
-
-        const description = part.mediaData?.label?.trim();
-        if (!description) return draft;
-
-        throwIfGenerationStopped(guard);
-        return {
-            ...draft,
-            mediaType: "image",
-            mediaData: createPendingChatGeneratedImageData(part.mediaData, description),
-        };
-    };
-
-    const scheduleGeneratedImageReplacement = (
-        message: ChatMessage,
-        characterId?: string,
-        guard?: GenerationRunGuard,
-    ): Promise<ChatMessage | null> => {
-        if (!isPendingChatGeneratedImageMessage(message)) return Promise.resolve(null);
-        return generateAndApplyChatGeneratedImage(message, characterId || session.contactId, { signal: guard?.signal })
-            .catch(error => {
-                if (!isAbortLikeError(error)) {
-                    console.warn("[ImageGeneration] Failed to generate chat image:", error);
-                    const reason = error instanceof Error ? error.message : String(error);
-                    setImageGenerationFailure(prev => prev ?? reason);
-                }
-                return null;
-            });
-    };
-
-    // â”€â”€ Music Card Click-to-Play â”€â”€
-    const handleMusicCardPlay = async (title: string, artist?: string) => {
-        const musicBridge = getMusicControlBridge();
-        if (!musicBridge) { showChatToast("éŸ³ä¹æ’­æ”¾å™¨æœªå°±ç»ª"); return; }
-        showPersistentChatToast("åŠ è½½éŸ³ä¹ä¸­...");
-        try {
-            const found = await findPlayableMatch(title, artist);
-            if (!found) {
-                showChatToast("æ²¡æœ‰æ‰¾åˆ°è¯¥éŸ³ä¹å“¦~");
-                return;
-            }
-            const { result: match, playUrl } = found;
-            if (match.source === "local" && match.localTrack) {
-                await musicBridge.playTrack(match.localTrack);
-            } else if (match.source === "netease" && match.neteaseResult && playUrl) {
-                const r = match.neteaseResult;
-                const detail = await getNeteaseSongDetail(r.id);
-                const lyrics = await getNeteaseLyrics(r.id);
-                await musicBridge.playTrack({
-                    id: `netease_${r.id}`,
-                    title: detail?.name || r.name,
-                    artist: detail?.artists || r.artists,
-                    duration: r.duration / 1000,
-                    coverUrl: detail?.coverUrl,
-                    lyrics,
-                    liked: false,
-                    addedAt: new Date().toISOString(),
-                });
-            }
-            clearChatToast();
-        } catch {
-            showChatToast("æ²¡æœ‰æ‰¾åˆ°è¯¥éŸ³ä¹å“¦~");
-        }
-    };
-
-    // Helper: Split AI response by \n\n into multiple messages (online chat mode)
-    // Uses shared parseAIResponse for rich-media support.
-    // Returns { hasVisible, stateValues, hasDecline } â€” hasVisible is false if the AI chose [é™é»˜].
-    const splitAndSaveAIMessages = async (
-        aiResponseText: string,
-        options?: {
-            responseBatchId?: string;
-            rawResponseText?: string;
-            reasoningText?: string;
-            /** æµå¼ç”Ÿæˆåœºæ™¯ï¼šç”¨æˆ·å·²çœ‹è¿‡å†…å®¹é€æ®µé•¿å‡ºï¼Œè½åº“ç«‹å³æ”¾å‡ºã€è·³è¿‡æ¨¡æ‹Ÿæ‰“å­—èŠ‚å¥ */
-            instantReveal?: boolean;
-        } & GenerationRunGuard,
-    ): Promise<{ hasVisible: boolean; stateValues: StateValue[]; triggerCall?: "voice" | "video"; hasDecline?: boolean }> => {
-        throwIfGenerationStopped(options);
-        const responseBatchId = options?.responseBatchId || createResponseBatchId();
-        const rawResponseText = options?.rawResponseText ?? aiResponseText;
-        const previousState = session.isGroup
-            ? getLatestStateValues(session.id)
-            : getLatestCharacterStateValues(session.contactId);
-
-        const { parts: rawParts, stateValues, freshStateValues, statusPanel, innerMonologue } = parseAIResponse(aiResponseText, previousState);
-        const parts = stripInvalidStickerParts(rawParts);
-        throwIfGenerationStopped(options);
-
-        // Detect call triggers and AI media actions, filter them out
-        let triggerCall: "voice" | "video" | undefined;
-        let hasDecline = false;
-        const charN = character?.name || "å¯¹æ–¹";
-        const userN = userIdentity?.name || "ä½ ";
-        const filteredParts: typeof parts = [];
-        const afterPublishEffects: Array<((message: ChatMessage) => void) | undefined> = [];
-        const pushFilteredPart = (part: (typeof parts)[number], afterPublish?: (message: ChatMessage) => void) => {
-            filteredParts.push(part);
-            afterPublishEffects.push(afterPublish);
-        };
-        for (const p of parts) {
-            throwIfGenerationStopped(options);
-            if (p.mediaType === "voice_call") { triggerCall = "voice"; continue; }
-            if (p.mediaType === "video_call") { triggerCall = "video"; continue; }
-            if (p.mediaType === "accept_red_packet" || p.mediaType === "decline_red_packet"
-                || p.mediaType === "accept_transfer" || p.mediaType === "decline_transfer"
-                || p.mediaType === "accept_payment_request" || p.mediaType === "decline_payment_request") {
-                if (p.mediaType === "decline_red_packet" || p.mediaType === "decline_transfer" || p.mediaType === "decline_payment_request") {
-                    hasDecline = true;
-                }
-                throwIfGenerationStopped(options);
-                handleAIMediaAction(p.mediaType, charN, userN);
-                continue;
-            }
-            // Music: convert to plain text [éŸ³ä¹:xxx] (stays in history for AI), auto-play
-            if (p.mediaType === "music") {
-                const mTitle = p.mediaData?.musicTitle || p.mediaData?.label;
-                if (mTitle) {
-                    pushFilteredPart(
-                        { content: `[éŸ³ä¹:${mTitle}]` },
-                        () => autoPlayMusic(mTitle, charN, p.mediaData?.musicArtist || undefined),
-                    );
-                    continue;
-                }
-            }
-            // Poke: keep mediaType so UI renders it as a system notice, while preserving response order.
-            if (p.mediaType === "poke") {
-                const pokeSender = (p.mediaData?.pokeSender === "æˆ‘" ? charN : p.mediaData?.pokeSender) || charN;
-                const pokeTarget = p.mediaData?.pokeTarget || userN;
-                pushFilteredPart({
-                    content: `${pokeSender} æ‹äº†æ‹ ${pokeTarget}`,
-                    mediaType: "poke",
-                    mediaData: { pokeSender, pokeTarget },
-                });
-                continue;
-            }
-            pushFilteredPart(p);
-        }
-
-        if (filteredParts.length === 0) {
-            // Silence: only status panel / inner monologue / reasoning, no visible chat text
-            if (statusPanel || innerMonologue || options?.reasoningText) {
-                throwIfGenerationStopped(options);
-                const aiMsg = pushChatMessage({
-                    sessionId: session.id,
-                    role: "assistant",
-                    content: "",
-                    responseBatchId,
-                    rawResponseText,
-                    statusPanel,
-                    statusRegionMode: customStatusActive && statusPanel ? "custom" as const : undefined,
-                    innerMonologue,
-                    reasoningText: options?.reasoningText,
-                    stateValues: stateValues.length > 0 ? stateValues : undefined,
-                    freshStateValues,
-                });
-                setMessages(prev => [...prev, aiMsg]);
-            }
-            return { hasVisible: false, stateValues, triggerCall, hasDecline };
-        }
-
-        // Build rich-media drafts first, then publish them in the same order as the UI display.
-        const messageDrafts: Array<{ draft: AssistantMessageDraft; afterPublish?: (message: ChatMessage) => Promise<unknown> | void }> = [];
-        const imageReplacementTasks: Promise<unknown>[] = [];
-        // é¢æ¿æŒ‚åˆ°ç¬¬ä¸€æ¡èƒ½æ˜¾ç¤ºå®ƒçš„æ¶ˆæ¯ä¸Šï¼›å…¨æ˜¯æ‹ä¸€æ‹ç­‰ç³»ç»Ÿæ ·å¼æ—¶è¡¥ç©ºæ¶ˆæ¯é©®é¢æ¿
-        let metaIdx = filteredParts.findIndex(canCarryFoldedPanel);
-        if (metaIdx === -1 && (statusPanel || innerMonologue || stateValues.length > 0)) {
-            pushFilteredPart({ content: "" });
-            metaIdx = filteredParts.length - 1;
-        }
-        for (let idx = 0; idx < filteredParts.length; idx += 1) {
-            throwIfGenerationStopped(options);
-            const part = filteredParts[idx];
-            const mediaType = part.mediaType;
-            const draft = buildAssistantMessageDraft(part, {
-                sessionId: session.id,
-                role: "assistant",
-                content: part.content,
-                mediaType,
-                mediaData: part.mediaData,
-                responseBatchId,
-                rawResponseText,
-                statusPanel: idx === metaIdx && statusPanel ? statusPanel : undefined,
-                statusRegionMode: customStatusActive && idx === metaIdx && statusPanel ? "custom" as const : undefined,
-                innerMonologue: idx === metaIdx && innerMonologue ? innerMonologue : undefined,
-                reasoningText: idx === metaIdx ? options?.reasoningText : undefined,
-                stateValues: idx === metaIdx && stateValues.length > 0 ? stateValues : undefined,
-                freshStateValues: idx === metaIdx ? freshStateValues : undefined,
-            }, options);
-            throwIfGenerationStopped(options);
-            messageDrafts.push({
-                draft,
-                afterPublish: isPendingChatGeneratedImageMessage(draft)
-                    ? (message) => scheduleGeneratedImageReplacement(message, session.contactId, options)
-                    : afterPublishEffects[idx],
-            });
-        }
-
-        const mediaLabels: Record<string, string> = {
-            red_packet: "å‘äº†ä¸€ä¸ªçº¢åŒ…",
-            transfer: "å‘äº†ä¸€ç¬”è½¬è´¦",
-            payment_request: "å‘èµ·äº†ä»£ä»˜è¯·æ±‚",
-            sticker: "å‘äº†ä¸€ä¸ªè¡¨æƒ…",
-            image: "å‘äº†ä¸€å¼ ç…§ç‰‡",
-            location: "åˆ†äº«äº†ä½ç½®",
-            audio: "å‘äº†ä¸€æ¡è¯­éŸ³",
-            music_share: "åˆ†äº«äº†éŸ³ä¹",
-            xiaohongshu_note_share: "åˆ†äº«äº†ä¸€æ¡å°çº¢ä¹¦å¸–å­",
-            app_card: "åˆ†äº«äº†ä¸€å¼ åº”ç”¨å¡ç‰‡",
-            quote: "å¼•ç”¨å›å¤",
-        };
-        const getNoticeBody = (m: ChatMessage): string => {
-            const text = m.content.trim();
-            if (text) return text;
-            if (!m.mediaType) return "";
-            if (m.mediaType === "sticker") return `å‘äº†ä¸€ä¸ªè¡¨æƒ… ${m.mediaData?.label || ""}`.trim();
-            if (m.mediaType === "image") return m.mediaData?.label ? `å‘äº†ä¸€å¼ ç…§ç‰‡: ${m.mediaData.label}` : "å‘äº†ä¸€å¼ ç…§ç‰‡";
-            if (m.mediaType === "media_file" && m.mediaData?.fileType === "image") {
-                return m.mediaData?.label ? `å‘äº†ä¸€å¼ ç…§ç‰‡: ${m.mediaData.label}` : "å‘äº†ä¸€å¼ ç…§ç‰‡";
-            }
-            if (m.mediaType === "location") return `åˆ†äº«äº†ä½ç½®: ${m.mediaData?.label || ""}`.trim();
-            if (m.mediaType === "audio") return `å‘äº†ä¸€æ¡è¯­éŸ³: ${m.mediaData?.label || ""}`.trim();
-            if (m.mediaType === "music_share") return `åˆ†äº«äº†éŸ³ä¹: ${m.mediaData?.musicTitle || ""}`.trim();
-            if (m.mediaType === "xiaohongshu_note_share") return `åˆ†äº«äº†ä¸€æ¡å°çº¢ä¹¦å¸–å­: ${m.mediaData?.xiaohongshuTitle || ""}`.trim();
-            if (m.mediaType === "app_card") return `åˆ†äº«äº†${m.mediaData?.appName || "APP"}å¡ç‰‡: ${m.mediaData?.appCardTitle || m.mediaData?.appCardSummary || ""}`.trim();
-            if (m.mediaType === "quote") return `å¼•ç”¨å›å¤: ${m.mediaData?.quotePreview || ""}`.trim();
-            if (m.mediaType === "payment_request") return `å‘èµ·äº†ä»£ä»˜è¯·æ±‚: ${m.mediaData?.paymentRequestAmountLabel || m.mediaData?.amount || ""}`.trim();
-            return mediaLabels[m.mediaType] || "";
-        };
-        const dispatchVisibleNotice = (m: ChatMessage): void => {
-            const body = getNoticeBody(m);
-            if (!body) return;
-            dispatchChatMessageNotice({
-                sessionId: session.id,
-                senderName: charN,
-                avatar: character?.avatar || null,
-                body: body.slice(0, 80),
-            });
-        };
-
-        const publishVisibleMessage = (entry: { draft: AssistantMessageDraft; afterPublish?: (message: ChatMessage) => void }): ChatMessage => {
-            throwIfGenerationStopped(options);
-            const msg = pushChatMessage(entry.draft);
-            setMessages(prev => [...prev, msg]);
-            dispatchVisibleNotice(msg);
-            const body = getNoticeBody(msg);
-            if (body) {
-                sendBrowserNotification(charN, { body: body.slice(0, 60), icon: character?.avatar || undefined });
-            }
-            const afterPublishResult = entry.afterPublish?.(msg);
-            if (afterPublishResult) imageReplacementTasks.push(Promise.resolve(afterPublishResult));
-            return msg;
-        };
-
-        // Display messages one by one with staggered delays; update preview and notice with the same rhythm.
-        // æµå¼é¢„è§ˆå·²ç»æŒ‰æ®µå±•ç¤ºè¿‡ä¸€éæ—¶ï¼ˆinstantRevealï¼‰ç›´æ¥å…¨éƒ¨æ”¾å‡ºï¼Œé¿å…äºŒæ¬¡ã€Œé‡æ’­ã€ã€‚
-        if (messageDrafts.length <= 1 || options?.instantReveal) {
-            messageDrafts.forEach(publishVisibleMessage);
-        } else {
-            publishVisibleMessage(messageDrafts[0]);
-            for (let i = 1; i < messageDrafts.length; i++) {
-                await abortableDelay(800, options?.signal);
-                throwIfGenerationStopped(options);
-                publishVisibleMessage(messageDrafts[i]);
-            }
-        }
-        if (imageReplacementTasks.length > 0) {
-            await Promise.allSettled(imageReplacementTasks);
-            throwIfGenerationStopped(options);
-        }
-        return { hasVisible: true, stateValues, triggerCall, hasDecline };
-    };
-
-    // Helper: handle AI-triggered call from splitAndSaveAIMessages result
-    const handleCallTrigger = (triggerCall?: "voice" | "video") => {
-        if (!triggerCall) return;
-        setCallInitiator("character");
-        if (triggerCall === "voice") setShowVoiceCall(true);
-        else setShowVideoCall(true);
-    };
-
-    const persistHiddenToolResult = (content?: string, toolExecutionId?: string) => {
-        if (!content) return;
-        pushChatMessage({
-            sessionId: session.id,
-            role: "tool",
-            content,
-            mediaType: "tool_result",
-            toolExecutionId,
-        });
-    };
-
-    const persistHiddenAssistantToolCall = (content?: string, options?: {
-        responseBatchId?: string;
-        responseRoundId?: string;
-        senderCharacterId?: string;
-        senderName?: string;
-    }) => {
-        if (!content) return;
-        pushChatMessage({
-            sessionId: session.id,
-            role: "assistant",
-            content,
-            mediaType: "tool_call",
-            responseBatchId: options?.responseBatchId,
-            responseRoundId: options?.responseRoundId,
-            senderCharacterId: options?.senderCharacterId,
-            senderName: options?.senderName,
-        });
-    };
-
-    const persistToolNotice = (content?: string) => {
-        if (!content) return;
-        const msg = pushChatMessage({
-            sessionId: session.id,
-            role: "system",
-            content,
-            mediaType: "tool_notice",
-        });
-        setMessages(prev => [...prev, msg]);
-    };
-
-    const appendTransientMessage = (
-        role: ChatMessage["role"],
-        content: string,
-        mediaType?: ChatMessage["mediaType"],
-        mediaData?: ChatMessage["mediaData"],
-    ) => {
-        const transientMsg: ChatMessage = {
-            id: `${TRANSIENT_MESSAGE_PREFIX}${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-            sessionId: session.id,
-            role,
-            content,
-            status: "sent",
-            createdAt: new Date().toISOString(),
-            ...(mediaType ? { mediaType } : {}),
-            ...(mediaData ? { mediaData } : {}),
-        };
-        setTransientMessages(prev => [...prev, transientMsg]);
-    };
-
-    const updateTransientMessage = (msgId: string, updater: (msg: ChatMessage) => ChatMessage) => {
-        setTransientMessages(prev => prev.map(msg => msg.id === msgId ? updater(msg) : msg));
-    };
-
-    const removeTransientMessage = (msgId: string) => {
-        setTransientMessages(prev => prev.filter(msg => msg.id !== msgId));
-    };
-
-    const handleToolExecution = (results: ToolResult[], guard?: GenerationRunGuard, toolExecutionId?: string) => {
-        throwIfGenerationStopped(guard);
-        const pending = results.find(result => result.pendingApproval && result.pendingRequest);
-        if (pending?.pendingRequest) {
-            throwIfGenerationStopped(guard);
-            appendTransientMessage("system", pending.pendingRequest.content, "memory_write_request", {
-                memoryContent: pending.pendingRequest.content,
-                memoryReason: pending.pendingRequest.reason,
-                memoryImportance: pending.pendingRequest.importance,
-                memoryRequestStatus: "pending",
-            });
-        }
-        for (const result of results) {
-            for (const att of result.mediaAttachments || []) {
-                throwIfGenerationStopped(guard);
-                const msg = pushChatMessage({
-                    sessionId: session.id,
-                    role: "assistant",
-                    content: att.title || "",
-                    mediaType: "media_file",
-                    mediaUrl: att.url,
-                    mediaData: { fileType: att.type, fileName: att.title },
-                    toolExecutionId,
-                    ...(session.isGroup ? {
-                        senderCharacterId: result.actorCharacterId,
-                        senderName: result.actorName,
-                    } : {}),
-                });
-                setMessages(prev => [...prev, msg]);
-            }
-        }
-    };
-
-    const handleApproveMemoryWrite = async (msg: ChatMessage) => {
-        if (msg.mediaType !== "memory_write_request") return;
-        persistHiddenToolResult("ç¡®è®¤å†™å…¥è®°å¿†");
-        const request: MemoryWriteRequest = {
-            capabilityId: "memory_write",
-            sessionId: session.id,
-            characterId: session.contactId,
-            content: msg.mediaData?.memoryContent || msg.content,
-            importance: msg.mediaData?.memoryImportance ?? 0.8,
-            ...(msg.mediaData?.memoryReason ? { reason: msg.mediaData.memoryReason } : {}),
-        };
-
-        const result = await approveMemoryWriteRequest(request);
-        if (result.success) {
-            updateTransientMessage(msg.id, current => ({
-                ...current,
-                mediaData: {
-                    ...current.mediaData,
-                    memoryRequestStatus: "approved",
-                },
-            }));
-        }
-
-        persistToolNotice(result.userNotice || (result.success ? "å·²å†™å…¥é•¿æœŸè®°å¿†" : (result.error || "è®°å¿†å†™å…¥å¤±è´¥")));
-    };
-
-    const handleIgnoreMemoryWrite = (msg: ChatMessage) => {
-        if (msg.mediaType !== "memory_write_request") return;
-        persistHiddenToolResult("å¿½ç•¥å†™å…¥è®°å¿†");
-        updateTransientMessage(msg.id, current => ({
-            ...current,
-            mediaData: {
-                ...current.mediaData,
-                memoryRequestStatus: "ignored",
-            },
-        }));
-        persistToolNotice("å·²å¿½ç•¥æœ¬æ¬¡è®°å¿†å†™å…¥");
-    };
-
-    // Helper: transform stored system message to UI display text
-    // Stored (prompt): [XXå‘YYå‘èµ·äº†è¯­éŸ³é€šè¯] / [æˆ‘å‘XXå‘èµ·äº†è¯­éŸ³é€šè¯]
-    // UI: XXå‘ç¾¤èŠå‘èµ·äº†è§†é¢‘é€šè¯ / ä½ å‘XXå‘èµ·äº†è¯­éŸ³é€šè¯ / XXå‘ä½ å‘èµ·äº†è¯­éŸ³é€šè¯
-    const formatSysMsgForUI = (content: string, msg?: ChatMessage): string => {
-        let text = content;
-        const charN = character?.name || "å¯¹æ–¹";
-        const userN = userIdentity?.name;
-        // Call initiation: [æˆ‘å‘XXå‘èµ·äº†è¯­éŸ³/è§†é¢‘é€šè¯]
-        text = text.replace(/\[æˆ‘å‘(.+?)å‘èµ·äº†((?:ç¾¤?(?:è¯­éŸ³|è§†é¢‘)é€šè¯))\]/, (_, target, callType) => {
-            // å•èŠï¼štarget=ç”¨æˆ·å â†’ è§’è‰²å‘èµ·ï¼›target=è§’è‰²å â†’ ç”¨æˆ·å‘èµ·
-            // ç¾¤èŠï¼štarget=ç¾¤èŠï¼Œç”¨ role åˆ¤æ–­
-            if (userN && target === userN) return `${charN}å‘ä½ å‘èµ·äº†${callType}`;
-            if (target === "ç¾¤èŠ" && msg?.role === "assistant") {
-                const sender = msg.senderName || charN;
-                return `${sender}å‘ç¾¤èŠå‘èµ·äº†${callType}`;
-            }
-            return `ä½ å‘${target}å‘èµ·äº†${callType}`;
-        });
-        // Follow-up AI initiated: [æˆ‘å‘èµ·äº†è¯­éŸ³/è§†é¢‘é€šè¯]
-        text = text.replace(/\[æˆ‘å‘èµ·äº†((?:è¯­éŸ³|è§†é¢‘)é€šè¯)\]/, `${charN}å‘èµ·äº†$1`);
-        // Hangup: [æˆ‘æŒ‚æ–­äº†XXé€šè¯] (duration now in mediaData, not content)
-        text = text.replace(/\[æˆ‘æŒ‚æ–­äº†(.+?é€šè¯)\](?:\(æ—¶é•¿\s*(.+?)\))?/, (_, callType, dur) =>
-            dur ? `ä½ æŒ‚æ–­äº†${callType}ï¼Œæ—¶é•¿ ${dur}` : `ä½ æŒ‚æ–­äº†${callType}`
-        );
-        // Reject: [æˆ‘æ‹’ç»äº†XXé€šè¯]
-        text = text.replace(/\[æˆ‘æ‹’ç»äº†(.+?é€šè¯)\]/, `ä½ æ‹’ç»äº†$1`);
-        // Cancel: [æˆ‘å–æ¶ˆäº†XXé€šè¯]
-        text = text.replace(/\[æˆ‘å–æ¶ˆäº†(.+?é€šè¯)\]/, `ä½ å–æ¶ˆäº†$1`);
-        // General user name â†’ "ä½ "
-        if (userN) text = text.replace(new RegExp(userN, "g"), "ä½ ");
-        // Friend add normalization
-        text = text.replace(/^.+(?=å·²æ·»åŠ äº†)/, "ä½ ");
-        text = text.replace(/^.+å‘(.+)å‘èµ·äº†å¥½å‹ç”³è¯·\n.+é€šè¿‡äº†å¥½å‹ç”³è¯·$/, "ä½ å·²æ·»åŠ äº†$1ï¼Œç°åœ¨å¯ä»¥å¼€å§‹èŠå¤©äº†ã€‚");
-        text = text.replace(/ï¼Œå¤‡æ³¨ï¼š[\s\S]*$/, "");
-        return text;
-    };
-
-    // QQ å¼å¤´è¡”å¾½æ ‡ï¼šç¾¤ä¸»/ç®¡ç†å‘˜ï¼ŒæŒ‰å½“å‰ç¾¤èº«ä»½å®æ—¶è®¡ç®—ï¼ˆè¢«è¸¢/å¸ä»»åæ—§æ¶ˆæ¯ä¸å†æ˜¾ç¤ºï¼‰
-    const renderGroupRoleBadge = (senderCharacterId?: string) => {
-        if (!session.isGroup || !senderCharacterId) return null;
-        if (!(session.participantIds || []).includes(senderCharacterId)) return null;
-        const role = getGroupRole(session, senderCharacterId);
-        if (role === "owner") return <span className="chat-role-badge chat-role-badge-owner">ç¾¤ä¸»</span>;
-        if (role === "admin") return <span className="chat-role-badge chat-role-badge-admin">ç®¡ç†å‘˜</span>;
-        return null;
-    };
-
-    const runManagedGeneration = async ({
-        history,
-        errorPrefix = "å‘é€å¤±è´¥",
-        onDecline,
-    }: ManagedGenerationOptions) => {
-        if (isGeneratingRef.current) {
-            if (activeGenerationRuns.has(session.id)) return;
-            // ä¸Šä¸€è½®è¢«å¤–éƒ¨å–æ¶ˆ/é¡¶æ›¿åæ”¶å°¾æå‰è¿”å›è¿‡ï¼Œæ ‡è®°å·²æ˜¯é™ˆæ—§çŠ¶æ€ï¼šå¤ä½åç»§ç»­æœ¬æ¬¡è¯·æ±‚
-            isGeneratingRef.current = false;
-            setIsGenerating(false);
-            clearGenerationLock(session.id);
-        }
-
-        const generationRun = createGenerationRun(session.id);
-        const generationRunId = generationRun.runId;
-        const isCurrentGeneration = () => isGenerationRunActive(session.id, generationRunId);
-        const generationGuard: GenerationRunGuard = { signal: generationRun.controller.signal, isActive: isCurrentGeneration };
-        let shouldRunDeclineReply = false;
-
-        isGeneratingRef.current = true;
-        setIsGenerating(true);
-        setGenerationLock(session.id);
-
-        try {
-            if (session.isGroup) {
-                let roundReasoning: string | undefined;
-                const results = await generateGroupChatCompletion(
-                    session,
-                    history,
-                    {
-                        onReasoning: (t) => { roundReasoning = t; },
-                        onStreamDelta: (delta) => {
-                            if (!isCurrentGeneration()) return;
-                            streamAccumRef.current += delta;
-                            // ç¾¤èŠå…¨æ–‡è§£æè¾ƒé‡ï¼šåˆå¹¶åˆ° rAF ä¸‹ä¸€å¸§æ‰§è¡Œï¼Œé¿å…ä¸€å¸§å¤šæ®µå¢é‡é‡å¤è§£æ
-                            if (streamParseFrameRef.current) return;
-                            streamParseFrameRef.current = window.requestAnimationFrame(() => {
-                                streamParseFrameRef.current = 0;
-                                if (!isCurrentGeneration()) return;
-                                const nameToId = new Map(groupCharacters.map(item => [item.name, item.id]));
-                                const rawParts = parseGroupChatResponse(streamAccumRef.current, nameToId);
-                                const parts = rawParts
-                                    .filter(item => item.responseText.trim())
-                                    .map(item => ({
-                                        characterId: item.characterId,
-                                        characterName: item.characterName,
-                                        texts: splitStreamPreviewSegments(cleanStreamText(item.responseText, { stripXmlTags: streamPreviewTagConfig.online, stripLiterals: streamPreviewTagConfig.stripTexts })),
-                                    }));
-                                setStreamPreview({ parts });
-                            });
-                        },
-                        onTextPart: () => {
-                            if (streamParseFrameRef.current) {
-                                cancelAnimationFrame(streamParseFrameRef.current);
-                                streamParseFrameRef.current = 0;
-                            }
-                            streamAccumRef.current = "";
-                            setStreamPreview(null);
-                        },
-                    },
-                    {
-                        signal: generationRun.controller.signal,
-                        appTags: theaterMode ? ["group_chat"] : undefined,
-                    },
-                );
-                if (!isCurrentGeneration()) return;
-                await processGroupParts(results, setMessages, generationGuard, roundReasoning, { instantReveal: isSessionStreamingEnabled(session, true) });
-            } else {
-                let capturedReasoning: string | undefined;
-                const cr = await generateChatCompletion(
-                    session,
-                    history,
-                    {
-                        appTags: theaterMode ? ["chat"] : ["chat", "text"],
-                        signal: generationRun.controller.signal,
-                    },
-                    {
-                        onReasoning: (t) => { capturedReasoning = t; },
-                        onStreamDelta: (delta) => {
-                            if (!isCurrentGeneration()) return;
-                            streamAccumRef.current += delta;
-                            // é¢„è§ˆæ›´æ–°åˆå¹¶åˆ° rAF ä¸‹ä¸€å¸§ï¼šæ¯å¸§æœ€å¤šä¸€æ¬¡å…¨æ–‡å‡€åŒ–+setStateï¼Œé¿å…é«˜é¢‘å¢é‡å¡é¡¿
-                            if (streamParseFrameRef.current) return;
-                            streamParseFrameRef.current = window.requestAnimationFrame(() => {
-                                streamParseFrameRef.current = 0;
-                                if (!isCurrentGeneration()) return;
-                                setStreamPreview({ texts: splitStreamPreviewSegments(cleanStreamText(streamAccumRef.current, { stripXmlTags: streamPreviewTagConfig.online, stripLiterals: streamPreviewTagConfig.stripTexts })) });
-                            });
-                        },
-                        onTextPart: () => {
-                            if (streamParseFrameRef.current) {
-                                cancelAnimationFrame(streamParseFrameRef.current);
-                                streamParseFrameRef.current = 0;
-                            }
-                            streamAccumRef.current = "";
-                            setStreamPreview(null);
-                        },
-                    },
-                );
-                if (!isCurrentGeneration()) return;
-                const result = await splitAndSaveAIMessages(flattenCompletionResult(cr), { ...generationGuard, reasoningText: capturedReasoning, instantReveal: isSessionStreamingEnabled(session, true) });
-                if (!isCurrentGeneration()) return;
-                scheduleFollowUp(session.id, 0, result.stateValues);
-                handleCallTrigger(result.triggerCall);
-                shouldRunDeclineReply = Boolean(result.hasDecline);
-            }
-        } catch (error: any) {
-            if (!isCurrentGeneration() || isAbortLikeError(error)) return;
-            const errorMsg = pushChatMessage({
-                sessionId: session.id,
-                role: "system",
-                content: `âš ï¸ ${errorPrefix}: ${error?.message || String(error)}`,
-            });
-            setMessages(prev => [...prev, errorMsg]);
-        } finally {
-            if (finishGenerationRun(session.id, generationRunId)) {
-                isGeneratingRef.current = false;
-                setIsGenerating(false);
-                clearGenerationLock(session.id);
-                if (!mountedRef.current) {
-                    window.dispatchEvent(new CustomEvent(CHAT_BG_COMPLETE, { detail: { sessionId: session.id } }));
-                }
-            } else if (!activeGenerationRuns.has(session.id)) {
-                // æœ¬è½®è¢«å¤–éƒ¨å–æ¶ˆä¸”æ²¡æœ‰æ–°ä¸€è½®æ¥æ‰‹ï¼šä»éœ€å¤ä½ï¼Œå¦åˆ™ã€Œç”Ÿæˆä¸­ã€æ ‡è®°æ°¸ä¹…å¡æ­»ï¼Œ
-                // åç»­è”åŠ¨/è¿½é—®çš„å›å¤è¯·æ±‚ä¼šè¢«é™é»˜åæ‰
-                isGeneratingRef.current = false;
-                setIsGenerating(false);
-                clearGenerationLock(session.id);
-            }
-        }
-
-        if (shouldRunDeclineReply && onDecline) await onDecline();
-    };
-
-    // Helper: trigger one AI reply based on current chat history (for events like call connect/hangup, decline)
-    const triggerReply = async () => {
-        const latestMessages = loadChatMessages(session.id);
-        applyStoredMessageWindow(latestMessages);
-        await runManagedGeneration({ history: latestMessages });
-    };
-
-    // â”€â”€ Rich media send helpers â”€â”€
-    const getMoneyMediaAmount = (mediaData: ChatMessage["mediaData"]): number => {
-        const amount = Number(mediaData?.amount ?? 0);
-        return Number.isFinite(amount) ? Math.max(0, Math.round(amount * 100) / 100) : 0;
-    };
-
-    const debitOutgoingMoneyMessage = (
-        mediaType: ChatMessage["mediaType"],
-        mediaData: ChatMessage["mediaData"],
-    ): { ok: boolean; mediaData?: ChatMessage["mediaData"] } => {
-        if (mediaType !== "red_packet" && mediaType !== "transfer") return { ok: true, mediaData };
-        const amount = getMoneyMediaAmount(mediaData);
-        if (amount <= 0) {
-            showChatToast("é‡‘é¢æ— æ•ˆ");
-            return { ok: false };
-        }
-        const isRedPacket = mediaType === "red_packet";
-        const result = payWithWalletBalance({
-            amount,
-            title: isRedPacket ? "å‘çº¢åŒ…" : "å‘è½¬è´¦",
-            detail: `${session.isGroup ? session.groupName || "ç¾¤èŠ" : character?.name || "èŠå¤©"}ï¼š${isRedPacket ? "å‘çº¢åŒ…" : "å‘è½¬è´¦"} ${amount.toFixed(2)} å…ƒ`,
-            category: isRedPacket ? "çº¢åŒ…" : "è½¬è´¦",
-        });
-        if (!result.ok || !result.transaction) {
-            showChatToast(result.error ?? "ä½™é¢ä¸è¶³");
-            return { ok: false };
-        }
-        return {
-            ok: true,
-            mediaData: {
-                ...mediaData,
-                walletTransactionId: result.transaction.id,
-            },
-        };
-    };
-
-    const refundOutgoingMoneyMessage = (msg: ChatMessage, reason: "çº¢åŒ…é€€å›" | "è½¬è´¦é€€å›"): ChatMessage["mediaData"] => {
-        const data = msg.mediaData;
-        if (!data?.walletTransactionId || data.walletRefundTransactionId) return data;
-        const amount = getMoneyMediaAmount(data);
-        if (amount <= 0) return data;
-        const result = creditWalletBalance(amount, reason, `${reason}ï¼š${data.label || msg.content || "èŠå¤©æ¬¾é¡¹"}`, "èŠå¤©é€€æ¬¾");
-        if (!result.ok || !result.transaction) return data;
-        return {
-            ...data,
-            walletRefundTransactionId: result.transaction.id,
-        };
-    };
-
-    const creditIncomingMoneyMessage = (msg: ChatMessage, actionType: string): ChatMessage => {
-        if (actionType !== "accept_red_packet" && actionType !== "accept_transfer") return msg;
-        const data = msg.mediaData;
-        if (data?.walletDepositTransactionId) return msg;
-        const userName = userIdentity?.name || "ä½ ";
-        const amount = actionType === "accept_red_packet"
-            ? Number(data?.claimedAmounts?.[userName] ?? data?.amount ?? 0)
-            : Number(data?.amount ?? 0);
-        const safeAmount = Number.isFinite(amount) ? Math.max(0, Math.round(amount * 100) / 100) : 0;
-        if (safeAmount <= 0) return msg;
-        const result = creditWalletBalance(
-            safeAmount,
-            actionType === "accept_red_packet" ? "é¢†å–çº¢åŒ…" : "æ”¶æ¬¾",
-            `${actionType === "accept_red_packet" ? "é¢†å–çº¢åŒ…" : "æ”¶æ¬¾"}ï¼š${data?.label || msg.content || "èŠå¤©æ¬¾é¡¹"}`,
-            actionType === "accept_red_packet" ? "çº¢åŒ…" : "è½¬è´¦",
-        );
-        if (!result.ok || !result.transaction) return msg;
-        const updatedData = {
-            ...data,
-            walletDepositTransactionId: result.transaction.id,
-        };
-        updateMessageMediaData(msg.id, updatedData);
-        return { ...msg, mediaData: updatedData };
-    };
-
-    const sendRichMessage = (mediaType: ChatMessage["mediaType"], mediaData: ChatMessage["mediaData"], content: string = "", mediaUrl?: string): boolean => {
-        if (!ensureGroupSpeakPermission()) return false;
-        if (isGenerating) {
-            showChatToast("è¯·å…ˆç­‰å¾…å¯¹æ–¹å›å¤");
-            return false;
-        }
-        cancelFollowUp(session.id);
-
-        if (mediaType === "poke") {
-            const pokeSender = userIdentity?.name || "ä½ ";
-            const pokeTarget = mediaData?.pokeTarget || character?.name || "å¯¹æ–¹";
-            const sysMsg = pushChatMessage({
-                sessionId: session.id,
-                role: "user",
-                content: `${pokeSender} æ‹äº†æ‹ ${pokeTarget}`,
-                mediaType: "poke",
-                mediaData: { pokeSender, pokeTarget },
-            });
-            setMessages(prev => [...prev, sysMsg]);
-            setPendingGenerate(true);
-            return true;
-        }
-
-        const walletDebit = debitOutgoingMoneyMessage(mediaType, mediaData);
-        if (!walletDebit.ok) return false;
-
-        const newMsg = pushChatMessage({
-            sessionId: session.id,
-            role: "user",
-            content,
-            mediaType,
-            mediaData: walletDebit.mediaData,
-            ...(mediaUrl ? { mediaUrl } : {}),
-        });
-        setMessages(prev => [...prev, newMsg]);
-        setPendingGenerate(true);
-        return true;
-    };
-
-    const sendSystemInstruction = (content: string): boolean => {
-        if (isGenerating) {
-            showChatToast("è¯·å…ˆç­‰å¾…å¯¹æ–¹å›å¤");
-            return false;
-        }
-        const trimmed = content.trim();
-        if (!trimmed) return false;
-
-        cancelFollowUp(session.id);
-        setQuotingMessage(null);
-
-        const newMsg = pushChatMessage({
-            sessionId: session.id,
-            role: "system",
-            content: trimmed,
-            mediaType: "system_instruction",
-        });
-        setMessages(prev => [...prev, newMsg]);
-        setPendingGenerate(true);
-        return true;
-    };
-
-    const handleOpenCustomPlusAction = useCallback((action: RegisteredCustomAppChatPlusAction) => {
-        setShowPlusMenu(false);
-        setShowEmojiPanel(false);
-        setShowStickerPanel(false);
-        setRichModal(null);
-        const app = getInstalledCustomApp(action.appId);
-        if (!app) {
-            showChatToast("è¿™ä¸ªè‡ªå®šä¹‰ APP å·²ä¸å­˜åœ¨");
-            setCustomPlusActions(loadCustomAppChatPlusActions());
-            return;
-        }
-        const presentation = getCustomChatPlusPresentation(action);
-        const launchContext = {
-            source: "chat_plus_action",
-            sessionId: session.id,
-            characterId: session.contactId,
-            characterName: character?.name,
-            isGroup: Boolean(session.isGroup),
-            groupName: session.groupName,
-            participantIds: session.participantIds ?? [],
-            participants: groupCharacters.map(item => ({ id: item.id, name: item.name })),
-            actionId: action.id,
-            actionLabel: action.label,
-            entry: action.entry,
-            directiveId: action.directiveId,
-            sceneId: action.sceneId,
-            sceneTag: action.sceneTag,
-            appTags: action.tags,
-            data: action.data,
-            presentation,
-            panelHeight: action.panelHeight,
-            appId: action.appId,
-            appName: action.appName,
-        };
-        if (presentation === "fullscreen") {
-            window.dispatchEvent(new CustomEvent("open-app", {
-                detail: {
-                    appId: toCustomAppIconId(action.appId),
-                    launchContext,
-                },
-            }));
-            return;
-        }
-        setActiveCustomChatPlus({
-            app,
-            action,
-            presentation,
-            launchContext,
-        });
-    }, [character?.name, groupCharacters, session.contactId, session.groupName, session.id, session.isGroup, session.participantIds]);
-
-    const sendShoppingGiftMessage = (gift: ShoppingGiftCandidate, recipient?: Character): boolean => {
-        if (session.isGroup && !recipient) {
-            showChatToast("è¯·é€‰æ‹©æ”¶ç¤¼å¯¹è±¡");
-            return false;
-        }
-        const sent = sendRichMessage("gift", {
-            label: gift.productName,
-            giftName: gift.productName,
-            shoppingGiftId: gift.id,
-            giftOrderId: gift.orderId,
-            giftItemId: gift.itemId,
-            giftMerchantLabel: gift.merchantLabel,
-            giftPriceLabel: gift.priceLabel,
-            giftPreviewIcon: gift.previewIcon,
-            giftTone: gift.tone,
-            giftDeliveredAt: gift.deliveredAt,
-            giftSentAt: new Date().toISOString(),
-            senderName: userIdentity?.name || "ä½ ",
-            ...(recipient ? { recipientId: recipient.id, recipientName: recipient.name } : {}),
-        });
-        if (sent) showChatToast("ç¤¼ç‰©å·²é€å‡º");
-        return sent;
-    };
-
-    const triggerAIResponse = async () => {
-        if (isGeneratingRef.current) {
-            if (activeGenerationRuns.has(session.id)) return;
-            // ä¸Šä¸€è½®è¢«å¤–éƒ¨å–æ¶ˆ/é¡¶æ›¿åæ”¶å°¾æå‰è¿”å›è¿‡ï¼Œæ ‡è®°å·²æ˜¯é™ˆæ—§çŠ¶æ€ï¼šå¤ä½åç»§ç»­æœ¬æ¬¡è¯·æ±‚
-            isGeneratingRef.current = false;
-            setIsGenerating(false);
-            clearGenerationLock(session.id);
-        }
-        const generationRun = createGenerationRun(session.id);
-        const generationRunId = generationRun.runId;
-        const isCurrentGeneration = () => isGenerationRunActive(session.id, generationRunId);
-        const generationGuard: GenerationRunGuard = { signal: generationRun.controller.signal, isActive: isCurrentGeneration };
-        let shouldRunDeclineReply = false;
-        isGeneratingRef.current = true;
-        setIsGenerating(true);
-        setPendingGenerate(false);
-        setGenerationLock(session.id);
-        streamAccumRef.current = "";
-        setStreamPreview(null);
-        try {
-            const latestMessages = loadChatMessages(session.id);
-            if (session.isGroup) {
-                const streamedImageReplacementTasks: Promise<unknown>[] = [];
-                // æ¯è½® LLM è°ƒç”¨çš„æ€ç»´é“¾ï¼šä¸­é—´è½®æŒ‚åˆ°è¯¥è½®é¦–æ¡æ°”æ³¡ï¼Œæœ€ç»ˆè½®ä¼ ç»™ processGroupParts
-                let pendingGroupReasoning: string | undefined;
-                const results = await generateGroupChatCompletion(session, latestMessages, {
-                    onReasoning: (t) => { pendingGroupReasoning = t; },
-                    onStreamDelta: (delta) => {
-                        if (!isCurrentGeneration()) return;
-                        streamAccumRef.current += delta;
-                        // ç¾¤èŠå…¨æ–‡è§£æè¾ƒé‡ï¼šåˆå¹¶åˆ° rAF ä¸‹ä¸€å¸§æ‰§è¡Œï¼Œé¿å…ä¸€å¸§å¤šæ®µå¢é‡é‡å¤è§£æ
-                        if (streamParseFrameRef.current) return;
-                        streamParseFrameRef.current = window.requestAnimationFrame(() => {
-                            streamParseFrameRef.current = 0;
-                            if (!isCurrentGeneration()) return;
-                            const nameToId = new Map(groupCharacters.map(item => [item.name, item.id]));
-                            const rawParts = parseGroupChatResponse(streamAccumRef.current, nameToId);
-                            const parts = rawParts
-                                .filter(item => item.responseText.trim())
-                                .map(item => ({
-                                    characterId: item.characterId,
-                                    characterName: item.characterName,
-                                    texts: splitStreamPreviewSegments(cleanStreamText(item.responseText, { stripXmlTags: streamPreviewTagConfig.online, stripLiterals: streamPreviewTagConfig.stripTexts })),
-                                }));
-                            setStreamPreview({ parts });
-                        });
-                    },
-                    onTextPart: async (text, senderInfo, options) => {
-                        if (!isCurrentGeneration()) return;
-                        // æœ¬è½®ç¾¤èŠå†…å®¹ç» onTextPart è½åº“åé‡ç½®ï¼Œä¾›ä¸‹ä¸€è½®ï¼ˆå·¥å…·è½®ï¼‰é‡æ–°é¢„è§ˆ
-                        if (streamParseFrameRef.current) {
-                            cancelAnimationFrame(streamParseFrameRef.current);
-                            streamParseFrameRef.current = 0;
-                        }
-                        streamAccumRef.current = "";
-                        setStreamPreview(null);
-                        if (!text.trim() || !senderInfo) return;
-                        const cleanedEditableText = cleanEditableAssistantText(text);
-                        if (!cleanedEditableText) return;
-                        const roundReasoning = pendingGroupReasoning;
-                        pendingGroupReasoning = undefined;
-                        const responseBatchId = options?.responseBatchId || createResponseBatchId();
-                        const rawResponseText = options?.rawResponseText ?? text;
-                        const responseRoundId = senderInfo.responseRoundId || createResponseRoundId();
-                        const editableResponseText = senderInfo.editableResponseText || `[${senderInfo.characterName}]: ${cleanedEditableText}`;
-                        const previousState = getLatestCharacterStateValues(senderInfo.characterId);
-                        const { parts: rawParts, stateValues, freshStateValues, statusPanel, innerMonologue } = parseAIResponse(text, previousState);
-                        const parts = stripInvalidStickerParts(rawParts, senderInfo.characterId);
-                        let attachedState = false;
-                        let savedAnyPart = false;
-                        for (const part of parts) {
-                            throwIfGenerationStopped(generationGuard);
-                            if (!part.content.trim() && !part.mediaType) continue;
-                            const draft = buildAssistantMessageDraft(part, {
-                                sessionId: session.id,
-                                role: "assistant",
-                                content: part.content,
-                                mediaType: part.mediaType,
-                                mediaData: part.mediaData,
-                                responseBatchId,
-                                rawResponseText,
-                                responseRoundId,
-                                editableResponseText,
-                                statusPanel: !attachedState && statusPanel ? statusPanel : undefined,
-                                statusRegionMode: customStatusActive && !attachedState && statusPanel ? "custom" as const : undefined,
-                                innerMonologue: !attachedState && innerMonologue ? innerMonologue : undefined,
-                                reasoningText: !attachedState ? roundReasoning : undefined,
-                                stateValues: !attachedState && stateValues.length > 0 ? stateValues : undefined,
-                                freshStateValues: !attachedState ? freshStateValues : undefined,
-                                senderCharacterId: senderInfo.characterId,
-                                senderName: senderInfo.characterName,
-                            }, generationGuard);
-                            throwIfGenerationStopped(generationGuard);
-                            const msg = pushChatMessage(draft);
-                            streamedImageReplacementTasks.push(scheduleGeneratedImageReplacement(msg, senderInfo.characterId, generationGuard));
-                            attachedState = true;
-                            savedAnyPart = true;
-                            setMessages(prev => [...prev, msg]);
-                        }
-                        if (!savedAnyPart && (statusPanel || innerMonologue || roundReasoning)) {
-                            throwIfGenerationStopped(generationGuard);
-                            const msg = pushChatMessage({
-                                sessionId: session.id,
-                                role: "assistant",
-                                content: "",
-                                mediaType: undefined,
-                                responseBatchId,
-                                rawResponseText,
-                                responseRoundId,
-                                editableResponseText,
-                                statusPanel,
-                                statusRegionMode: customStatusActive && statusPanel ? "custom" as const : undefined,
-                                innerMonologue,
-                                reasoningText: roundReasoning,
-                                stateValues: stateValues.length > 0 ? stateValues : undefined,
-                                freshStateValues,
-                                senderCharacterId: senderInfo.characterId,
-                                senderName: senderInfo.characterName,
-                            });
-                            setMessages(prev => [...prev, msg]);
-                        }
-                    },
-                    onToolNotice: (notice) => {
-                        if (!isCurrentGeneration()) return;
-                        persistToolNotice(notice);
-                    },
-                    onToolResult: (content, options) => {
-                        if (!isCurrentGeneration()) return;
-                        pushChatMessage({
-                            sessionId: session.id,
-                            role: "tool",
-                            content,
-                            mediaType: "tool_result",
-                            toolExecutionId: options?.toolExecutionId,
-                        });
-                    },
-                    onToolAssistantTurn: (content, options) => {
-                        if (!isCurrentGeneration()) return;
-                        persistHiddenAssistantToolCall(content, options);
-                    },
-                    onToolExecution: (results, _historyContent, options) => {
-                        if (!isCurrentGeneration()) return;
-                        handleToolExecution(results, generationGuard, options?.toolExecutionId);
-                    },
-                    onNativeToolAssistantTurn: async ({ content, rawContent, reasoning, openRouterReasoningDetails, toolCalls }) => {
-                        if (!isCurrentGeneration()) return;
-                        const nameToId = new Map(groupCharacters.map(item => [item.name, item.id]));
-                        const visibleResults = parseGroupChatResponse(content, nameToId)
-                            .filter(item => item.responseText.trim());
-                        if (visibleResults.length > 0) {
-                            await processGroupParts(visibleResults, setMessages, generationGuard, reasoning, { instantReveal: isSessionStreamingEnabled(session, true) });
-                        }
-
-                        throwIfGenerationStopped(generationGuard);
-                        const firstActorName = typeof toolCalls[0]?.args?.actorName === "string"
-                            ? toolCalls[0].args.actorName.trim()
-                            : "";
-                        const firstActor = groupCharacters.find(item => item.name === firstActorName);
-                        pushChatMessage({
-                            sessionId: session.id,
-                            role: "assistant",
-                            content: "",
-                            rawResponseText: rawContent,
-                            nativeToolCalls: toolCalls,
-                            nativeToolReasoning: reasoning,
-                            nativeToolOpenRouterReasoningDetails: openRouterReasoningDetails,
-                            senderCharacterId: firstActor?.id,
-                            senderName: firstActorName || firstActor?.name,
-                        });
-                        trackNativeToolCalls(session.id, generationRunId, toolCalls.map(call => ({ id: call.id, name: call.name })));
-                    },
-                    onNativeToolResult: ({ toolCallId, name, content, toolExecutionId }) => {
-                        if (!isCurrentGeneration()) return;
-                        pushChatMessage({
-                            sessionId: session.id,
-                            role: "tool",
-                            content,
-                            mediaType: "tool_result",
-                            toolExecutionId,
-                            nativeToolResult: { toolCallId, name, content },
-                        });
-                        resolveNativeToolCall(session.id, generationRunId, toolCallId);
-                    },
-                }, {
-                    signal: generationRun.controller.signal,
-                    appTags: theaterMode ? ["group_chat"] : undefined,
-                });
-                if (!isCurrentGeneration()) return;
-                if (streamedImageReplacementTasks.length > 0) {
-                    await Promise.allSettled(streamedImageReplacementTasks);
-                    throwIfGenerationStopped(generationGuard);
-                }
-                await processGroupParts(results, setMessages, generationGuard, pendingGroupReasoning, { instantReveal: isSessionStreamingEnabled(session, true) });
-            } else {
-                let lastSendResult: Awaited<ReturnType<typeof splitAndSaveAIMessages>> | undefined;
-                // æ¯è½® LLM è°ƒç”¨çš„æ€ç»´é“¾ï¼ŒonReasoning å…ˆäºè¯¥è½® onTextPart è§¦å‘
-                let pendingReasoning: string | undefined;
-
-                const result = await generateChatCompletion(session, latestMessages, {
-                    appTags: theaterMode ? ["chat"] : ["chat", "text"],
-                    signal: generationRun.controller.signal,
-                }, {
-                    onReasoning: (t) => { pendingReasoning = t; },
-                    onStreamDelta: (delta) => {
-                        if (!isCurrentGeneration()) return;
-                        streamAccumRef.current += delta;
-                        // é¢„è§ˆæ›´æ–°åˆå¹¶åˆ° rAF ä¸‹ä¸€å¸§ï¼šæ¯å¸§æœ€å¤šä¸€æ¬¡å…¨æ–‡å‡€åŒ–+setStateï¼Œé¿å…é«˜é¢‘å¢é‡å¡é¡¿
-                        if (streamParseFrameRef.current) return;
-                        streamParseFrameRef.current = window.requestAnimationFrame(() => {
-                            streamParseFrameRef.current = 0;
-                            if (!isCurrentGeneration()) return;
-                            setStreamPreview({ texts: splitStreamPreviewSegments(cleanStreamText(streamAccumRef.current, { stripXmlTags: streamPreviewTagConfig.online, stripLiterals: streamPreviewTagConfig.stripTexts })) });
-                        });
-                    },
-                    onTextPart: async (text, _senderInfo, options) => {
-                        if (!isCurrentGeneration()) return;
-                        // æœ¬è½®æµå¼å·²ç»“æŸä¸”å†…å®¹ç» splitAndSaveAIMessages è½åº“ï¼šæ¸…æ‰é¢„è§ˆã€é‡ç½®ç´¯ç§¯ï¼Œ
-                        // ä¾›ä¸‹ä¸€è½®ï¼ˆå·¥å…·è½®ï¼‰é‡æ–°ç´¯ç§¯é¢„è§ˆ
-                        if (streamParseFrameRef.current) {
-                            cancelAnimationFrame(streamParseFrameRef.current);
-                            streamParseFrameRef.current = 0;
-                        }
-                        streamAccumRef.current = "";
-                        setStreamPreview(null);
-                        if (text.trim()) {
-                            const reasoningText = pendingReasoning;
-                            pendingReasoning = undefined;
-                            lastSendResult = await splitAndSaveAIMessages(text, { ...options, ...generationGuard, reasoningText, instantReveal: isSessionStreamingEnabled(session, true) });
-                        }
-                    },
-                    onToolNotice: (notice) => {
-                        if (!isCurrentGeneration()) return;
-                        persistToolNotice(notice);
-                    },
-                    onToolResult: (content, options) => {
-                        if (!isCurrentGeneration()) return;
-                        // Persist to history for future LLM context, hidden from UI
-                        persistHiddenToolResult(content, options?.toolExecutionId);
-                    },
-                    onToolAssistantTurn: (content, options) => {
-                        if (!isCurrentGeneration()) return;
-                        persistHiddenAssistantToolCall(content, options);
-                    },
-                    onNativeToolAssistantTurn: async ({ content, rawContent, reasoning, openRouterReasoningDetails, toolCalls }) => {
-                        if (!isCurrentGeneration()) return;
-                        // Publish the visible turn (text + stickers / images / red packets /
-                        // etc.) through the same splitter as normal replies, so rich media
-                        // isn't dropped and blank-line-separated text becomes separate
-                        // bubbles. The native tool-call metadata then rides on a separate
-                        // empty carrier message â€” mirroring the group-chat path above.
-                        if (content.trim()) {
-                            await splitAndSaveAIMessages(content, { ...generationGuard, reasoningText: reasoning, instantReveal: isSessionStreamingEnabled(session, true) });
-                        }
-                        if (!isCurrentGeneration()) return;
-                        const carrier = pushChatMessage({
-                            sessionId: session.id,
-                            role: "assistant",
-                            content: "",
-                            rawResponseText: rawContent,
-                            nativeToolCalls: toolCalls,
-                            nativeToolReasoning: reasoning,
-                            nativeToolOpenRouterReasoningDetails: openRouterReasoningDetails,
-                        });
-                        setMessages(prev => [...prev, carrier]);
-                        trackNativeToolCalls(session.id, generationRunId, toolCalls.map(call => ({ id: call.id, name: call.name })));
-                    },
-                    onNativeToolResult: ({ toolCallId, name, content, toolExecutionId }) => {
-                        if (!isCurrentGeneration()) return;
-                        const msg = pushChatMessage({
-                            sessionId: session.id,
-                            role: "tool",
-                            content,
-                            mediaType: "tool_result",
-                            toolExecutionId,
-                            nativeToolResult: { toolCallId, name, content },
-                        });
-                        setMessages(prev => [...prev, msg]);
-                        resolveNativeToolCall(session.id, generationRunId, toolCallId);
-                    },
-                    onToolExecution: (results, _historyContent, options) => {
-                        if (!isCurrentGeneration()) return;
-                        handleToolExecution(results, generationGuard, options?.toolExecutionId);
-                    },
-                });
-                if (!isCurrentGeneration()) return;
-
-                if (lastSendResult) {
-                    scheduleFollowUp(session.id, 0, lastSendResult.stateValues);
-                    const isHidden = !mountedRef.current || !isChatRoomElementVisible(wrapperRef.current);
-                    if (isHidden && lastSendResult.triggerCall) {
-                        window.dispatchEvent(new CustomEvent("ai-call-trigger", {
-                            detail: { sessionId: session.id, type: lastSendResult.triggerCall },
-                        }));
-                    } else {
-                        handleCallTrigger(lastSendResult.triggerCall);
-                    }
-                    shouldRunDeclineReply = Boolean(lastSendResult.hasDecline);
-                }
-            }
-        } catch (error: any) {
-            if (!isCurrentGeneration() || isAbortLikeError(error)) return;
-            const errorMsg = pushChatMessage({
-                sessionId: session.id,
-                role: "system",
-                content: `âš ï¸ å‘é€å¤±è´¥: ${error?.message || String(error)}`
-            });
-            setMessages(prev => [...prev, errorMsg]);
-        } finally {
-            if (finishGenerationRun(session.id, generationRunId)) {
-                isGeneratingRef.current = false;
-                setIsGenerating(false);
-                clearGenerationLock(session.id);
-                if (!mountedRef.current) {
-                    window.dispatchEvent(new CustomEvent(CHAT_BG_COMPLETE, { detail: { sessionId: session.id } }));
-                }
-                // If user sent more messages while AI was generating, show the generate button again
-                const latestMsgs = loadChatMessages(session.id);
-                const last = latestMsgs[latestMsgs.length - 1];
-                if (last && last.role === "user") {
-                    setPendingGenerate(true);
-                }
-            } else if (!activeGenerationRuns.has(session.id)) {
-                // æœ¬è½®è¢«å¤–éƒ¨å–æ¶ˆä¸”æ²¡æœ‰æ–°ä¸€è½®æ¥æ‰‹ï¼šä»éœ€å¤ä½ï¼Œå¦åˆ™ã€Œç”Ÿæˆä¸­ã€æ ‡è®°æ°¸ä¹…å¡æ­»ï¼Œ
-                // åç»­è”åŠ¨/è¿½é—®çš„å›å¤è¯·æ±‚ä¼šè¢«é™é»˜åæ‰
-                isGeneratingRef.current = false;
-                setIsGenerating(false);
-                clearGenerationLock(session.id);
-            }
-        }
-        if (shouldRunDeclineReply) await triggerReply();
-    };
-
-    // æ”¶èµ·é”®ç›˜ï¼ˆæˆ–å…³æ‰è¡¨æƒ…/åŠ å·é¢æ¿ï¼‰å¹¶å®‰é™ N ç§’åè‡ªåŠ¨è§¦å‘å›å¤ï¼Œ
-    // ç­‰ä»·äºæ›¿ç”¨æˆ·ç‚¹ä¸€æ¬¡ã€Œè§¦å‘å›å¤ã€ã€‚åˆ¤å®šå…¨åœ¨ hook å†…éƒ¨ï¼Œé…ç½®å…³æ‰åä¸æ‰‹åŠ¨æ¨¡å¼ä¸€è‡´ã€‚
-    useKeyboardDismissAutoSend(wrapperRef, {
-        active: !offlineMode && !isMultiSelectMode,
-        pending: pendingGenerate,
-        generating: isGenerating,
-        panelOpen: showEmojiPanel || showStickerPanel || showPlusMenu,
-        sessionId: session.id,
-        onTrigger: () => { void triggerAIResponse(); },
-    });
-
-    useEffect(() => {
-        const handleCustomAppReplyRequest = (event: Event) => {
-            const detail = (event as CustomEvent<{
-                sessionId?: string;
-                characterId?: string;
-                handled?: boolean;
-                busy?: boolean;
-            }>).detail;
-            const requestSessionId = typeof detail?.sessionId === "string" ? detail.sessionId : "";
-            const requestCharacterId = typeof detail?.characterId === "string" ? detail.characterId : "";
-            const matches = requestSessionId
-                ? requestSessionId === session.id
-                : Boolean(requestCharacterId && !session.isGroup && requestCharacterId === session.contactId);
-            if (!matches) return;
-
-            if (detail) detail.handled = true;
-            syncMessagesFromStorage();
-            // çœŸåœ¨ç”Ÿæˆä¸­ï¼šå¦‚å®å‘ŠçŸ¥è°ƒç”¨æ–¹ï¼ˆé¿å…è®°æˆã€Œå·²ç”Ÿæˆå›åº”ã€ï¼‰ï¼Œæœ¬è½®ç»“æŸå pendingGenerate å…œåº•
-            if (isGeneratingRef.current && activeGenerationRuns.has(session.id)) {
-                if (detail) detail.busy = true;
-                return;
-            }
-            void triggerAIResponse();
-        };
-
-        window.addEventListener(CHAT_REQUEST_REPLY_EVENT, handleCustomAppReplyRequest);
-        return () => window.removeEventListener(CHAT_REQUEST_REPLY_EVENT, handleCustomAppReplyRequest);
-    }, [session.contactId, session.id, session.isGroup, syncMessagesFromStorage, triggerAIResponse]);
-
-    // å›´è§‚ç¾¤/è¢«ç¦è¨€æ—¶ç”¨æˆ·ä¸èƒ½å‘è¨€
-    const ensureGroupSpeakPermission = (): boolean => {
-        if (!session.isGroup) return true;
-        if (session.isSpectator) {
-            showChatToast("å›´è§‚ç¾¤ä¸èƒ½å‘è¨€ï¼Œåªèƒ½ç‚¹ç”Ÿæˆ");
-            return false;
-        }
-        const muteMs = getGroupMuteRemainingMs(session, GROUP_SELF_KEY);
-        if (muteMs > 0) {
-            showChatToast(`ä½ å·²è¢«ç¦è¨€ï¼Œå‰©ä½™${formatMuteRemainingLabel(muteMs)}`);
-            return false;
-        }
-        return true;
-    };
-
-    const handleSendText = (text: string, options?: { autoReply?: boolean }): boolean => {
-        if (!ensureGroupSpeakPermission()) return false;
-        if (isGenerating) {
-            showChatToast("è¯·å…ˆç­‰å¾…å¯¹æ–¹å›å¤");
-            return false;
-        }
-        const trimmed = text.trim();
-        if (!trimmed) return false;
-
-        // Cancel any pending follow-up for this session
-        cancelFollowUp(session.id);
-
-        // If quoting a message, send as quote type
-        const isQuoting = !!quotingMessage;
-        const quoteData = quotingMessage ? {
-            quoteMessageId: quotingMessage.id,
-            quotePreview: quotingMessage.content.slice(0, 50),
-            quoteRole: quotingMessage.role,
-        } : undefined;
-        setQuotingMessage(null);
-
-        const commitSendText = (currentText: string) => {
-            // æ·éª°å­ï¼šæ•´æ¡æ¶ˆæ¯å°±æ˜¯éª°å­å›¾æ ‡æ—¶ï¼Œå‘éª°å­æ°”æ³¡ï¼ˆå†…å®¹ä»…å›¾æ ‡ï¼‰ï¼Œ
-            // ç‚¹æ•°ç”±ç³»ç»Ÿæ—ç™½å…¬å¸ƒâ€”â€”é¿å…ç»“æœæŒ‚åœ¨ user æ¶ˆæ¯ä¸Šè¢«è§’è‰²æ¨¡ä»¿æ ¼å¼
-            const diceOnly = !isQuoting && isDiceOnlyMessage(currentText);
-            const diceFace = diceOnly ? rollChatDiceFace() : 0;
-
-            const newMsg = pushChatMessage({
-                sessionId: session.id,
-                role: "user",
-                content: currentText,
-                mediaType: diceOnly ? "dice" : isQuoting ? "quote" : undefined,
-                mediaData: diceOnly ? { diceFace } : isQuoting ? quoteData : undefined,
-            });
-
-            setMessages(prev => [...prev, newMsg]);
-            if (diceOnly) {
-                const diceAside = pushChatMessage({
-                    sessionId: session.id,
-                    role: "system",
-                    content: formatChatDiceResultMessage(diceFace),
-                });
-                setMessages(prev => [...prev, diceAside]);
-            }
-            setPendingGenerate(true);
-            // æŒ‰å›å¤é”®å‘é€ï¼šæ¶ˆæ¯è½åº“åç«‹å³è§¦å‘æ¨¡å‹å›å¤ï¼ˆæ— è®ºæ’ä»¶æ˜¯å¦å¼‚æ­¥æ”¹å†™ï¼Œ
-            // éƒ½åœ¨æ¶ˆæ¯çœŸæ­£å†™å…¥åè§¦å‘ï¼Œé¿å…å›å¤åŸºäºæ—§ä¸Šä¸‹æ–‡ï¼‰
-            if (options?.autoReply) void triggerAIResponse();
-        };
-
-        // èŠå¤©æ’ä»¶ç»‡å…¥ç‚¹ user.beforeSendï¼šæ— æ’ä»¶æ—¶èµ°åŸåŒæ­¥è·¯å¾„ï¼Œ
-        // æœ‰æ’ä»¶æ—¶è¾“å…¥æ¡†å…ˆæ¸…ç©ºï¼Œæ”¹å†™/å–æ¶ˆåœ¨å¼‚æ­¥ç»­ä½“é‡Œå®Œæˆ
-        if (getChatPluginHookBus().hasHandlers("user.beforeSend")) {
-            void runChatPluginTransform("user.beforeSend", {
-                text: trimmed,
-                sessionId: session.id,
-                isGroup: !!session.isGroup,
-                cancelled: false,
-            }).then(payload => {
-                if (payload.cancelled) return;
-                const finalText = typeof payload.text === "string" ? payload.text.trim() : trimmed;
-                if (finalText) commitSendText(finalText);
-            });
-        } else {
-            commitSendText(trimmed);
-        }
-        return true;
-    };
-
-    // çº¿ä¸‹ XML æ„é€ ä¸æç¤ºè¯æŸ¥çœ‹å™¨å…±ç”¨ lib/offline-prompt-builderï¼ˆç¤¾åŒº #108ï¼‰ï¼Œ
-    // ä¿è¯ã€Œé¢„è§ˆ = çœŸå®å‘å‡ºçš„æç¤ºè¯ã€ï¼›æ­¤å¤„ä»…åŒ…ä¸€å±‚ç¨³å®šå¼•ç”¨ã€‚
-    // è‡ªå®šä¹‰çŠ¶æ€æ ï¼šcustom ç”Ÿæ•ˆæ—¶æ–°æ¶ˆæ¯ç›–æˆ³ï¼ŒæŠ˜å åŒºæ”¹èµ°ç”¨æˆ·æ¸²æŸ“ä»£ç ï¼›æ—§æ¶ˆæ¯æŒ‰åŸç”Ÿæ¸²æŸ“
-    const statusRegionCfg = getStatusRegionConfig(session.id);
-    const customStatusActive = isCustomStatusRegionActive(statusRegionCfg);
-
-    const formatOfflineTurnXml = useCallback((turn: ChatOfflineTurn): string => formatOfflineTurnXmlShared(turn), []);
-
-    const buildOfflinePromptHistory = (turns: ChatOfflineTurn[], pendingUserContent: string): ChatMessage[] =>
-        buildOfflinePromptHistoryShared(session, turns, pendingUserContent);
-    const getOfflineCopyText = (turn: ChatOfflineTurn, role: OfflineActionTarget["role"]): string => {
-        if (role === "user") return turn.userContent;
-        return formatOfflineTurnXml(turn);
-    };
-
-    const getOfflineDisplayText = useCallback((turn: ChatOfflineTurn) => {
-        const rawSource = formatOfflineTurnXml(turn);
-        const rawDisplay = renderDisplayText(rawSource, 2, true);
-        const parsed = rawDisplay !== rawSource
-            ? parseOfflineResponse(rawDisplay, turn.summaryTag || "summary")
-            : null;
-        const hasParsedDisplay = Boolean(parsed?.content.trim() || parsed?.summary.trim());
-        return {
-            userContent: renderDisplayText(turn.userContent, 1, true),
-            assistantContent: hasParsedDisplay
-                ? (parsed!.content.trim() || renderDisplayText(turn.assistantContent, 2, true))
-                : renderDisplayText(turn.assistantContent, 2, true),
-            summary: hasParsedDisplay
-                ? (parsed!.summary.trim() || renderDisplayText(turn.summary, 2, true))
-                : renderDisplayText(turn.summary, 2, true),
-        };
-    }, [formatOfflineTurnXml, renderDisplayText]);
-
-    const visibleOfflineTurns = useMemo(() => {
-        return offlineTurns.slice(-offlineVisibleCount);
-    }, [offlineTurns, offlineVisibleCount]);
-
-    const hasMoreOfflineTurns = visibleOfflineTurns.length < offlineTurns.length;
-
-    const offlineDisplayByTurnId = useMemo(() => {
-        const map = new Map<string, ReturnType<typeof getOfflineDisplayText>>();
-        for (const turn of visibleOfflineTurns) {
-            map.set(turn.id, getOfflineDisplayText(turn));
-        }
-        return map;
-    }, [getOfflineDisplayText, visibleOfflineTurns]);
-
-    const loadMoreOfflineTurns = useCallback(() => {
-        if (!hasMoreOfflineTurns) return;
-        const el = scrollRef.current;
-        if (el) {
-            offlineLoadMoreRestoreRef.current = {
-                scrollHeight: el.scrollHeight,
-                scrollTop: el.scrollTop,
-            };
-        }
-        setOfflineVisibleCount(count => Math.min(count + OFFLINE_LOAD_MORE_COUNT, offlineTurns.length));
-    }, [hasMoreOfflineTurns, offlineTurns.length]);
-
-    useLayoutEffect(() => {
-        const restore = offlineLoadMoreRestoreRef.current;
-        const el = scrollRef.current;
-        if (!restore || !el) return;
-        el.scrollTop = restore.scrollTop + (el.scrollHeight - restore.scrollHeight);
-        offlineLoadMoreRestoreRef.current = null;
-    }, [visibleOfflineTurns.length]);
-
-    const handleOfflinePointerDown = (e: React.PointerEvent, target: OfflineActionTarget) => {
-        if (e.pointerType === "mouse" && e.button !== 0) return;
-        e.preventDefault();
-        const anchor = { x: e.clientX, y: e.clientY };
-        startPosRef.current = anchor;
-        longPressTriggeredRef.current = false;
-        if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
-        longPressTimerRef.current = setTimeout(() => {
-            longPressTriggeredRef.current = true;
-            openOfflineContextMenu(target, anchor);
-            longPressTimerRef.current = null;
-        }, 500);
-    };
-
-    const handleOfflineEditStart = (turn: ChatOfflineTurn, role: OfflineActionTarget["role"]) => {
-        setActiveOfflineTarget(null);
-        setEditingOfflineTarget({ turnId: turn.id, role });
-        setEditingOfflineContent(role === "user" ? turn.userContent : formatOfflineTurnXml(turn));
-    };
-
-    const toggleOfflineMode = () => {
-        if (!offlineMode && isGenerating) {
-            showChatToast("è¯·å…ˆç­‰å¾…å¯¹æ–¹å›å¤");
-            return;
-        }
-        if (offlineMode && isOfflineGenerating) {
-            showChatToast("çº¿ä¸‹å›å¤ç”Ÿæˆä¸­");
-            return;
-        }
-        cancelFollowUp(session.id);
-        setShowPlusMenu(false);
-        setShowEmojiPanel(false);
-        setShowStickerPanel(false);
-        setRichModal(null);
-        setQuotingMessage(null);
-        setActiveOfflineTarget(null);
-        setOfflineTurns(loadChatOfflineTurns(session.id));
-        setOfflineVisibleCount(OFFLINE_INITIAL_LOAD);
-        setOfflineMode(prev => {
-            const next = !prev;
-            kvSet(CHAT_OFFLINE_MODE_PREFIX + session.id, next ? "1" : "0");
-            return next;
-        });
-    };
-
-    const toggleTheaterMode = () => {
-        setShowPlusMenu(false);
-        setShowEmojiPanel(false);
-        setShowStickerPanel(false);
-        setTheaterMode(prev => {
-            const next = !prev;
-            if (next) kvSet(CHAT_THEATER_MODE_PREFIX + session.id, "1");
-            else kvRemove(CHAT_THEATER_MODE_PREFIX + session.id);
-            return next;
-        });
-    };
-
-    const closeTheaterMode = () => {
-        kvRemove(CHAT_THEATER_MODE_PREFIX + session.id);
-        setTheaterMode(false);
-    };
-
-    const handleOfflineSend = (inputText: string): boolean => {
-        if (isOfflineGenerating) {
-            showChatToast("çº¿ä¸‹å›å¤ç”Ÿæˆä¸­");
-            return false;
-        }
-        const currentText = inputText.trim();
-        if (!currentText && !(session.isGroup && session.isSpectator)) return false;
-
-        cancelFollowUp(session.id);
-        setShowPlusMenu(false);
-        setShowEmojiPanel(false);
-        setShowStickerPanel(false);
-        setRichModal(null);
-        setPendingOfflineUserText(currentText);
-        offlineGenerationInputRef.current = currentText;
-        setIsOfflineGenerating(true);
-        offlineStreamAccumRef.current = "";
-        setOfflineStreamPreview(null);
-        const offlineRun = createOfflineGenerationRun(session.id);
-        const offlineRunId = offlineRun.runId;
-        const isCurrentOfflineRun = () => isOfflineGenerationRunActive(session.id, offlineRunId);
-
-        void (async () => {
-            try {
-                const history = buildOfflinePromptHistory(offlineTurns, currentText);
-                const onOfflineDelta = (delta: string) => {
-                    if (!isCurrentOfflineRun()) return;
-                    offlineStreamAccumRef.current += delta;
-                    // çº¿ä¸‹é¢„è§ˆè§£æåˆå¹¶åˆ° rAF ä¸‹ä¸€å¸§ï¼šæ¯å¸§æœ€å¤šä¸€æ¬¡å…¨æ–‡è§£æ+setState
-                    if (offlineStreamFrameRef.current) return;
-                    offlineStreamFrameRef.current = window.requestAnimationFrame(() => {
-                        offlineStreamFrameRef.current = 0;
-                        if (!isCurrentOfflineRun()) return;
-                        // ä¸å¼•æ“é¡ºåºä¸€è‡´ï¼šå…ˆæŒ‰é¢„è®¾ strip_texts æ¸…æ´—åŸæ–‡ï¼Œå†è§£æï¼ˆé¿å…å‰”é™¤æ–‡æœ¬å½±å“ XML ç»“æ„æ—¶é¢„è§ˆä¸æœ€ç»ˆç»“æœä¸ä¸€è‡´ï¼‰
-                        const previewRaw = stripLiteralTexts(offlineStreamAccumRef.current, streamPreviewTagConfig.stripTexts);
-                        const parsed = parseOfflineResponse(previewRaw, streamPreviewTagConfig.summaryTag);
-                        // æµå¼ç¢ç‰‡é˜¶æ®µ XML æ ‡ç­¾å¯èƒ½æœªé—­åˆï¼šcontent æå–ä¸åˆ°æ—¶ï¼Œå‰¥æ‰å¼€æ ‡ç­¾æ®‹ç‰‡ç›´æ¥æ˜¾ç¤ºåŸæ–‡ï¼›
-                        // æ€ç»´é“¾/è‡ªå®šä¹‰æ‘˜è¦æ ‡ç­¾æŒ‰å½“å‰é¢„è®¾æ•´å—éšè—ï¼Œé¿å…ç”Ÿæˆè¿‡ç¨‹ä¸­é—ªç°ï¼ˆä¸å¼•æ“æœ€ç»ˆæ¸…æ´—åŒæºï¼‰
-                        const previewContent = (parsed.content
-                            ? stripXmlTagBlocks(parsed.content, [streamPreviewTagConfig.summaryTag, ...streamPreviewTagConfig.offlineThinking])
-                            : stripXmlTagBlocks(previewRaw, [streamPreviewTagConfig.summaryTag, ...streamPreviewTagConfig.offlineThinking])
-                                .replace(/<\/?(?:content|summary|thinking|thought|think)>/gi, "")
-                                .replace(/<[^>]+>/g, "")
-                        ).trim();
-                        setOfflineStreamPreview({ content: previewContent, summary: parsed.summary });
-                    });
-                };
-                const result = session.isGroup
-                    ? await generateGroupOfflineChatCompletion(session, history, { signal: offlineRun.controller.signal, onStreamDelta: onOfflineDelta })
-                    : await generateOfflineChatCompletion(session, history, { signal: offlineRun.controller.signal, onStreamDelta: onOfflineDelta });
-                if (!isCurrentOfflineRun()) return;
-                const assistantContent = result.content.trim() || result.rawText.trim();
-                if (!assistantContent) throw new Error("AI æ²¡æœ‰è¿”å›çº¿ä¸‹æ­£æ–‡");
-                if (!result.summary.trim()) showChatToast(`æœªæå–åˆ° <${result.summaryTag}> æ‘˜è¦`);
-                const saved = appendChatOfflineTurn({
-                    sessionId: session.id,
-                    userContent: currentText,
-                    assistantContent,
-                    summary: result.summary.trim(),
-                    summaryTag: result.summaryTag,
-                    rawText: result.rawText,
-                    reasoningText: result.reasoning,
-                    thinkingText: result.thinking,
-                    thinkingTag: result.thinkingTag,
-                });
-                setOfflineTurns(prev => [...prev, saved]);
-            } catch (error: any) {
-                if (!isCurrentOfflineRun() || isAbortLikeError(error)) return;
-                offlineTextInputRef.current?.setText(currentText);
-                showChatToast(`çº¿ä¸‹ç”Ÿæˆå¤±è´¥: ${error?.message || String(error)}`, 3000);
-            } finally {
-                if (!finishOfflineGenerationRun(session.id, offlineRunId)) return;
-                setPendingOfflineUserText("");
-                offlineGenerationInputRef.current = "";
-                setIsOfflineGenerating(false);
-                offlineStreamAccumRef.current = "";
-                setOfflineStreamPreview(null);
-            }
-        })();
-        return true;
-    };
-
-    const handleOfflineEditSave = () => {
-        if (!editingOfflineTarget) return;
-        const content = editingOfflineContent.trim();
-        const turn = offlineTurns.find(item => item.id === editingOfflineTarget.turnId);
-        if (!turn) {
-            setEditingOfflineTarget(null);
-            setEditingOfflineContent("");
-            return;
-        }
-        if (!content) {
-            showChatToast("ç¼–è¾‘å†…å®¹ä¸èƒ½ä¸ºç©º");
-            return;
-        }
-
-        if (editingOfflineTarget.role === "user") {
-            const nextContent = applyEditTextRegex(content, 1, true);
-            const updated = updateChatOfflineTurn(session.id, turn.id, { userContent: nextContent });
-            if (updated) setOfflineTurns(prev => prev.map(item => item.id === updated.id ? updated : item));
-            setEditingOfflineTarget(null);
-            setEditingOfflineContent("");
-            return;
-        }
-
-        const nextContent = applyEditTextRegex(content, 2, true);
-        const parsed = parseOfflineResponse(nextContent, turn.summaryTag || "summary");
-        const assistantContent = parsed.content.trim() || parsed.rawText.trim();
-        if (!assistantContent) {
-            showChatToast("æ²¡æœ‰è§£æåˆ°çº¿ä¸‹æ­£æ–‡");
-            return;
-        }
-        if (!parsed.summary.trim()) showChatToast(`æœªæå–åˆ° <${parsed.summaryTag}> æ‘˜è¦`);
-        // æ€ç»´é“¾ï¼šparseOfflineResponse å·²å›å½’å®˜æ–¹ä¸¤å‚æ•°ï¼ˆä¸å†æå– thinkingï¼‰ã€‚
-        // è‹¥è¯¥æ¡åŸæœ¬å¸¦æ ‡ç­¾æ€ç»´é“¾ï¼ˆé¢„è®¾å¼€å¯çº¿ä¸‹æ ‡ç­¾è§£æï¼‰ï¼ŒæŒ‰åŸæ ‡ç­¾ä»ç¼–è¾‘åçš„æ­£æ–‡é‡æ–°æå–ï¼Œå¦åˆ™ä¿æŒæ— ã€‚
-        const editedThinking = turn.thinkingText !== undefined
-            ? (extractThinkingTag(nextContent, turn.thinkingTag) || undefined)
-            : undefined;
-        const updated = updateChatOfflineTurn(session.id, turn.id, {
-            assistantContent,
-            summary: parsed.summary.trim(),
-            summaryTag: parsed.summaryTag,
-            rawText: parsed.rawText,
-            thinkingText: editedThinking,
-            thinkingTag: editedThinking !== undefined ? turn.thinkingTag : undefined,
-        });
-        if (updated) setOfflineTurns(prev => prev.map(item => item.id === updated.id ? updated : item));
-        setEditingOfflineTarget(null);
-        setEditingOfflineContent("");
-    };
-
-    const handleOfflineDeleteTurn = (turnId: string) => {
-        setOfflineTurns(deleteChatOfflineTurn(session.id, turnId));
-        setActiveOfflineTarget(null);
-    };
-
-    const handleOfflineDeleteTurnsFrom = (turnId: string) => {
-        setOfflineTurns(deleteChatOfflineTurnsFrom(session.id, turnId));
-        setActiveOfflineTarget(null);
-    };
-
-    const handleOfflineRetryFrom = async (turnId: string) => {
-        if (isOfflineGenerating) {
-            showChatToast("çº¿ä¸‹å›å¤ç”Ÿæˆä¸­");
-            return;
-        }
-        const idx = offlineTurns.findIndex(turn => turn.id === turnId);
-        if (idx < 0) return;
-        const targetTurn = offlineTurns[idx];
-        const baseTurns = offlineTurns.slice(0, idx);
-        const retryInput = targetTurn.userContent.trim();
-        if (!retryInput) {
-            showChatToast("è¿™ä¸€è½®æ²¡æœ‰å¯é‡è¯•çš„ç”¨æˆ·è¾“å…¥");
-            return;
-        }
-
-        cancelFollowUp(session.id);
-        setActiveOfflineTarget(null);
-        setShowPlusMenu(false);
-        setShowEmojiPanel(false);
-        setShowStickerPanel(false);
-        setRichModal(null);
-        saveChatOfflineTurns(session.id, baseTurns);
-        setOfflineTurns(baseTurns);
-        setPendingOfflineUserText(retryInput);
-        offlineGenerationInputRef.current = retryInput;
-        setIsOfflineGenerating(true);
-        offlineStreamAccumRef.current = "";
-        setOfflineStreamPreview(null);
-        const offlineRun = createOfflineGenerationRun(session.id);
-        const offlineRunId = offlineRun.runId;
-        const isCurrentOfflineRun = () => isOfflineGenerationRunActive(session.id, offlineRunId);
-
-        try {
-            const history = buildOfflinePromptHistory(baseTurns, retryInput);
-            const onOfflineDelta = (delta: string) => {
-                if (!isCurrentOfflineRun()) return;
-                offlineStreamAccumRef.current += delta;
-                // çº¿ä¸‹é¢„è§ˆè§£æåˆå¹¶åˆ° rAF ä¸‹ä¸€å¸§ï¼šæ¯å¸§æœ€å¤šä¸€æ¬¡å…¨æ–‡è§£æ+setStateï¼ˆä¸é¦–æ¬¡å‘é€è·¯å¾„å¯¹é½ï¼‰
-                if (offlineStreamFrameRef.current) return;
-                offlineStreamFrameRef.current = window.requestAnimationFrame(() => {
-                    offlineStreamFrameRef.current = 0;
-                    if (!isCurrentOfflineRun()) return;
-                    // ä¸å¼•æ“é¡ºåºä¸€è‡´ï¼šå…ˆæŒ‰é¢„è®¾ strip_texts æ¸…æ´—åŸæ–‡ï¼Œå†è§£æï¼ˆé¿å…å‰”é™¤æ–‡æœ¬å½±å“ XML ç»“æ„æ—¶é¢„è§ˆä¸æœ€ç»ˆç»“æœä¸ä¸€è‡´ï¼‰
-                    const previewRaw = stripLiteralTexts(offlineStreamAccumRef.current, streamPreviewTagConfig.stripTexts);
-                    const parsed = parseOfflineResponse(previewRaw, streamPreviewTagConfig.summaryTag);
-                    // æµå¼ç¢ç‰‡é˜¶æ®µ XML æ ‡ç­¾å¯èƒ½æœªé—­åˆï¼šcontent æå–ä¸åˆ°æ—¶ï¼Œå‰¥æ‰å¼€æ ‡ç­¾æ®‹ç‰‡ç›´æ¥æ˜¾ç¤ºåŸæ–‡ï¼›
-                    // æ€ç»´é“¾/è‡ªå®šä¹‰æ‘˜è¦æ ‡ç­¾æŒ‰å½“å‰é¢„è®¾æ•´å—éšè—ï¼Œé¿å…ç”Ÿæˆè¿‡ç¨‹ä¸­é—ªç°ï¼ˆä¸å¼•æ“æœ€ç»ˆæ¸…æ´—åŒæºï¼‰
-                    const previewContent = (parsed.content
-                        ? stripXmlTagBlocks(parsed.content, [streamPreviewTagConfig.summaryTag, ...streamPreviewTagConfig.offlineThinking])
-                        : stripXmlTagBlocks(previewRaw, [streamPreviewTagConfig.summaryTag, ...streamPreviewTagConfig.offlineThinking])
-                            .replace(/<\/?(?:content|summary|thinking|thought|think)>/gi, "")
-                            .replace(/<[^>]+>/g, "")
-                    ).trim();
-                    setOfflineStreamPreview({ content: previewContent, summary: parsed.summary });
-                });
-            };
-            const result = session.isGroup
-                ? await generateGroupOfflineChatCompletion(session, history, { signal: offlineRun.controller.signal, onStreamDelta: onOfflineDelta })
-                : await generateOfflineChatCompletion(session, history, { signal: offlineRun.controller.signal, onStreamDelta: onOfflineDelta });
-            if (!isCurrentOfflineRun()) return;
-            const assistantContent = result.content.trim() || result.rawText.trim();
-            if (!assistantContent) throw new Error("AI æ²¡æœ‰è¿”å›çº¿ä¸‹æ­£æ–‡");
-            if (!result.summary.trim()) showChatToast(`æœªæå–åˆ° <${result.summaryTag}> æ‘˜è¦`);
-            const saved = appendChatOfflineTurn({
-                sessionId: session.id,
-                userContent: retryInput,
-                assistantContent,
-                summary: result.summary.trim(),
-                summaryTag: result.summaryTag,
-                rawText: result.rawText,
-                reasoningText: result.reasoning,
-                thinkingText: result.thinking,
-                thinkingTag: result.thinkingTag,
-            });
-            setOfflineTurns([...baseTurns, saved]);
-        } catch (error: any) {
-            if (!isCurrentOfflineRun() || isAbortLikeError(error)) return;
-            offlineTextInputRef.current?.setText(retryInput);
-            showChatToast(`çº¿ä¸‹é‡è¯•å¤±è´¥: ${error?.message || String(error)}`, 3000);
-        } finally {
-            if (!finishOfflineGenerationRun(session.id, offlineRunId)) return;
-            setPendingOfflineUserText("");
-            offlineGenerationInputRef.current = "";
-            setIsOfflineGenerating(false);
-            offlineStreamAccumRef.current = "";
-            setOfflineStreamPreview(null);
-        }
-    };
-
-    const handleRetry = async (msgId: string) => {
-        const msgIndex = messages.findIndex(m => m.id === msgId);
-        if (msgIndex === -1 || messages[msgIndex].role !== "assistant") return;
-
-        const contextMessages = messages.slice(0, msgIndex);
-
-        // Delete this message and everything after it
-        deleteChatMessagesFrom(msgId);
-        setMessages(prev => prev.slice(0, msgIndex));
-        setActiveMessageId(null);
-
-        // Cancel any pending follow-up for this session
-        cancelFollowUp(session.id);
-
-        await runManagedGeneration({
-            history: contextMessages,
-            errorPrefix: "é‡è¯•å¤±è´¥",
-            onDecline: triggerReply,
-        });
-    };
-
-    const handleRetractMessage = (msgId: string) => {
-        retractChatMessage(msgId);
-        setMessages(prev => prev.map(m => m.id === msgId ? { ...m, isRetracted: true } : m));
-        setActiveMessageId(null);
-    };
-
-    const handleEditMessageStart = (msg: ChatMessage) => {
-        setEditingResponseBatchId(null);
-        setEditingResponseRoundId(null);
-        setEditingResponseContent("");
-        setEditingMessageId(msg.id);
-        // è¯­éŸ³æ¡çš„æ–‡å­—å­˜åœ¨ mediaData.label é‡Œï¼Œcontent æ˜¯ç©ºçš„
-        setEditingContent(msg.mediaType === "audio" ? (msg.mediaData?.label || msg.content) : msg.content);
-        setActiveMessageId(null);
-    };
-
-    const handleEditMessageSave = () => {
-        if (!editingMessageId || !editingContent.trim()) {
-            setEditingMessageId(null);
-            setEditingContent("");
-            return;
-        }
-
-        const originalMessage = messages.find(m => m.id === editingMessageId) || loadChatMessages(session.id).find(m => m.id === editingMessageId);
-        const isEditingSystemInstruction = originalMessage ? isSystemInstructionMessage(originalMessage) : false;
-        const placement = originalMessage?.role === "user" ? 1 : 2;
-        const nextContent = isEditingSystemInstruction
-            ? editingContent.trim()
-            : applyEditTextRegex(editingContent.trim(), placement, false);
-        if (originalMessage?.mediaType === "audio") {
-            // è¯­éŸ³æ¡çš„æ˜¾ç¤ºæ–‡å­—å’Œ AI ä¸Šä¸‹æ–‡éƒ½è¯» mediaData.labelï¼Œæ”¹ content ä¸ç”Ÿæ•ˆï¼›
-            // synthesizedFromText ä¿ç•™æ—§å€¼ï¼ŒAI è¯­éŸ³ä¼šå› æ–‡å­—ä¸ä¸€è‡´è‡ªåŠ¨é‡æ–°åˆæˆ
-            const nextMediaData = { ...originalMessage.mediaData, label: nextContent };
-            updateMessageMediaData(editingMessageId, nextMediaData);
-            setMessages(prev => prev.map(m => m.id === editingMessageId ? { ...m, mediaData: nextMediaData } : m));
-        } else {
-            editChatMessage(editingMessageId, nextContent);
-            setMessages(prev => prev.map(m => m.id === editingMessageId ? { ...m, content: nextContent } : m));
-        }
-        setEditingMessageId(null);
-        setEditingContent("");
-        const ta = document.querySelector<HTMLTextAreaElement>(".chat-input-textarea");
-        if (ta) ta.style.height = "auto";
-    };
-
-    const normalizeEditedAssistantParts = (
-        parts: ReturnType<typeof parseAIResponse>["parts"],
-        senderNameOverride?: string,
-        options?: { omitHandledFinancialActions?: boolean },
-    ) => {
-        return parts.flatMap(part => {
-            if (part.mediaType === "music") {
-                const title = part.mediaData?.musicTitle || part.mediaData?.label || "æœªçŸ¥æ­Œæ›²";
-                const artist = part.mediaData?.musicArtist ? `-${part.mediaData.musicArtist}` : "";
-                return [{ content: `[éŸ³ä¹:${title}${artist}]` }];
-            }
-            if (part.mediaType === "voice_call") {
-                return [{ content: "[æˆ‘å‘èµ·äº†è¯­éŸ³é€šè¯]" }];
-            }
-            if (part.mediaType === "video_call") {
-                return [{ content: "[æˆ‘å‘èµ·äº†è§†é¢‘é€šè¯]" }];
-            }
-            if (
-                options?.omitHandledFinancialActions &&
-                (
-                    part.mediaType === "accept_red_packet" ||
-                    part.mediaType === "decline_red_packet" ||
-                    part.mediaType === "accept_transfer" ||
-                    part.mediaType === "decline_transfer" ||
-                    part.mediaType === "accept_payment_request" ||
-                    part.mediaType === "decline_payment_request"
-                )
-            ) {
-                return [];
-            }
-            if (part.mediaType === "accept_red_packet") {
-                return [{ content: "[é¢†å–çº¢åŒ…]" }];
-            }
-            if (part.mediaType === "decline_red_packet") {
-                return [{ content: "[æ‹’æ”¶çº¢åŒ…]" }];
-            }
-            if (part.mediaType === "accept_transfer") {
-                return [{ content: "[é¢†å–è½¬è´¦]" }];
-            }
-            if (part.mediaType === "decline_transfer") {
-                return [{ content: "[æ‹’æ”¶è½¬è´¦]" }];
-            }
-            if (part.mediaType === "accept_payment_request") {
-                return [{ content: "[æ¥å—ä»£ä»˜]" }];
-            }
-            if (part.mediaType === "decline_payment_request") {
-                return [{ content: "[æ‹’ç»ä»£ä»˜]" }];
-            }
-            if (part.mediaType === "poke") {
-                const sender = (part.mediaData?.pokeSender === "æˆ‘" ? senderNameOverride : part.mediaData?.pokeSender)
-                    || senderNameOverride
-                    || (character?.name || "å¯¹æ–¹");
-                const target = part.mediaData?.pokeTarget || (userIdentity?.name || "ä½ ");
-                return [{
-                    content: `${sender} æ‹äº†æ‹ ${target}`,
-                    mediaType: "poke" as const,
-                    mediaData: { pokeSender: sender, pokeTarget: target },
-                }];
-            }
-            return [part];
-        }).filter(part => part.mediaType || part.content.trim());
-    };
-
-    const handleEditResponseStart = (msg: ChatMessage) => {
-        if (session.isGroup && msg.responseRoundId && msg.editableResponseText) {
-            setEditingMessageId(null);
-            setEditingContent("");
-            setEditingResponseBatchId(null);
-            setEditingResponseRoundId(msg.responseRoundId);
-            setEditingResponseContent(msg.editableResponseText);
-            setActiveMessageId(null);
-            return;
-        }
-        if (!msg.responseBatchId || !msg.rawResponseText) {
-            handleEditMessageStart(msg);
-            return;
-        }
-        setEditingMessageId(null);
-        setEditingContent("");
-        setEditingResponseBatchId(msg.responseBatchId);
-        setEditingResponseRoundId(null);
-        setEditingResponseContent(msg.rawResponseText);
-        setActiveMessageId(null);
-    };
-
-    const handleEditResponseSave = () => {
-        if (!editingResponseContent.trim()) {
-            setEditingResponseBatchId(null);
-            setEditingResponseRoundId(null);
-            setEditingResponseContent("");
-            return;
-        }
-
-        const editedResponseContent = applyEditTextRegex(editingResponseContent.trim(), 2, false);
-
-        if (session.isGroup && editingResponseRoundId) {
-            const storedMessages = loadChatMessages(session.id);
-            const roundMessages = storedMessages.filter(msg => msg.responseRoundId === editingResponseRoundId);
-            if (roundMessages.length === 0) {
-                showChatToast("æ²¡æœ‰æ‰¾åˆ°è¿™è½®ç¾¤èŠå›å¤");
-                setEditingResponseRoundId(null);
-                setEditingResponseContent("");
-                return;
-            }
-
-            const firstRoundIndex = storedMessages.findIndex(msg => msg.id === roundMessages[0].id);
-            const stateCutoff = storedMessages[firstRoundIndex];
-
-            const nameToId = new Map<string, string>();
-            groupCharacters.forEach((groupCharacter) => {
-                nameToId.set(groupCharacter.name, groupCharacter.id);
-            });
-            if (!hasKnownGroupSenderPrefix(editedResponseContent)) {
-                showChatToast("ç¾¤èŠç¼–è¾‘å†…å®¹éœ€è¦ä¿ç•™ [è§’è‰²å]: å‰ç¼€");
-                return;
-            }
-            const segments = parseGroupChatResponse(editedResponseContent, nameToId);
-            if (segments.length === 0) {
-                showChatToast("æ²¡æœ‰è¯†åˆ«åˆ°å¯ç¼–è¾‘çš„ç¾¤èŠæˆå‘˜å‰ç¼€");
-                return;
-            }
-
-            const replacementMessages: Array<{
-                content: string;
-                mediaType?: ChatMessage["mediaType"];
-                mediaData?: ChatMessage["mediaData"];
-                rawResponseText?: string;
-                responseBatchId?: string;
-                statusPanel?: string;
-                statusRegionMode?: "custom";
-                innerMonologue?: string;
-                stateValues?: StateValue[];
-                freshStateValues?: StateValue[];
-                senderCharacterId?: string;
-                senderName?: string;
-            }> = [];
-
-            const currentStateByCharacter = new Map<string, StateValue[]>();
-            const getCurrentStateForCharacter = (characterId: string): StateValue[] => {
-                const cached = currentStateByCharacter.get(characterId);
-                if (cached) return cached;
-                const latest = getLatestCharacterStateValues(characterId, stateCutoff ? { before: stateCutoff } : undefined);
-                currentStateByCharacter.set(characterId, latest);
-                return latest;
-            };
-            for (const segment of segments) {
-                const responseBatchId = createResponseBatchId();
-                const { parts: rawParts, stateValues, freshStateValues, statusPanel, innerMonologue } = parseAIResponse(segment.responseText, getCurrentStateForCharacter(segment.characterId));
-                const parts = stripInvalidStickerParts(rawParts, segment.characterId);
-                const normalizedParts = normalizeEditedAssistantParts(parts, segment.characterName, {
-                    omitHandledFinancialActions: true,
-                });
-                let attachedState = false;
-                for (const part of normalizedParts) {
-                    if (!part.content.trim() && !part.mediaType && (!(statusPanel || innerMonologue) || attachedState)) continue;
-                    // é¢æ¿åªæŒ‚åˆ°èƒ½æ˜¾ç¤ºå®ƒçš„æ­£å¸¸æ°”æ³¡ä¸Šï¼ˆæ‹ä¸€æ‹/é€šè¯ç•™ç—•æ˜¯ç³»ç»Ÿå°å­—ï¼‰
-                    const attachHere = !attachedState && canCarryFoldedPanel(part);
-                    replacementMessages.push({
-                        content: part.content,
-                        mediaType: part.mediaType,
-                        mediaData: part.mediaData,
-                        rawResponseText: segment.responseText,
-                        responseBatchId,
-                        statusPanel: attachHere && statusPanel ? statusPanel : undefined,
-                        statusRegionMode: customStatusActive && attachHere && statusPanel ? "custom" as const : undefined,
-                        innerMonologue: attachHere && innerMonologue ? innerMonologue : undefined,
-                        stateValues: attachHere && stateValues.length > 0 ? stateValues : undefined,
-                        freshStateValues: attachHere ? freshStateValues : undefined,
-                        senderCharacterId: segment.characterId,
-                        senderName: segment.characterName,
-                    });
-                    if (attachHere) attachedState = true;
-                }
-                if (!attachedState && (statusPanel || innerMonologue || stateValues.length > 0)) {
-                    replacementMessages.push({
-                        content: "",
-                        rawResponseText: segment.responseText,
-                        responseBatchId,
-                        statusPanel,
-                        statusRegionMode: customStatusActive && statusPanel ? "custom" as const : undefined,
-                        innerMonologue,
-                        stateValues: stateValues.length > 0 ? stateValues : undefined,
-                        freshStateValues,
-                        senderCharacterId: segment.characterId,
-                        senderName: segment.characterName,
-                    });
-                    attachedState = true;
-                }
-                const toolCallContent = extractTextToolDirectiveText(segment.responseText);
-                if (toolCallContent) {
-                    replacementMessages.push({
-                        content: toolCallContent,
-                        mediaType: "tool_call",
-                        responseBatchId,
-                        senderCharacterId: segment.characterId,
-                        senderName: segment.characterName,
-                    });
-                }
-                if (stateValues.length > 0) {
-                    currentStateByCharacter.set(segment.characterId, stateValues);
-                }
-            }
-
-            if (replacementMessages.length === 0) {
-                showChatToast("ç¼–è¾‘åçš„ç¾¤èŠå›å¤æ²¡æœ‰å¯æ˜¾ç¤ºå†…å®¹");
-                return;
-            }
-
-            replaceGroupResponseRound(
-                session.id,
-                editingResponseRoundId,
-                editedResponseContent,
-                replacementMessages,
-            );
-            syncMessagesFromStorage();
-            setEditingResponseBatchId(null);
-            setEditingResponseRoundId(null);
-            setEditingResponseContent("");
-            setActiveMessageId(null);
-            return;
-        }
-
-        if (!editingResponseBatchId) {
-            setEditingResponseBatchId(null);
-            setEditingResponseRoundId(null);
-            setEditingResponseContent("");
-            return;
-        }
-
-        const storedMessages = loadChatMessages(session.id);
-        const batchMessages = storedMessages.filter(msg => msg.responseBatchId === editingResponseBatchId);
-        if (batchMessages.length === 0) {
-            showChatToast("æ²¡æœ‰æ‰¾åˆ°è¿™æ¬¡å›å¤çš„åŸå§‹å†…å®¹");
-            setEditingResponseBatchId(null);
-            setEditingResponseRoundId(null);
-            setEditingResponseContent("");
-            return;
-        }
-
-        const firstBatchIndex = storedMessages.findIndex(msg => msg.id === batchMessages[0].id);
-        const stateCutoff = storedMessages[firstBatchIndex];
-        const previousState = session.isGroup
-            ? getLatestStateValues(session.id)
-            : getLatestCharacterStateValues(session.contactId, stateCutoff ? { before: stateCutoff } : undefined);
-
-        const { parts: rawParts, stateValues, freshStateValues, statusPanel, innerMonologue } = parseAIResponse(editedResponseContent, previousState);
-        const parts = stripInvalidStickerParts(rawParts);
-        const normalizedParts = normalizeEditedAssistantParts(parts);
-        if (normalizedParts.length === 0 && (statusPanel || innerMonologue)) {
-            normalizedParts.push({ content: "" });
-        }
-        if (normalizedParts.length === 0) {
-            showChatToast("ç¼–è¾‘åçš„å›å¤æ²¡æœ‰å¯æ˜¾ç¤ºå†…å®¹");
-            return;
-        }
-        // é¢æ¿æŒ‚åˆ°ç¬¬ä¸€æ¡èƒ½æ˜¾ç¤ºå®ƒçš„æ¶ˆæ¯ä¸Šï¼ˆç¼–è¾‘åç¬¬ä¸€æ¡å¯èƒ½æ˜¯æ‹ä¸€æ‹æˆ–é€šè¯ç•™ç—•ï¼Œ
-        // é‚£ç±»ç³»ç»Ÿå°å­—ä¸æ˜¾ç¤ºé¢æ¿ï¼‰ï¼›å…¨æ˜¯ç³»ç»Ÿæ ·å¼æ—¶è¡¥ç©ºæ¶ˆæ¯é©®é¢æ¿
-        let metaPartIndex = normalizedParts.findIndex(canCarryFoldedPanel);
-        if (metaPartIndex === -1) {
-            if (statusPanel || innerMonologue || stateValues.length > 0) {
-                normalizedParts.push({ content: "" });
-                metaPartIndex = normalizedParts.length - 1;
-            } else {
-                metaPartIndex = 0;
-            }
-        }
-
-        // ç¼–è¾‘åªæ”¹æ–‡å­—ï¼Œä¸æ”¹è¿™æ‰¹æ¶ˆæ¯ç”Ÿæˆæ—¶æ‰€å¤„çš„çŠ¶æ€æ æ¨¡å¼â€”â€”æ²¿ç”¨åŸæˆ³ï¼Œ
-        // å¦åˆ™ç¼–è¾‘ä¸€æ¬¡å°±é€€å›åŸç”Ÿæ¸²æŸ“ï¼Œè€Œä¸”åˆ‡å›åŸç”Ÿåå†ç¼–è¾‘åˆä¼šåå‘ä¸²æ¡£ã€‚
-        const originalStatusRegionMode = batchMessages.find(m => m.statusRegionMode === "custom")?.statusRegionMode;
-
-        replaceResponseBatchWithParts(
-            session.id,
-            editingResponseBatchId,
-            editedResponseContent,
-            normalizedParts,
-            {
-                statusPanel,
-                statusRegionMode: originalStatusRegionMode,
-                innerMonologue,
-                stateValues: stateValues.length > 0 ? stateValues : undefined,
-                freshStateValues,
-                metaPartIndex,
-                toolCallContent: extractTextToolDirectiveText(editedResponseContent),
-            },
-        );
-        syncMessagesFromStorage();
-        setEditingResponseBatchId(null);
-        setEditingResponseRoundId(null);
-        setEditingResponseContent("");
-        setActiveMessageId(null);
-    };
-
-    const handleMessagePointerDown = (e: React.PointerEvent, msgId: string) => {
-        if (isMultiSelectMode) return;
-        // Prevent right click from triggering the timer, as it has its own context menu handler
-        if (e.pointerType === 'mouse' && e.button !== 0) return;
-
-        // Prevent text selection on long press
-        e.preventDefault();
-
-        const anchor = { x: e.clientX, y: e.clientY };
-        startPosRef.current = anchor;
-        longPressTriggeredRef.current = false;
-
-        if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
-        longPressTimerRef.current = setTimeout(() => {
-            longPressTriggeredRef.current = true;
-            openMessageContextMenu(msgId, anchor);
-            longPressTimerRef.current = null;
-        }, 500); // 500ms long press
-    };
-
-    const handleMessagePointerUp = (e: React.PointerEvent) => {
-        startPosRef.current = null;
-        if (longPressTimerRef.current) {
-            clearTimeout(longPressTimerRef.current);
-            longPressTimerRef.current = null;
-        }
-        // If a long press just triggered, stop the event from becoming a click
-        if (longPressTriggeredRef.current) {
-            e.stopPropagation();
-            e.preventDefault();
-            longPressTriggeredRef.current = false;
-        }
-    };
-
-    const handleMessagePointerCancel = () => {
-        startPosRef.current = null;
-        longPressTriggeredRef.current = false;
-        if (longPressTimerRef.current) {
-            clearTimeout(longPressTimerRef.current);
-            longPressTimerRef.current = null;
-        }
-    };
-
-    const deleteWeixinCloudBeforeLocal = async (
-        targetMessages: ChatMessage[],
-        applyLocalDelete: () => void,
-        successText?: string,
-    ) => {
-        if (cloudDeletePending) {
-            showChatToast("æ­£åœ¨åˆ é™¤äº‘ç«¯è®°å½•ï¼Œè¯·ç¨å€™");
-            return;
-        }
-        const cloudTargetCount = getWeixinCloudDeleteTargetCount(targetMessages);
-        if (cloudTargetCount <= 0) {
-            applyLocalDelete();
-            if (successText) showChatToast(successText);
-            return;
-        }
-
-        setCloudDeletePending({ count: cloudTargetCount });
-        try {
-            const deletedCount = await withTimeout(
-                deleteWeixinCloudMessagesFromCloud(targetMessages),
-                WEIXIN_CLOUD_DELETE_TIMEOUT_MS,
-                "äº‘ç«¯åˆ é™¤è¶…æ—¶ï¼Œè¯·æ£€æŸ¥ç½‘ç»œåé‡è¯•ã€‚",
-            );
-            if (deletedCount < cloudTargetCount) {
-                throw new Error("äº‘ç«¯è®°å½•æ²¡æœ‰å®Œå…¨åˆ é™¤ï¼Œè¯·æ£€æŸ¥åŒæ­¥è®¾ç½®åé‡è¯•ã€‚");
-            }
-            applyLocalDelete();
-            if (successText) showChatToast(successText);
-            // åˆ æ¶ˆæ¯å¯¹è±¡åªè§£å†³"æ¶ˆæ¯ç›®å½•"è¿™ä¸€åŠï¼šåˆ æ‰çš„å†å²æ—©å°±çƒ˜ç„™è¿›äº‘ç«¯è¿è¡ŒåŒ…çš„
-            // bakedHistory é‡Œï¼Œä¸é‡çƒ˜ç„™çš„è¯äº‘ç«¯åŠ©æ‰‹ï¼ˆå¾®ä¿¡ï¼‰ç…§æ ·è®°å¾—åˆšåˆ çš„å†…å®¹ã€‚
-            // äº‹ä»¶ç›‘å¬é‚£æ¡é‡åŒæ­¥æ˜¯ 3 ç§’é˜²æŠ–ï¼Œè¿™é‡Œæ˜¾å¼å…ˆè·‘ï¼›æˆåŠŸæ— æ„Ÿï¼Œå¤±è´¥å¿…é¡»æŠ¥ã€‚
-            void syncAllWeixinBotRuntimesToCloud()
-                .catch(() => {
-                    emitWeixinSyncToast("å¾®ä¿¡è¿è¡ŒåŒ…åŒæ­¥å¤±è´¥ï¼šè§’è‰²å¯èƒ½è¿˜è®°å¾—åˆšåˆ çš„å†…å®¹ï¼Œè¯·åˆ°ã€Œè®¾ç½® â†’ å¾®ä¿¡ã€æ‰‹åŠ¨åŒæ­¥è¿è¡ŒåŒ…ã€‚", { id: "weixin-runtime", duration: 4500 });
-                });
-        } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            showChatToast(`äº‘ç«¯åˆ é™¤å¤±è´¥ï¼š${message}`, 3500);
-        } finally {
-            setCloudDeletePending(null);
-        }
-    };
-
-    const handleDeleteMessage = (msgId: string) => {
-        if (isTransientMessage(msgId)) {
-            removeTransientMessage(msgId);
-            setActiveMessageId(null);
-            return;
-        }
-        setActiveMessageId(null);
-        const targetMsg = loadChatMessages(session.id).find(m => m.id === msgId);
-        if (!targetMsg) return;
-        void deleteWeixinCloudBeforeLocal([targetMsg], () => {
-            deleteChatMessage(msgId);
-            syncMessagesFromStorage();
-        });
-    };
-
-    const handleDeleteMessagesFrom = (msgId: string) => {
-        if (isTransientMessage(msgId)) {
-            setTransientMessages(prev => {
-                const idx = prev.findIndex(m => m.id === msgId);
-                return idx >= 0 ? prev.slice(0, idx) : prev;
-            });
-            setActiveMessageId(null);
-            return;
-        }
-        setActiveMessageId(null);
-        const storedMessages = loadChatMessages(session.id);
-        const targetMsg = storedMessages.find(m => m.id === msgId);
-        if (!targetMsg) return;
-        const targetMessages = storedMessages.filter(m => (
-            m.sessionId === session.id && compareChatMessages(m, targetMsg) >= 0
-        ));
-        void deleteWeixinCloudBeforeLocal(targetMessages, () => {
-            deleteChatMessagesFrom(msgId);
-            syncMessagesFromStorage();
-        });
-    };
-
-    const renderOfflineContextMenu = (turn: ChatOfflineTurn, role: OfflineActionTarget["role"]) => {
-        const menu = (
-            <div
-                onPointerDown={e => e.stopPropagation()}
-                ref={positionFloatingContextMenu}
-                style={getContextMenuInitialStyle()}
-                className="ctx-menu chat-floating-ctx-menu flex flex-col items-center gap-[6px] py-[4px] px-0"
-                data-role={role}
-            >
-                <div className="flex">
-                    <button onClick={() => { copyTextToClipboard(getOfflineCopyText(turn, role)); setActiveOfflineTarget(null); }} className="ctx-menu-btn">å¤åˆ¶</button>
-                    <button onClick={() => handleOfflineEditStart(turn, role)} className="ctx-menu-btn">ç¼–è¾‘</button>
-                    <button onClick={() => void handleOfflineRetryFrom(turn.id)} className="ctx-menu-btn ctx-menu-btn-danger">é‡è¯•ä»¥ä¸‹</button>
-                </div>
-                <div className="flex">
-                    <button onClick={() => handleOfflineDeleteTurn(turn.id)} className="ctx-menu-btn ctx-menu-btn-danger">åˆ é™¤</button>
-                    <button onClick={() => handleOfflineDeleteTurnsFrom(turn.id)} className="ctx-menu-btn ctx-menu-btn-danger">åˆ é™¤ä»¥ä¸‹</button>
-                </div>
-                <div data-menu-triangle className="ctx-menu-triangle absolute -top-[6px] w-0 h-0" />
-            </div>
-        );
-        return wrapperRef.current ? createPortal(menu, wrapperRef.current) : menu;
-    };
-
-    const getStoredActionMessageId = (msg: ChatMessage | RenderChatMessage): string => {
-        return "displaySourceId" in msg && msg.displaySourceId ? msg.displaySourceId : msg.id;
-    };
-
-    /** Reusable context menu for user/assistant bubbles */
-    const renderBubbleContextMenu = (m: ChatMessage, options?: { allowMultiSelect?: boolean }) => {
-        const storedMessageId = getStoredActionMessageId(m);
-        const menu = (
-            <div
-                onPointerDown={e => e.stopPropagation()}
-                ref={positionFloatingContextMenu}
-                style={getContextMenuInitialStyle()}
-                className="ctx-menu chat-floating-ctx-menu flex flex-col items-center gap-[6px] py-[4px] px-0"
-                data-role={m.role}>
-                <div className="flex">
-                    <button onClick={() => {
-                        const text = m.content;
-                        const fallbackCopy = () => {
-                            const ta = document.createElement("textarea");
-                            ta.value = text;
-                            ta.style.cssText = "position:fixed;left:-9999px;top:-9999px;opacity:0";
-                            document.body.appendChild(ta);
-                            ta.focus();
-                            ta.select();
-                            try { document.execCommand("copy"); } catch {}
-                            document.body.removeChild(ta);
-                        };
-                        if (navigator.clipboard?.writeText) {
-                            navigator.clipboard.writeText(text).catch(fallbackCopy);
-                        } else {
-                            fallbackCopy();
-                        }
-                        setActiveMessageId(null);
-                    }} className="ctx-menu-btn">å¤åˆ¶</button>
-                    <button onClick={() => (m.role === "assistant" ? handleEditResponseStart(m) : handleEditMessageStart(m))} className="ctx-menu-btn">
-                        {m.role === "assistant" && (m.rawResponseText || m.editableResponseText) ? "ç¼–è¾‘å›å¤" : "ç¼–è¾‘"}
-                    </button>
-                    {m.mediaType === "audio" && m.mediaData?.label && (
-                        <button onClick={() => { setVoiceTextIds(prev => { const next = new Set(prev); if (next.has(m.id)) next.delete(m.id); else next.add(m.id); return next; }); setActiveMessageId(null); }} className="ctx-menu-btn">è½¬æ–‡å­—</button>
-                    )}
-                    {m.role === "user" && (
-                        <button onClick={() => handleRetractMessage(storedMessageId)} className="ctx-menu-btn">æ’¤å›æ¶ˆæ¯</button>
-                    )}
-                    {m.role === "assistant" && (
-                        <button onClick={() => handleRetry(storedMessageId)} className="ctx-menu-btn ctx-menu-btn-danger">é‡è¯•ä»¥ä¸‹</button>
-                    )}
-                </div>
-                <div className="flex">
-                    <button onClick={() => { setQuotingMessage(m); setActiveMessageId(null); }} className="ctx-menu-btn">å¼•ç”¨</button>
-                    {options?.allowMultiSelect !== false && (
-                        <button onClick={() => startMultiSelectFromMessage(m)} className="ctx-menu-btn">å¤šé€‰</button>
-                    )}
-                    <button onClick={() => handleDeleteMessage(storedMessageId)} className="ctx-menu-btn ctx-menu-btn-danger">åˆ é™¤</button>
-                    <button onClick={() => handleDeleteMessagesFrom(storedMessageId)} className="ctx-menu-btn ctx-menu-btn-danger">åˆ é™¤ä»¥ä¸‹</button>
-                </div>
-                {(() => {
-                    // èŠå¤©æ’ä»¶æ³¨å†Œçš„æ¶ˆæ¯æ“ä½œèœå•é¡¹
-                    const pluginActions = getChatPluginRuntime().getMessageActions(m);
-                    if (pluginActions.length === 0) return null;
-                    return (
-                        <div className="flex">
-                            {pluginActions.map(action => (
-                                <button
-                                    key={`${action.pluginId}:${action.id}`}
-                                    className="ctx-menu-btn"
-                                    onClick={() => {
-                                        getChatPluginRuntime().runMessageAction(action, m);
-                                        setActiveMessageId(null);
-                                    }}
-                                >{action.label}</button>
-                            ))}
-                        </div>
-                    );
-                })()}
-                <div data-menu-triangle className="ctx-menu-triangle absolute -top-[6px] w-0 h-0" />
-            </div>
-        );
-        return wrapperRef.current ? createPortal(menu, wrapperRef.current) : menu;
-    };
-
-    const renderDeleteOnlyContextMenu = (onDelete: () => void, onMultiSelect?: () => void) => {
-        const menu = (
-            <div
-                onPointerDown={e => e.stopPropagation()}
-                ref={positionFloatingContextMenu}
-                style={getContextMenuInitialStyle()}
-                className="ctx-menu chat-floating-ctx-menu flex py-[6px] px-0"
-            >
-                {onMultiSelect && (
-                    <button
-                        onClick={(e) => {
-                            e.stopPropagation();
-                            onMultiSelect();
-                        }}
-                        className="ctx-menu-btn"
-                    >å¤šé€‰</button>
-                )}
-                <button
-                    onClick={(e) => {
-                        e.stopPropagation();
-                        onDelete();
-                        closeContextMenu();
-                    }}
-                    className="ctx-menu-btn ctx-menu-btn-danger"
-                >åˆ é™¤</button>
-                <div data-menu-triangle className="ctx-menu-triangle absolute -top-[6px] w-0 h-0" />
-            </div>
-        );
-        return wrapperRef.current ? createPortal(menu, wrapperRef.current) : menu;
-    };
-
-    const renderSystemContextMenu = (msg: ChatMessage) => {
-        const storedMessageId = getStoredActionMessageId(msg);
-        if (isSystemInstructionMessage(msg)) {
-            const instructionMenu = (
-                <div
-                    onPointerDown={e => e.stopPropagation()}
-                    ref={positionFloatingContextMenu}
-                    style={getContextMenuInitialStyle()}
-                    className="ctx-menu chat-floating-ctx-menu flex py-[6px] px-0"
-                >
-                    <button
-                        onClick={() => {
-                            copyTextToClipboard(msg.content);
-                            closeContextMenu();
-                        }}
-                        className="ctx-menu-btn"
-                    >å¤åˆ¶</button>
-                    <button
-                        onClick={() => {
-                            handleEditMessageStart(msg);
-                        }}
-                        className="ctx-menu-btn"
-                    >ç¼–è¾‘</button>
-                    <button
-                        onClick={() => {
-                            handleDeleteMessage(storedMessageId);
-                            closeContextMenu();
-                        }}
-                        className="ctx-menu-btn ctx-menu-btn-danger"
-                    >åˆ é™¤</button>
-                    <div data-menu-triangle className="ctx-menu-triangle absolute -top-[6px] w-0 h-0" />
-                </div>
-            );
-            return wrapperRef.current ? createPortal(instructionMenu, wrapperRef.current) : instructionMenu;
-        }
-
-        const menu = (
-            <div
-                onPointerDown={e => e.stopPropagation()}
-                ref={positionFloatingContextMenu}
-                style={getContextMenuInitialStyle()}
-                className="ctx-menu chat-floating-ctx-menu flex py-[6px] px-0"
-            >
-                <button
-                    onClick={() => {
-                        const text = msg.mediaType === "memory_write_request"
-                            ? (msg.mediaData?.memoryContent || msg.content)
-                            : msg.content;
-                        copyTextToClipboard(text);
-                        closeContextMenu();
-                    }}
-                    className="ctx-menu-btn"
-                >å¤åˆ¶</button>
-                {(msg.rawResponseText || msg.responseBatchId || msg.editableResponseText) && (
-                    <button
-                        onClick={() => {
-                            handleEditResponseStart(msg);
-                        }}
-                        className="ctx-menu-btn"
-                    >ç¼–è¾‘</button>
-                )}
-                <button
-                    onClick={() => {
-                        startMultiSelectFromMessage(msg);
-                    }}
-                    className="ctx-menu-btn"
-                >å¤šé€‰</button>
-                <button
-                    onClick={() => {
-                        handleDeleteMessage(storedMessageId);
-                        closeContextMenu();
-                    }}
-                    className="ctx-menu-btn ctx-menu-btn-danger"
-                >åˆ é™¤</button>
-                <div data-menu-triangle className="ctx-menu-triangle absolute -top-[6px] w-0 h-0" />
-            </div>
-        );
-        return wrapperRef.current ? createPortal(menu, wrapperRef.current) : menu;
-    };
-
-    // â”€â”€ Voice call message grouping â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    // Deduplicate messages (staggered timeouts + concurrent reloads can cause duplicates)
-    const dedupedMessages = useMemo(() => {
-        const seen = new Set<string>();
-        return displayMessages.filter(m => {
-            if (isReadingDiscussMessage(m)) return false;
-            if (seen.has(m.id)) return false;
-            seen.add(m.id);
-            return true;
-        });
-    }, [displayMessages]);
-
-    const projectedMessages = useMemo<RenderChatMessage[]>(() => {
-        const batches = new Map<string, ChatMessage[]>();
-        for (const msg of dedupedMessages) {
-            if (msg.role !== "assistant" || !msg.responseBatchId || !msg.rawResponseText?.trim()) continue;
-            const key = `${msg.responseRoundId || ""}\x1f${msg.responseBatchId}\x1f${msg.rawResponseText}`;
-            const batch = batches.get(key) || [];
-            batch.push(msg);
-            batches.set(key, batch);
-        }
-
-        const projected: RenderChatMessage[] = [];
-        const consumedBatchKeys = new Set<string>();
-        for (const msg of dedupedMessages) {
-            const batchKey = msg.role === "assistant" && msg.responseBatchId && msg.rawResponseText?.trim()
-                ? `${msg.responseRoundId || ""}\x1f${msg.responseBatchId}\x1f${msg.rawResponseText}`
-                : "";
-            if (!batchKey) {
-                projected.push(msg);
-                continue;
-            }
-            if (consumedBatchKeys.has(batchKey)) continue;
-            consumedBatchKeys.add(batchKey);
-
-            const batch = batches.get(batchKey) || [msg];
-            const raw = batch[0]?.rawResponseText?.trim();
-            if (!raw) {
-                projected.push(...batch);
-                continue;
-            }
-            const displayRaw = renderDisplayText(raw, 2, false);
-            if (displayRaw === raw) {
-                projected.push(...batch);
-                continue;
-            }
-            const parsed = parseAIResponse(displayRaw, []);
-            const parts = normalizeDisplayParts(parsed.parts);
-            // é¢æ¿æŠ•å½±åˆ°ç¬¬ä¸€æ¡èƒ½æ˜¾ç¤ºå®ƒçš„æ¶ˆæ¯ä¸Šï¼ˆæ‹ä¸€æ‹/é€šè¯ç•™ç—•æ˜¯ç³»ç»Ÿå°å­—ï¼Œæ²¡æœ‰é¢æ¿å…¥å£ï¼‰
-            const displayMetaIdx = parts.findIndex(canCarryFoldedPanel);
-            const storedMeta = batch.find(m => m.statusPanel || m.innerMonologue || m.reasoningText || (m.stateValues && m.stateValues.length > 0));
-            let metaProjected = false;
-            parts.forEach((part, index) => {
-                const base = batch[Math.min(index, batch.length - 1)] || batch[0];
-                if (!base) return;
-                const sourceId = base.id;
-                const id = index < batch.length ? sourceId : `${batch[0].id}__display_${index}`;
-                const isMetaSlot = index === displayMetaIdx;
-                const statusPanelHere = isMetaSlot ? (parsed.statusPanel || storedMeta?.statusPanel) : undefined;
-                // é¢æ¿ä» storedMeta æŒªåˆ°äº†åˆ«çš„æ§½ä½ï¼Œæˆ³è¦è·Ÿç€é¢æ¿èµ°ï¼šå…‰é  ...base å±•å¼€ä¼šå–åˆ°
-                // æ§½ä½é‚£æ¡æ¶ˆæ¯çš„æˆ³ï¼ˆå¤šåŠæ˜¯ç©ºçš„ï¼‰ï¼ŒæŠ•å½±åçŠ¶æ€æ å°±é€€å›åŸç”Ÿæ¸²æŸ“äº†ã€‚
-                const statusRegionModeHere = isMetaSlot && statusPanelHere
-                    ? (storedMeta?.statusRegionMode ?? base.statusRegionMode)
-                    : undefined;
-                const innerMonologueHere = isMetaSlot ? (parsed.innerMonologue || storedMeta?.innerMonologue) : undefined;
-                const reasoningTextHere = isMetaSlot ? storedMeta?.reasoningText : undefined;
-                const stateValuesHere = isMetaSlot ? storedMeta?.stateValues : undefined;
-                const freshStateValuesHere = isMetaSlot ? storedMeta?.freshStateValues : undefined;
-                if (isMetaSlot && (statusPanelHere || innerMonologueHere || reasoningTextHere || (stateValuesHere && stateValuesHere.length > 0))) {
-                    metaProjected = true;
-                }
-                // è¯­éŸ³æ¡çš„ mediaData é‡Œå­˜ç€æ’­æ”¾å¿…éœ€çš„çŠ¶æ€ï¼ˆsynthesizedFromText/voiceDurationï¼‰ï¼Œ
-                // ç›´æ¥ç”¨é‡è§£æç»“æœæ•´ä½“æ›¿æ¢ä¼šæŠŠå®ƒä»¬ä¸¢æ‰ï¼Œå¯¼è‡´æ°”æ³¡æ°¸è¿œåˆ¤å®š"å¾…é‡åˆæˆ"è€Œç‚¹ä¸å“ã€‚
-                // åŒæ–¹éƒ½æ˜¯è¯­éŸ³æ¡æ—¶æŒ‰å­˜å‚¨å€¼æ‰“åº•ã€é‡è§£æå­—æ®µè¦†ç›–ã€‚
-                const mediaData = part.mediaType === "audio" && base.mediaType === "audio" && base.mediaData
-                    ? { ...base.mediaData, ...part.mediaData }
-                    : part.mediaData;
-                projected.push({
-                    ...base,
-                    id,
-                    content: part.content,
-                    mediaType: part.mediaType,
-                    mediaData,
-                    statusPanel: statusPanelHere,
-                    statusRegionMode: statusRegionModeHere,
-                    innerMonologue: innerMonologueHere,
-                    reasoningText: reasoningTextHere,
-                    stateValues: stateValuesHere,
-                    freshStateValues: freshStateValuesHere,
-                    displayProjected: true,
-                    displaySourceId: sourceId,
-                });
-            });
-            // æŠ•å½±åæ²¡æœ‰ä»»ä½•æ¶ˆæ¯é©®é¢æ¿ï¼ˆæ¯”å¦‚æ•´æ®µåªå‰©æ‹ä¸€æ‹/é€šè¯ç•™ç—•ï¼‰â†’ è¡¥ä¸€æ¡ç©ºæŠ•å½±æ¶ˆæ¯
-            if (!metaProjected && storedMeta) {
-                projected.push({
-                    ...storedMeta,
-                    id: `${batch[0].id}__display_meta`,
-                    content: "",
-                    mediaType: undefined,
-                    mediaData: undefined,
-                    displayProjected: true,
-                    displaySourceId: storedMeta.id,
-                });
-            }
-        }
-        return projected;
-    }, [dedupedMessages, normalizeDisplayParts, renderDisplayText]);
-
-    // Build a map: startMsgId â†’ { startIdx, endIdx, duration }
-    // and a set of all message indices that belong to a voice call group
-    const voiceCallGroups = useMemo(() => {
-        const groups: { startId: string; startIdx: number; endIdx: number; duration: string; callType: "voice" | "video" }[] = [];
-        const memberSet = new Set<number>();
-
-        let i = 0;
-        while (i < projectedMessages.length) {
-            const msg = projectedMessages[i];
-            if (uiRole(msg) !== "system") { i++; continue; }
-            // Detect call START precisely: "å‘èµ·äº†è¯­éŸ³é€šè¯" / "å‘èµ·äº†è§†é¢‘é€šè¯"
-            const isVoiceStart = msg.content.includes("å‘èµ·äº†è¯­éŸ³é€šè¯");
-            const isVideoStart = msg.content.includes("å‘èµ·äº†è§†é¢‘é€šè¯");
-            if (isVoiceStart || isVideoStart) {
-                const callType = isVideoStart ? "video" : "voice";
-                const kw = isVideoStart ? "è§†é¢‘é€šè¯" : "è¯­éŸ³é€šè¯";
-                let endIdx = -1;
-                let duration = "";
-                for (let j = i + 1; j < projectedMessages.length; j++) {
-                    if (uiRole(projectedMessages[j]) !== "system") continue;
-                    const c = projectedMessages[j].content;
-                    // Another call start â†’ separate call, stop
-                    if (c.includes("å‘èµ·äº†è¯­éŸ³é€šè¯") || c.includes("å‘èµ·äº†è§†é¢‘é€šè¯")) break;
-                    // Call end: æŒ‚æ–­/æ‹’ç»/å–æ¶ˆï¼ˆå…¼å®¹"ç¾¤è¯­éŸ³é€šè¯"/"ç¾¤è§†é¢‘é€šè¯"ï¼‰
-                    if (c.includes(`æŒ‚æ–­äº†${kw}`) || c.includes(`æŒ‚æ–­äº†ç¾¤${kw}`) || c.includes(`æ‹’ç»äº†${kw}`) || c.includes(`æ‹’ç»äº†ç¾¤${kw}`) || c.includes(`å–æ¶ˆäº†${kw}`) || c.includes(`å–æ¶ˆäº†ç¾¤${kw}`)) {
-                        endIdx = j;
-                        const match = c.match(/æ—¶é•¿\s*(\d+:\d+)/);
-                        duration = match ? match[1] : "";
-                        break;
-                    }
-                }
-                if (endIdx > i) {
-                    groups.push({ startId: msg.id, startIdx: i, endIdx, duration, callType });
-                    for (let k = i; k <= endIdx; k++) memberSet.add(k);
-                    i = endIdx + 1;
-                    continue;
-                }
-            }
-            i++;
-        }
-        return { groups, memberSet };
-    }, [projectedMessages]);
-
-    const getSelectableStoredMessageId = useCallback((msg: RenderChatMessage): string | null => {
-        const id = msg.displaySourceId || msg.id;
-        if (!id || id.startsWith("vc-") || isTransientMessage(id)) return null;
-        return id;
-    }, []);
-
-    const visibleSelectableMessageIds = useMemo(() => {
-        const ids: string[] = [];
-        const seen = new Set<string>();
-        projectedMessages.forEach((msg, idx) => {
-            if (voiceCallGroups.memberSet.has(idx)) return;
-            const storedId = getSelectableStoredMessageId(msg);
-            if (!storedId || seen.has(storedId)) return;
-            const displayContent = getMessageDisplayContent(msg);
-            if (isHiddenChatFlowMessage(msg, displayContent)) return;
-            seen.add(storedId);
-            ids.push(storedId);
-        });
-        return ids;
-    }, [getMessageDisplayContent, getSelectableStoredMessageId, projectedMessages, voiceCallGroups.memberSet]);
-
-    const multiDeleteTargetIds = useMemo(() => {
-        if (selectedMessageIds.size === 0) return [];
-        const storedMessages = loadChatMessages(session.id);
-        const storedIndexById = new Map(storedMessages.map((msg, index) => [msg.id, index]));
-        const targets = new Set<string>();
-
-        selectedMessageIds.forEach(id => {
-            if (storedIndexById.has(id)) targets.add(id);
-        });
-
-        for (let i = 0; i < visibleSelectableMessageIds.length - 1; i += 1) {
-            const leftId = visibleSelectableMessageIds[i];
-            const rightId = visibleSelectableMessageIds[i + 1];
-            if (!selectedMessageIds.has(leftId) || !selectedMessageIds.has(rightId)) continue;
-
-            const leftIndex = storedIndexById.get(leftId);
-            const rightIndex = storedIndexById.get(rightId);
-            if (leftIndex === undefined || rightIndex === undefined || rightIndex <= leftIndex) continue;
-
-            for (let storedIndex = leftIndex + 1; storedIndex < rightIndex; storedIndex += 1) {
-                targets.add(storedMessages[storedIndex].id);
-            }
-        }
-
-        return [...targets];
-    }, [selectedMessageIds, session.id, visibleSelectableMessageIds]);
-
-    const cancelMultiSelect = useCallback(() => {
-        setIsMultiSelectMode(false);
-        setSelectedMessageIds(new Set());
-        setShowConfirmMultiDelete(false);
-    }, []);
-
-    const toggleMultiSelectedMessage = useCallback((messageId: string) => {
-        setSelectedMessageIds(prev => {
-            const next = new Set(prev);
-            if (next.has(messageId)) next.delete(messageId);
-            else next.add(messageId);
-            return next;
-        });
-    }, []);
-
-    const startMultiSelectFromMessage = useCallback((msg: RenderChatMessage) => {
-        const storedId = getSelectableStoredMessageId(msg);
-        if (!storedId) return;
-        closeContextMenu();
-        setShowEmojiPanel(false);
-        setShowStickerPanel(false);
-        setShowPlusMenu(false);
-        setIsMultiSelectMode(true);
-        setSelectedMessageIds(new Set([storedId]));
-    }, [getSelectableStoredMessageId]);
-
-    const confirmMultiDelete = useCallback(() => {
-        if (multiDeleteTargetIds.length === 0) {
-            showChatToast("è¯·é€‰æ‹©è¦åˆ é™¤çš„æ¶ˆæ¯");
-            return;
-        }
-        setShowConfirmMultiDelete(true);
-    }, [multiDeleteTargetIds.length]);
-
-    const handleMultiDeleteConfirmed = () => {
-        const targetIds = new Set(multiDeleteTargetIds);
-        const targetMessages = loadChatMessages(session.id).filter(msg => targetIds.has(msg.id));
-        setShowConfirmMultiDelete(false);
-        void deleteWeixinCloudBeforeLocal(targetMessages, () => {
-            const deletedCount = deleteChatMessagesByIds(session.id, multiDeleteTargetIds);
-            syncMessagesFromStorage();
-            cancelMultiSelect();
-            if (deletedCount > 0) showChatToast(`å·²åˆ é™¤ ${deletedCount} æ¡å†å²`);
-        });
-    };
-
-    /* Settings panel is rendered as an overlay (not early return) to preserve chat scroll position */
-
-    const jumpToStoredMessage = useCallback((messageId: string) => {
-        const allMsgs = loadChatMessages(session.id);
-        const targetIndex = allMsgs.findIndex(msg => msg.id === messageId);
-        if (targetIndex < 0) return;
-
-        let nextCount = Math.min(INITIAL_LOAD, allMsgs.length);
-        while (allMsgs.length - nextCount > targetIndex) {
-            nextCount = Math.min(allMsgs.length, nextCount + LOAD_MORE_COUNT);
-        }
-        const computedStartIndex = Math.max(0, allMsgs.length - nextCount);
-        const currentFirstVisibleId = visibleMessagesRef.current.find(msg => !isTransientMessage(msg))?.id;
-        const currentStartIndex = currentFirstVisibleId
-            ? allMsgs.findIndex(msg => msg.id === currentFirstVisibleId)
-            : -1;
-        const startIndex = currentStartIndex >= 0
-            ? Math.min(computedStartIndex, currentStartIndex)
-            : computedStartIndex;
-        const nextMessages = allMsgs.slice(startIndex);
-        const targetMsg = allMsgs[targetIndex];
-        const batchKey = targetMsg?.role === "assistant" && targetMsg.responseBatchId && targetMsg.rawResponseText?.trim()
-            ? `${targetMsg.responseRoundId || ""}\x1f${targetMsg.responseBatchId}\x1f${targetMsg.rawResponseText}`
-            : "";
-        const fallbackMessageId = batchKey
-            ? nextMessages.find(msg => (
-                msg.role === "assistant" &&
-                msg.responseBatchId &&
-                msg.rawResponseText?.trim() &&
-                `${msg.responseRoundId || ""}\x1f${msg.responseBatchId}\x1f${msg.rawResponseText}` === batchKey
-            ))?.id
-            : undefined;
-
-        stopLoadMoreAnchorTracking();
-        loadMoreScrollRestoreRef.current = null;
-        loadingMoreRef.current = false;
-        initialScrollVersionRef.current += 1;
-        needsInitialScrollRef.current = false;
-        pendingSearchJumpRef.current = {
-            messageId,
-            ...(fallbackMessageId && fallbackMessageId !== messageId ? { fallbackMessageId } : {}),
-        };
-
-        const nextHasMore = startIndex > 0;
-        visibleMessagesRef.current = nextMessages;
-        hasMoreRef.current = nextHasMore;
-        setHasMore(nextHasMore);
-        setMessages(nextMessages);
-    }, [session.id, stopLoadMoreAnchorTracking]);
-
-    // Shared handler: reload messages + re-trigger scroll-to-bottom after call ends
-    const returnFromCall = (hide: () => void) => {
-        hide();
-        setCallMinimized(false);
-        needsInitialScrollRef.current = true;
-        prevMsgCountRef.current = 0;
-        syncMessagesFromStorage();
-        triggerReply();
-    };
-
-    const editingMessage = editingMessageId ? messages.find(m => m.id === editingMessageId) : null;
-    const editingSystemInstruction = editingMessage ? isSystemInstructionMessage(editingMessage) : false;
-
-    // ç¾¤èŠé€šè¯æ²¡æœ‰ç¼©å°æ‚¬æµ®çª—ï¼Œç»´æŒåŸæœ‰çš„æ•´å±æ—©é€€æ¸²æŸ“
-    if (showVoiceCall && session.isGroup && groupCharacters.length > 0) {
-        return (
-            <GroupCallScreen
-                type="voice"
-                session={session}
-                characters={groupCharacters}
-                initiator={callInitiator}
-                initiatorName={callInitiatorName}
-                onEnd={() => returnFromCall(() => setShowVoiceCall(false))}
-            />
-        );
-    }
-
-    if (showVideoCall && session.isGroup && groupCharacters.length > 0) {
-        return (
-            <GroupCallScreen
-                type="video"
-                session={session}
-                characters={groupCharacters}
-                initiator={callInitiator}
-                initiatorName={callInitiatorName}
-                onEnd={() => returnFromCall(() => setShowVideoCall(false))}
-            />
-        );
-    }
-    // å•èŠè¯­éŸ³/è§†é¢‘é€šè¯æ”¹ä¸ºåœ¨ä¸‹æ–¹ä¸»è¿”å›å†…è”æ¸²æŸ“ï¼ˆè€Œéæå‰ returnï¼‰ï¼Œ
-    // è¿™æ ·ç¼©å°ä¸ºæ‚¬æµ®çª—æ—¶èŠå¤©é¡µä¸é€šè¯ç»„ä»¶å¯ä»¥åŒæ—¶æŒ‚è½½ï¼Œé€šè¯çŠ¶æ€ï¼ˆè®¡æ—¶/å­—å¹•ï¼‰ä¸ä¼šä¸¢å¤±ã€‚
-
-    const chatRoomBackgroundStyle = bgImageResolved ? {
-        backgroundColor: "#fff",
-        backgroundImage: `url(${bgImageResolved})`,
-        backgroundPosition: "center",
-        backgroundSize: "cover",
-        backgroundRepeat: "no-repeat",
-    } : undefined;
-
-    return (
-        <div ref={wrapperRef} className={`session-${session.id} chat-room-wrapper page-shell inset-0 flex flex-col z-20`} style={chatRoomBackgroundStyle} {...(bgLoading ? { "data-loading": "" } : {})} {...(bgImageResolved ? { "data-has-bg-image": "" } : {})} {...(showSettings ? { "data-settings-open": "" } : {})}>
-            {/* Custom CSS Injection for this session â€” scoped to prevent leaking */}
-            {liveCSS && (
-                <SessionCustomCSS css={liveCSS} scope={`.session-${session.id}`} />
-            )}
-
-            {/* å…¨å±ç‰¹æ•ˆå±‚ï¼ˆè¡¨æƒ…é›¨/ç¤¼èŠ±ï¼‰ï¼Œä¸æ‹¦æˆªä»»ä½•è§¦æ‘¸æ“ä½œ */}
-            <ChatScreenEffectOverlay active={activeScreenEffect} onDone={() => setActiveScreenEffect(null)} />
-            {/* Header */}
-            <header className="page-header chat-room-main-pane" data-ui="header">
-                <div className="page-header-safe-area" />
-                <div className="page-header-content">
-                    <button className="page-back-btn" type="button" onClick={onBack} aria-label="è¿”å›">
-                        <ChevronLeft size={24} strokeWidth={1.5} />
-                    </button>
-                    <span className="page-title" style={{ position: 'relative' }}>
-                        {offlineMode ? "çº¿ä¸‹ Â· " : ""}
-                        {session.isGroup
-                            ? `${session.groupName || "ç¾¤èŠ"}(${(session.participantIds?.length || 0) + (session.isSpectator ? 0 : 1)})`
-                            : (session.alias || character?.name || `User_${session.contactId.slice(-4)}`)}
-                        {(isGenerating || isOfflineGenerating) && (
-                            <span className="chat-typing-indicator">
-                                {offlineMode ? "çº¿ä¸‹ç”Ÿæˆä¸­" : "å¯¹æ–¹æ­£åœ¨è¾“å…¥"}<span className="chat-typing-dots"><i/><i/><i/></span>
-                            </span>
-                        )}
-                    </span>
-                    <span className="page-header-right">
-                        <button className="page-back-btn" type="button" onClick={() => setShowSettings(true)} aria-label="æ›´å¤š">
-                            <MoreHorizontal size={22} strokeWidth={1.5} />
-                        </button>
-                    </span>
-                </div>
-            </header>
-            <ChatPluginSlot
-                name="chat.header"
-                slotProps={{ sessionId: session.id, isGroup: !!session.isGroup }}
-                className="chat-plugin-header chat-room-main-pane"
-            />
-
-            {/* Message List */}
-            <div
-                ref={scrollRef}
-                className="page-body chat-room-main-pane flex flex-col gap-4 chat-scroll-anchored"
-                onScroll={(e) => {
-                    if (activeMessageId || activeOfflineTarget) closeContextMenu();
-                }}
-                onPointerDown={(e) => {
-                    if (activeMessageId || activeOfflineTarget) closeContextMenu();
-                    if (showEmojiPanel) setShowEmojiPanel(false);
-                    if (showStickerPanel) setShowStickerPanel(false);
-                    if (showPlusMenu) setShowPlusMenu(false);
-                }}
-            >
-                {offlineMode && (
-                    <div className="chat-offline-body">
-                        {offlineTurns.length === 0 && !pendingOfflineUserText ? (
-                            <div className="chat-offline-empty">
-                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 10c0 7-9 13-9 13S3 17 3 10a9 9 0 0 1 18 0Z" /><circle cx="12" cy="10" r="3" /></svg>
-                                çº¿ä¸‹æ¨¡å¼
-                            </div>
-                        ) : null}
-                        {hasMoreOfflineTurns && (
-                            <button
-                                type="button"
-                                className="chat-sys-msg chat-load-more-button"
-                                onClick={loadMoreOfflineTurns}
-                            >
-                                <span>æŸ¥çœ‹æ›´å¤šçº¿ä¸‹è®°å½•</span>
-                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                                    <polyline points="18 15 12 9 6 15" />
-                                </svg>
-                            </button>
-                        )}
-                        {visibleOfflineTurns.map((turn, turnIdx) => {
-                            const offlineDisplay = offlineDisplayByTurnId.get(turn.id) ?? getOfflineDisplayText(turn);
-                            const assistantHasHtmlPreview = hasOfflineHtmlPreview(offlineDisplay.assistantContent);
-                            const prevTime = turnIdx > 0 ? visibleOfflineTurns[turnIdx - 1].createdAt : null;
-                            const showTime = !prevTime || shouldShowTimestamp(turn.createdAt, prevTime);
-                            return (
-                            <Fragment key={turn.id}>
-                            {showTime && <div className="chat-offline-time">{formatChatUiTime(turn.createdAt)}</div>}
-                            <div className="chat-offline-turn">
-                                <div className="chat-offline-entry" data-role="user" style={offlineDisplay.userContent.trim() ? undefined : { display: "none" }}>
-                                    {/* å¤´åƒå ä½ï¼šé»˜è®¤ display:noneï¼ˆè§ chat.cssï¼‰ï¼Œä¾›è‡ªå®šä¹‰ CSS æ˜¾ç¤º */}
-                                    <div className="chat-offline-avatar" aria-hidden="true">
-                                        {userIdentity?.avatarUrl ? <img src={userIdentity.avatarUrl} alt="" /> : <User size={18} color="var(--c-text)" />}
-                                    </div>
-                                    <div className="chat-offline-label">ä½ </div>
-                                    <div
-                                        className="chat-offline-text"
-                                        onPointerDown={(e) => { e.stopPropagation(); handleOfflinePointerDown(e, { turnId: turn.id, role: "user" }); }}
-                                        onPointerUp={(e) => handleMessagePointerUp(e)}
-                                        onPointerCancel={handleMessagePointerCancel}
-                                        onPointerLeave={handleMessagePointerCancel}
-                                        onPointerMove={(e) => {
-                                            if (startPosRef.current) {
-                                                const dx = Math.abs(e.clientX - startPosRef.current.x);
-                                                const dy = Math.abs(e.clientY - startPosRef.current.y);
-                                                if (dx > 10 || dy > 10) handleMessagePointerCancel();
-                                            }
-                                        }}
-                                        onContextMenu={(e) => { e.preventDefault(); openOfflineContextMenu({ turnId: turn.id, role: "user" }, { x: e.clientX, y: e.clientY }); }}
-                                        {...(activeOfflineTarget?.turnId === turn.id && activeOfflineTarget.role === "user" ? { "data-active": "" } : {})}
-                                    >
-                                        {activeOfflineTarget?.turnId === turn.id && activeOfflineTarget.role === "user" && renderOfflineContextMenu(turn, "user")}
-                                        <BilingualTextBlock
-                                            text={offlineDisplay.userContent}
-                                            mode="markdown"
-                                            defaultExpanded={session.collapseBilingualTranslation !== false ? false : true}
-                                        />
-                                    </div>
-                                </div>
-                                <div className="chat-offline-entry" data-role="assistant">
-                                    {/* å¤´åƒå ä½ï¼šé»˜è®¤ display:noneï¼ˆè§ chat.cssï¼‰ï¼Œä¾›è‡ªå®šä¹‰ CSS æ˜¾ç¤º */}
-                                    <div className="chat-offline-avatar" aria-hidden="true">
-                                        {character?.avatar ? <img src={character.avatar} alt="" /> : <ChatFallbackAvatar />}
-                                    </div>
-                                    <div className="chat-offline-label-row">
-                                        <div className="chat-offline-label">{session.isGroup ? (session.groupName || "ç¾¤èŠ") : (character?.name || "å¯¹æ–¹")}</div>
-                                        {assistantHasHtmlPreview ? (
-                                            <button
-                                                type="button"
-                                                className="chat-offline-menu-trigger"
-                                                aria-label="çº¿ä¸‹å›å¤æ“ä½œ"
-                                                title="çº¿ä¸‹å›å¤æ“ä½œ"
-                                                onPointerDown={(e) => {
-                                                    e.stopPropagation();
-                                                    handleMessagePointerCancel();
-                                                }}
-                                                onClick={(e) => {
-                                                    e.preventDefault();
-                                                    e.stopPropagation();
-                                                    const rect = e.currentTarget.getBoundingClientRect();
-                                                    openOfflineContextMenu({ turnId: turn.id, role: "assistant" }, {
-                                                        x: rect.left + rect.width / 2,
-                                                        y: rect.bottom,
-                                                    });
-                                                }}
-                                            >
-                                                <MoreHorizontal size={16} strokeWidth={2} />
-                                            </button>
-                                        ) : null}
-                                    </div>
-                                    {/* æ€ç»´é“¾è§¦å‘æ¡ï¼ˆçº¿ä¸‹æ¨¡å¼ï¼ŒClaude app é£æ ¼ï¼‰ï¼šä¼˜å…ˆå±•ç¤ºé¢„è®¾æ ¼å¼ <thinking> è§£æç»“æœï¼Œç¼ºçœå›é€€æ¨¡å‹ API åŸç”Ÿæ€è€ƒ */}
-                                    {(turn.thinkingText || turn.reasoningText) && (
-                                        <button
-                                            type="button"
-                                            className="chat-reasoning-trigger"
-                                            onClick={(e) => { e.stopPropagation(); setReasoningSheetText(turn.thinkingText || turn.reasoningText || null); }}
-                                            aria-label="æŸ¥çœ‹æ€è€ƒè¿‡ç¨‹"
-                                        >
-                                            <Clock size={13} strokeWidth={1.8} className="chat-reasoning-trigger-icon" />
-                                            <span className="chat-reasoning-trigger-text">{reasoningPreviewLine(turn.thinkingText || turn.reasoningText || "")}</span>
-                                            <ChevronRight size={14} strokeWidth={1.8} className="chat-reasoning-trigger-icon" />
-                                        </button>
-                                    )}
-                                    <div
-                                        className="chat-offline-text"
-                                        onPointerDown={(e) => { e.stopPropagation(); handleOfflinePointerDown(e, { turnId: turn.id, role: "assistant" }); }}
-                                        onPointerUp={(e) => handleMessagePointerUp(e)}
-                                        onPointerCancel={handleMessagePointerCancel}
-                                        onPointerLeave={handleMessagePointerCancel}
-                                        onPointerMove={(e) => {
-                                            if (startPosRef.current) {
-                                                const dx = Math.abs(e.clientX - startPosRef.current.x);
-                                                const dy = Math.abs(e.clientY - startPosRef.current.y);
-                                                if (dx > 10 || dy > 10) handleMessagePointerCancel();
-                                            }
-                                        }}
-                                        onContextMenu={(e) => { e.preventDefault(); openOfflineContextMenu({ turnId: turn.id, role: "assistant" }, { x: e.clientX, y: e.clientY }); }}
-                                        {...(activeOfflineTarget?.turnId === turn.id && activeOfflineTarget.role === "assistant" ? { "data-active": "" } : {})}
-                                    >
-                                        {activeOfflineTarget?.turnId === turn.id && activeOfflineTarget.role === "assistant" && renderOfflineContextMenu(turn, "assistant")}
-                                        <OfflineAssistantTextBlock
-                                            text={offlineDisplay.assistantContent}
-                                            defaultExpanded={session.collapseBilingualTranslation !== false ? false : true}
-                                        />
-                                    </div>
-                                    {turn.summary.trim() && (
-                                        <details className="chat-offline-summary-fold">
-                                            <summary>æ‘˜è¦ï¼ˆ{turn.summaryTag || "summary"}ï¼‰</summary>
-                                            <div className="chat-offline-summary-content">
-                                                <BilingualTextBlock
-                                                    text={offlineDisplay.summary}
-                                                    mode="markdown"
-                                                    defaultExpanded={session.collapseBilingualTranslation !== false ? false : true}
-                                                />
-                                            </div>
-                                        </details>
-                                    )}
-                                </div>
-                            </div>
-                            </Fragment>
-                            );
-                        })}
-                        {(pendingOfflineUserText || isOfflineGenerating) && (
-                            <div className="chat-offline-turn">
-                                <div className="chat-offline-entry" data-role="user" style={pendingOfflineUserText ? undefined : { display: "none" }}>
-                                    {/* å¤´åƒå ä½ï¼šé»˜è®¤ display:noneï¼ˆè§ chat.cssï¼‰ï¼Œä¾›è‡ªå®šä¹‰ CSS æ˜¾ç¤º */}
-                                    <div className="chat-offline-avatar" aria-hidden="true">
-                                        {userIdentity?.avatarUrl ? <img src={userIdentity.avatarUrl} alt="" /> : <User size={18} color="var(--c-text)" />}
-                                    </div>
-                                    <div className="chat-offline-label">ä½ </div>
-                                    <div className="chat-offline-text">
-                                        <BilingualTextBlock
-                                            text={renderDisplayText(pendingOfflineUserText, 1, true)}
-                                            mode="markdown"
-                                            defaultExpanded={session.collapseBilingualTranslation !== false ? false : true}
-                                        />
-                                    </div>
-                                </div>
-                                {offlineStreamPreview?.content ? (
-                                    /* æµå¼é¢„è§ˆåŸåœ°é•¿å‡ºï¼šä¸æ­£å¼å‰§æƒ…æ­£æ–‡åŒç»“æ„ï¼ˆå¤´åƒ/è§’è‰²å/æ­£æ–‡åŒºï¼‰ï¼Œ
-                                       æ­£æ–‡ç”¨è½»é‡ pre-wrap æ¸²æŸ“ï¼ˆé¿å…æ¯å¸§ markdown/åŒè¯­è§£æï¼‰ï¼Œè½åº“æ—¶åŸåœ°æ¢æˆæ­£å¼æ’ç‰ˆ */
-                                    <div className="chat-offline-entry" data-role="assistant">
-                                        <div className="chat-offline-avatar" aria-hidden="true">
-                                            {character?.avatar ? <img src={character.avatar} alt="" /> : <ChatFallbackAvatar />}
-                                        </div>
-                                        <div className="chat-offline-label-row">
-                                            <div className="chat-offline-label">{session.isGroup ? (session.groupName || "ç¾¤èŠ") : (character?.name || "å¯¹æ–¹")}</div>
-                                        </div>
-                                        <div className="chat-offline-text">
-                                            <div className="chat-stream-text whitespace-pre-wrap break-words">{offlineStreamPreview.content}</div>
-                                            <span className="chat-stream-cursor" aria-hidden="true" />
-                                        </div>
-                                    </div>
-                                ) : (
-                                    <div className="chat-offline-generating">
-                                        <span>çº¿ä¸‹å›å¤ç”Ÿæˆä¸­</span>
-                                    </div>
-                                )}
-                            </div>
-                        )}
-                    </div>
-                )}
-                {!offlineMode && hasMore && (
-                    <button
-                        type="button"
-                        className="chat-sys-msg chat-load-more-button"
-                        onClick={loadMore}
-                    >
-                        <span>æŸ¥çœ‹æ›´å¤šæ¶ˆæ¯</span>
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                            <polyline points="18 15 12 9 6 15" />
-                        </svg>
-                    </button>
-                )}
-                {!offlineMode && projectedMessages.map((msg, idx) => {
-                    // â”€â”€ Voice call group: collapsed widget â”€â”€
-                    const vcGroup = voiceCallGroups.groups.find(g => g.startIdx === idx);
-                    if (vcGroup) {
-                        const isExpanded = expandedVoiceCallIds.has(vcGroup.startId);
-                        const groupMessages = projectedMessages.slice(vcGroup.startIdx, vcGroup.endIdx + 1);
-                        const chatCount = groupMessages.filter(m => uiRole(m) !== "system").length;
-                        return (
-                            <div key={`vc-${vcGroup.startId}`} className="flex flex-col gap-2">
-                                <div
-                                    onPointerDown={(e) => { e.stopPropagation(); handleMessagePointerDown(e, `vc-${vcGroup.startId}`); }}
-                                    onPointerUp={(e) => handleMessagePointerUp(e)}
-                                    onPointerCancel={handleMessagePointerCancel}
-                                    onPointerLeave={handleMessagePointerCancel}
-                                    onPointerMove={(e) => {
-                                        if (startPosRef.current) {
-                                            const dx = Math.abs(e.clientX - startPosRef.current.x);
-                                            const dy = Math.abs(e.clientY - startPosRef.current.y);
-                                            if (dx > 10 || dy > 10) handleMessagePointerCancel();
-                                        }
-                                    }}
-                                    onContextMenu={(e) => { e.preventDefault(); openMessageContextMenu(`vc-${vcGroup.startId}`, { x: e.clientX, y: e.clientY }); }}
-                                    onClick={() => {
-                                        if (activeMessageId === `vc-${vcGroup.startId}`) return;
-                                        setExpandedVoiceCallIds(prev => {
-                                            const next = new Set(prev);
-                                            if (next.has(vcGroup.startId)) next.delete(vcGroup.startId);
-                                            else next.add(vcGroup.startId);
-                                            return next;
-                                        });
-                                    }}
-                                    className="chat-sys-msg flex items-center justify-center gap-[6px] py-[6px] px-[14px] mx-auto rounded-2xl cursor-pointer relative"
-                                    {...(activeMessageId === `vc-${vcGroup.startId}` ? { "data-active": "" } : {})}
-                                >
-                                    {vcGroup.callType === "video" ? (
-                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                                            <path d="M23 7l-7 5 7 5V7z" /><rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
-                                        </svg>
-                                    ) : (
-                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                                            <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z" />
-                                        </svg>
-                                    )}
-                                    <span>{vcGroup.callType === "video" ? "è§†é¢‘é€šè¯" : "è¯­éŸ³é€šè¯"}{vcGroup.duration ? ` ${vcGroup.duration}` : ""}{chatCount > 0 ? ` Â· ${chatCount}æ¡æ¶ˆæ¯` : ""}</span>
-                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
-                                        className="ui-chevron-down-flip" {...(isExpanded ? { "data-open": "" } : {})}>
-                                        <polyline points="6 9 12 15 18 9" />
-                                    </svg>
-                                    {activeMessageId === `vc-${vcGroup.startId}` && renderDeleteOnlyContextMenu(() => {
-                                        const groupMsgIds = groupMessages.map(m => m.id);
-                                        void deleteWeixinCloudBeforeLocal(groupMessages, () => {
-                                            groupMsgIds.forEach(id => deleteChatMessage(id));
-                                            setMessages(prev => prev.filter(m => !groupMsgIds.includes(m.id)));
-                                        });
-                                    })}
-                                </div>
-                                {isExpanded && (
-                                    <div className="chat-vc-group-border">
-                                        {groupMessages.map((gMsg) => (
-                                            uiRole(gMsg) === "system" ? (
-                                                <div key={gMsg.id} className="flex justify-center">
-                                                    <div
-                                                        onPointerDown={(e) => { e.stopPropagation(); handleMessagePointerDown(e, gMsg.id); }}
-                                                        onPointerUp={(e) => handleMessagePointerUp(e)}
-                                                        onPointerCancel={handleMessagePointerCancel}
-                                                        onPointerLeave={handleMessagePointerCancel}
-                                                        onPointerMove={(e) => {
-                                                            if (startPosRef.current) {
-                                                                const dx = Math.abs(e.clientX - startPosRef.current.x);
-                                                                const dy = Math.abs(e.clientY - startPosRef.current.y);
-                                                                if (dx > 10 || dy > 10) handleMessagePointerCancel();
-                                                            }
-                                                        }}
-                                                        onContextMenu={(e) => { e.preventDefault(); openMessageContextMenu(gMsg.id, { x: e.clientX, y: e.clientY }); }}
-                                                        className="chat-sys-msg relative cursor-pointer"
-                                                        {...(activeMessageId === gMsg.id ? { "data-active": "" } : {})}
-                                                    >
-                                                        {formatSysMsgForUI(gMsg.content, gMsg)}
-                                                        {activeMessageId === gMsg.id && renderDeleteOnlyContextMenu(() => handleDeleteMessage(getStoredActionMessageId(gMsg)))}
-                                                    </div>
-                                                </div>
-                                            ) : (
-                                                <div key={gMsg.id} className={`flex ${gMsg.role === "user" ? "justify-end" : "justify-start"}`}>
-                                                    <div className="flex flex-col min-w-0 max-w-[75%]">
-                                                        {session.isGroup && gMsg.role !== "user" && (
-                                                            <span className="chat-group-sender-name">{gMsg.senderName || ""}{renderGroupRoleBadge(gMsg.senderCharacterId)}</span>
-                                                        )}
-                                                        <div
-                                                            onPointerDown={(e) => { e.stopPropagation(); handleMessagePointerDown(e, gMsg.id); }}
-                                                            onPointerUp={(e) => handleMessagePointerUp(e)}
-                                                            onPointerCancel={handleMessagePointerCancel}
-                                                            onPointerLeave={handleMessagePointerCancel}
-                                                            onPointerMove={(e) => {
-                                                                if (startPosRef.current) {
-                                                                    const dx = Math.abs(e.clientX - startPosRef.current.x);
-                                                                    const dy = Math.abs(e.clientY - startPosRef.current.y);
-                                                                    if (dx > 10 || dy > 10) handleMessagePointerCancel();
-                                                                }
-                                                            }}
-                                                            onContextMenu={(e) => { e.preventDefault(); openMessageContextMenu(gMsg.id, { x: e.clientX, y: e.clientY }); }}
-                                                            className={`chat-bubble-role-${gMsg.role} py-2 px-3 rounded-md break-words relative cursor-pointer`}
-                                                            {...(activeMessageId === gMsg.id ? { "data-active": "" } : {})}
-                                                        >
-                                                            <BilingualTextBlock
-                                                                text={gMsg.displayProjected ? gMsg.content : renderDisplayText(gMsg.content, gMsg.role === "user" ? 1 : 2, false)}
-                                                                mode="markdown"
-                                                                defaultExpanded={session.collapseBilingualTranslation !== false ? false : true}
-                                                            />
-                                                            {activeMessageId === gMsg.id && renderBubbleContextMenu(gMsg, { allowMultiSelect: false })}
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                            )
-                                        ))}
-                                    </div>
-                                )}
-                            </div>
-                        );
-                    }
-
-                    // Skip messages that belong to a voice call group (rendered above)
-                    if (voiceCallGroups.memberSet.has(idx)) return null;
-
-                    const renderMsg = msg;
-                    const isSystemInstruction = isSystemInstructionMessage(renderMsg);
-                    const bubbleDisplayContent = getMessageDisplayContent(renderMsg);
-                    let prevVisibleMsg: RenderChatMessage | null = null;
-                    for (let prevIdx = idx - 1; prevIdx >= 0; prevIdx -= 1) {
-                        if (voiceCallGroups.memberSet.has(prevIdx)) continue;
-                        const candidate = projectedMessages[prevIdx];
-                        const candidateDisplayContent = getMessageDisplayContent(candidate);
-                        if (isHiddenChatFlowMessage(candidate, candidateDisplayContent)) continue;
-                        prevVisibleMsg = candidate;
-                        break;
-                    }
-                    const showTime = shouldShowTimestamp(msg.createdAt, prevVisibleMsg?.createdAt ?? null);
-                    const isConsecutive = prevVisibleMsg && !showTime && uiRole(prevVisibleMsg) === uiRole(msg) && uiRole(msg) !== "system"
-                        && (!session.isGroup || prevVisibleMsg.senderCharacterId === msg.senderCharacterId);
-                    // Hide bubbles with no visible content (empty text, stripped music tags, etc.)
-                    const visibleContent = getChatFlowVisibleContent(renderMsg, bubbleDisplayContent);
-                    const isVisualMedia = isChatVisualMedia(renderMsg);
-                    const hiddenEmpty = isHiddenChatFlowMessage(renderMsg, bubbleDisplayContent);
-                    const hasFoldedPanel = !!(renderMsg.statusPanel || renderMsg.innerMonologue);
-                    // å†…å¿ƒå¡ç‰‡åªå±•ç¤ºæœ¬è½®å®é™…è¾“å‡ºçš„çŠ¶æ€å€¼ï¼›æ—§æ•°æ®æ²¡æœ‰ freshStateValues æ—¶å›é€€åˆ°åˆå¹¶å¿«ç…§
-                    const cardStateValues = msg.freshStateValues ?? msg.stateValues;
-                    const isSilentThought = !visibleContent && !renderMsg.mediaType && hasFoldedPanel && msg.role !== "user";
-                    const isStandaloneHtmlPreview = !renderMsg.mediaType && isStandaloneHtmlPreviewContent(bubbleDisplayContent);
-                    const isMediaBubble = (renderMsg.mediaType && CHAT_MEDIA_BUBBLE_TYPES.has(renderMsg.mediaType)) || isStandaloneHtmlPreview;
-                    // Empty bubble: no visible content AND no visual media AND no folded panel.
-                    const isEmptyBubble = !isVisualMedia && !visibleContent && uiRole(msg) !== "system" && !hasFoldedPanel;
-                    const selectableStoredId = getSelectableStoredMessageId(msg);
-                    const isMultiSelectable = isMultiSelectMode && !!selectableStoredId && !hiddenEmpty;
-                    const isMultiSelected = !!selectableStoredId && selectedMessageIds.has(selectableStoredId);
-                    const multiSelectWrapperProps = isMultiSelectable ? {
-                        onClickCapture: (e: React.MouseEvent) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            toggleMultiSelectedMessage(selectableStoredId!);
-                        },
-                        "data-multi-select": "",
-                        ...(isMultiSelected ? { "data-selected": "" } : {}),
-                    } : {};
-
-                    return (
-                        <div key={msg.id} className="flex flex-col gap-4" {...(hiddenEmpty ? { style: { display: "none" } } : {})} {...(isEmptyBubble && renderMsg.reasoningText && !showTime ? { "data-reasoning-only": "" } : {})}>
-                            {showTime && (
-                                <div className="flex justify-center w-full">
-                                    <span className="chat-sys-msg py-[2px] px-2 rounded select-none">
-                                        {formatChatUiTime(msg.createdAt)}
-                                    </span>
-                                </div>
-                            )}
-                            {/* æ€ç»´é“¾è§¦å‘æ¡ï¼ˆClaude app é£æ ¼ï¼‰ï¼šç‚¹å‡»æ‰“å¼€åº•éƒ¨å¼¹çª— */}
-                            {renderMsg.reasoningText && msg.role !== "user" && uiRole(msg) !== "system" && (
-                                <div className="chat-msg-wrapper" data-role={uiRole(msg)} data-reasoning-row="" style={{ marginBottom: -8 }}>
-                                    <div className="w-[40px] shrink-0" />
-                                    <button
-                                        type="button"
-                                        className="chat-reasoning-trigger"
-                                        onClick={(e) => { e.stopPropagation(); setReasoningSheetText(renderMsg.reasoningText || null); }}
-                                        aria-label="æŸ¥çœ‹æ€è€ƒè¿‡ç¨‹"
-                                    >
-                                        <Clock size={13} strokeWidth={1.8} className="chat-reasoning-trigger-icon" />
-                                        <span className="chat-reasoning-trigger-text">{reasoningPreviewLine(renderMsg.reasoningText)}</span>
-                                        <ChevronRight size={14} strokeWidth={1.8} className="chat-reasoning-trigger-icon" />
-                                    </button>
-                                </div>
-                            )}
-                            <div
-                                id={`message-${msg.id}`}
-                                className="chat-msg-wrapper"
-                                data-role={uiRole(msg)}
-                                {...(isEmptyBubble && renderMsg.reasoningText ? { "data-reasoning-empty": "" } : {})}
-                                {...(isConsecutive ? { "data-consecutive": "" } : {})}
-                                {...(activeMessageId === msg.id ? { "data-active": "" } : {})}
-                                {...(highlightMessageId === msg.id ? { "data-highlight": "" } : {})}
-                                {...multiSelectWrapperProps}
-                            >
-                                {isMultiSelectable && (
-                                    <span className="chat-multi-select-check" aria-hidden="true">
-                                        {isMultiSelected && <Check size={14} strokeWidth={2.5} />}
-                                    </span>
-                                )}
-                                {uiRole(msg) === "system" ? (
-                                    <div
-                                        onPointerDown={(e) => { e.stopPropagation(); handleMessagePointerDown(e, msg.id); }}
-                                        onPointerUp={(e) => handleMessagePointerUp(e)}
-                                        onPointerCancel={handleMessagePointerCancel}
-                                        onPointerLeave={handleMessagePointerCancel}
-                                        onPointerMove={(e) => {
-                                            if (startPosRef.current) {
-                                                const dx = Math.abs(e.clientX - startPosRef.current.x);
-                                                const dy = Math.abs(e.clientY - startPosRef.current.y);
-                                                if (dx > 10 || dy > 10) handleMessagePointerCancel();
-                                            }
-                                        }}
-                                        onContextMenu={(e) => { e.preventDefault(); openMessageContextMenu(msg.id, { x: e.clientX, y: e.clientY }); }}
-                                        className={isSystemInstruction
-                                            ? "chat-system-instruction-card relative cursor-pointer"
-                                            : `chat-sys-msg break-all max-w-[90%] relative cursor-pointer${
-                                                // éª°å­æ—ç™½ï¼šç­‰éª°å­è½å®šå†æ·¡å…¥ï¼Œé¿å…å‰§é€ç‚¹æ•°
-                                                msg.content.startsWith("ğŸ² æ·å‡ºäº†") && Date.now() - new Date(msg.createdAt).getTime() < 6000
-                                                    ? " dice-aside-reveal"
-                                                    : ""
-                                            }`}
-                                        {...(activeMessageId === msg.id ? { "data-active": "" } : {})}
-                                    >
-                                        {isSystemInstruction ? (
-                                            <SystemInstructionCard content={msg.content} />
-                                        ) : msg.mediaType === "memory_write_request" ? (
-                                            <MemoryWriteRequestCard
-                                                msg={msg}
-                                                onApprove={handleApproveMemoryWrite}
-                                                onIgnore={handleIgnoreMemoryWrite}
-                                            />
-                                        ) : (
-                                            <>
-                                                {msg.mediaType === "poke"
-                                                    ? (() => {
-                                                        const sender = msg.mediaData?.pokeSender || (msg.role === "user" ? "ä½ " : (character?.name || "å¯¹æ–¹"));
-                                                        const target = msg.mediaData?.pokeTarget || (msg.role === "user" ? (character?.name || "å¯¹æ–¹") : "ä½ ");
-                                                        const displaySender = sender === userIdentity?.name ? "ä½ " : sender;
-                                                        const displayTarget = target === userIdentity?.name ? "ä½ " : target;
-                                                        return `${displaySender} æ‹äº†æ‹ ${displayTarget}`;
-                                                    })()
-                                                    : formatSysMsgForUI(msg.content, msg)}
-                                            </>
-                                        )}
-                                        {activeMessageId === msg.id && renderSystemContextMenu(msg)}
-                                    </div>
-                                ) : msg.isRetracted ? (
-                                    <div
-                                        onPointerDown={(e) => { e.stopPropagation(); handleMessagePointerDown(e, msg.id); }}
-                                        onPointerUp={(e) => handleMessagePointerUp(e)}
-                                        onPointerCancel={handleMessagePointerCancel}
-                                        onPointerLeave={handleMessagePointerCancel}
-                                        onPointerMove={(e) => {
-                                            if (startPosRef.current) {
-                                                const dx = Math.abs(e.clientX - startPosRef.current.x);
-                                                const dy = Math.abs(e.clientY - startPosRef.current.y);
-                                                if (dx > 10 || dy > 10) handleMessagePointerCancel();
-                                            }
-                                        }}
-                                        onContextMenu={(e) => { e.preventDefault(); openMessageContextMenu(msg.id, { x: e.clientX, y: e.clientY }); }}
-                                        className="chat-sys-msg mx-auto relative cursor-pointer"
-                                        {...(activeMessageId === msg.id ? { "data-active": "" } : {})}
-                                    >
-                                        {msg.role === "user" ? "ä½ " : (character?.name || "å¯¹æ–¹")}æ’¤å›äº†ä¸€æ¡æ¶ˆæ¯
-                                        {activeMessageId === msg.id && renderDeleteOnlyContextMenu(() => handleDeleteMessage(getStoredActionMessageId(msg)), () => startMultiSelectFromMessage(msg))}
-                                    </div>
-                                ) : (
-                                    <>
-                                        {msg.role !== "user" && !isEmptyBubble && (
-                                            isSilentThought ? (
-                                                /* Silent + inner monologue: no avatar, just heart */
-                                                <div
-                                                    onPointerDown={(e) => { e.stopPropagation(); handleMessagePointerDown(e, msg.id); }}
-                                                    onPointerUp={(e) => handleMessagePointerUp(e)}
-                                                    onPointerCancel={handleMessagePointerCancel}
-                                                    onPointerLeave={handleMessagePointerCancel}
-                                                    onPointerMove={(e) => {
-                                                        if (startPosRef.current) {
-                                                            const dx = Math.abs(e.clientX - startPosRef.current.x);
-                                                            const dy = Math.abs(e.clientY - startPosRef.current.y);
-                                                            if (dx > 10 || dy > 10) handleMessagePointerCancel();
-                                                        }
-                                                    }}
-                                                    onContextMenu={(e) => { e.preventDefault(); openMessageContextMenu(msg.id, { x: e.clientX, y: e.clientY }); }}
-                                                    onClick={(e) => {
-                                                        if (activeMessageId === msg.id) return;
-                                                        e.stopPropagation();
-                                                        setExpandedThinkingId(prev => prev === msg.id ? null : msg.id);
-                                                    }}
-                                                    className="chat-monologue-heart flex items-center justify-center shrink-0 w-[40px] h-[24px] relative cursor-pointer"
-                                                    title={session.isGroup ? `${msg.senderName || "ç¾¤æˆå‘˜"}çš„æŠ˜å çŠ¶æ€` : "æŸ¥çœ‹æŠ˜å çŠ¶æ€"}
-                                                    aria-label={session.isGroup ? `${msg.senderName || "ç¾¤æˆå‘˜"}çš„æŠ˜å çŠ¶æ€` : "æŸ¥çœ‹æŠ˜å çŠ¶æ€"}
-                                                    {...(activeMessageId === msg.id ? { "data-active": "" } : {})}
-                                                >
-                                                    <span className="chat-monologue-heart ts-18 leading-none inline-block" {...(expandedMonologueId === msg.id ? { "data-active": "" } : {})}><svg viewBox="0 0 16 16" width="18" height="18" style={{display:"block"}}><path d="M8 14s-6-4-6-8c0-2.5 1.5-4 3.5-4 1 0 2 .5 2.5 1.5C8.5 2.5 9.5 2 10.5 2 12.5 2 14 3.5 14 6c0 4-6 8-6 8z" fill="currentColor"/></svg></span>
-                                                    {activeMessageId === msg.id && renderDeleteOnlyContextMenu(() => handleDeleteMessage(getStoredActionMessageId(msg)), () => startMultiSelectFromMessage(msg))}
-                                                </div>
-                                            ) : (
-                                                <div className="chat-msg-avatar flex flex-col items-center gap-1 shrink-0">
-                                                    {(() => {
-                                                        const senderChar = session.isGroup && msg.senderCharacterId
-                                                            ? groupCharMap.get(msg.senderCharacterId) || character
-                                                            : character;
-                                                        return (
-                                                            <>
-                                                    <div onDoubleClick={() => {
-                                                        const targetChar = session.isGroup && msg.senderCharacterId
-                                                            ? groupCharMap.get(msg.senderCharacterId) || character
-                                                            : character;
-                                                        if (targetChar) sendRichMessage("poke", { pokeTarget: targetChar.name });
-                                                    }} className="w-[40px] h-[40px] rounded-[20px] bg-[var(--c-input)] overflow-hidden cursor-pointer">
-                                                        {senderChar?.avatar ? (
-                                                            <img src={senderChar.avatar} className="w-full h-full object-cover" alt="" />
-                                                        ) : (
-                                                            <ChatFallbackAvatar />
-                                                        )}
-                                                    </div>
-                                                            </>
-                                                        );
-                                                    })()}
-                                                </div>
-                                            )
-                                        )}
-                                        {!isSilentThought && !isEmptyBubble && <div
-                                            className={`chat-msg-content-wrap flex flex-col min-w-0 max-w-[70%] ${isStandaloneHtmlPreview ? "chat-msg-content-wrap-html" : ""}`}
-                                            {...(isStandaloneHtmlPreview ? { "data-html": "true" } : {})}
-                                        >
-                                            {session.isGroup && msg.role !== "user" && (
-                                                <span className="chat-group-sender-name">{msg.senderName || ""}{renderGroupRoleBadge(msg.senderCharacterId)}</span>
-                                            )}
-                                            <div
-                                            {...(editingMessageId !== msg.id ? {
-                                                onPointerDown: (e: React.PointerEvent) => { e.stopPropagation(); handleMessagePointerDown(e, msg.id); },
-                                                onPointerUp: (e: React.PointerEvent) => handleMessagePointerUp(e),
-                                                onPointerCancel: handleMessagePointerCancel,
-                                                onPointerLeave: handleMessagePointerCancel,
-                                                onPointerMove: (e: React.PointerEvent) => {
-                                                    if (startPosRef.current) {
-                                                        const dx = Math.abs(e.clientX - startPosRef.current.x);
-                                                        const dy = Math.abs(e.clientY - startPosRef.current.y);
-                                                        if (dx > 10 || dy > 10) handleMessagePointerCancel();
-                                                    }
-                                                },
-                                                onContextMenu: (e: React.MouseEvent) => { e.preventDefault(); openMessageContextMenu(msg.id, { x: e.clientX, y: e.clientY }); },
-                                            } : {})}
-                                            className={`chat-bubble-role-${msg.role} ${isMediaBubble ? "chat-bubble-media" : ""} ${isStandaloneHtmlPreview ? "chat-bubble-html-preview" : ""} ${renderMsg.mediaType === "music_share" ? "chat-bubble-music-share" : ""} ${renderMsg.mediaType === "gift" || renderMsg.mediaType === "image" || isStandaloneHtmlPreview ? "rounded-none" : "rounded-md"} break-words relative cursor-pointer select-none`}
-                                            style={isStandaloneHtmlPreview ? STANDALONE_CARD_BUBBLE_STYLE : undefined}
-                                            data-ui={msg.role === "user" ? "bubble-user" : "bubble-bot"}
-                                            data-msg-id={msg.id}
-                                            {...(activeMessageId === msg.id ? { "data-active": "" } : {})}
-                                            >
-                                            {/* Message Actions Popup */}
-                                            {activeMessageId === msg.id && renderBubbleContextMenu(msg)}
-
-                                            <MessageBubble
-                                                msg={renderMsg}
-                                                displayContent={msg.displayProjected ? undefined : bubbleDisplayContent}
-                                                charName={character?.name}
-                                                userName={userIdentity?.name || "ä½ "}
-                                                groupSize={session.isGroup ? (session.participantIds?.length || 0) + (session.isSpectator ? 0 : 1) : undefined}
-                                                onShowDetail={setMediaDetailMsg}
-                                                characterId={msg.senderCharacterId || session.contactId}
-                                                onUpdate={(updated) => setMessages(prev => prev.map(m => m.id === updated.id ? updated : m))}
-                                                onSystemMessage={(text) => {
-                                                    const sysMsg = pushChatMessage({
-                                                        sessionId: session.id,
-                                                        role: "system",
-                                                        content: text,
-                                                    });
-                                                    setMessages(prev => [...prev, sysMsg]);
-                                                }}
-                                                onMusicPlay={handleMusicCardPlay}
-                                                onActionSelect={(text) => chatTextInputRef.current?.appendText(text)}
-                                                defaultTranslationExpanded={session.collapseBilingualTranslation !== false ? false : true}
-                                            />
-                                        </div>
-                                        </div>}
-                                        {msg.role !== "user" && !isSilentThought && !isEmptyBubble && hasFoldedPanel && (
-                                            <button
-                                                onClick={(e) => { e.stopPropagation(); setExpandedThinkingId(prev => prev === msg.id ? null : msg.id); }}
-                                                className="chat-monologue-heart bg-none border-none cursor-pointer p-1 ts-14 leading-none self-end shrink-0 -ml-2"
-                                                {...(expandedMonologueId === msg.id ? { "data-active": "" } : {})}
-                                                title="æŸ¥çœ‹æŠ˜å çŠ¶æ€"
-                                                aria-label="æŸ¥çœ‹æŠ˜å çŠ¶æ€"
-                                            >
-                                                <svg viewBox="0 0 16 16" width="14" height="14" style={{display:"block"}}>
-                                                    <path d="M8 14s-6-4-6-8c0-2.5 1.5-4 3.5-4 1 0 2 .5 2.5 1.5C8.5 2.5 9.5 2 10.5 2 12.5 2 14 3.5 14 6c0 4-6 8-6 8z" fill="currentColor"/>
-                                                </svg>
-                                            </button>
-                                        )}
-                                        {msg.role === "user" && !isEmptyBubble && (
-                                            <div className="chat-msg-avatar w-[40px] h-[40px] rounded-[20px] bg-[var(--c-page-body-bg)] shrink-0 flex items-center justify-center overflow-hidden">
-                                                {userIdentity?.avatarUrl ? (
-                                                    <img src={userIdentity.avatarUrl} alt="Me" className="w-full h-full object-cover rounded-[20px]" />
-                                                ) : (
-                                                    <User size={20} color="var(--c-text)" />
-                                                )}
-                                            </div>
-                                        )}
-                                    </>
-                                )}
-                            </div>
-                            {/* Voice message: text transcription bubble */}
-                            {renderMsg.mediaType === "audio" && voiceTextIds.has(msg.id) && renderMsg.mediaData?.label && (
-                                <div className={`chat-msg-wrapper`} data-role={uiRole(msg)} style={{ marginTop: -12 }}>
-                                    {msg.role !== "user" && <div className="w-[40px] shrink-0" />}
-                                    <div className="voice-msg-text-bubble">
-                                        <BilingualTextBlock
-                                            text={msg.displayProjected ? (renderMsg.mediaData?.label || "") : renderDisplayText(renderMsg.mediaData?.label || "", msg.role === "user" ? 1 : 2, false)}
-                                            mode="markdown"
-                                            defaultExpanded={session.collapseBilingualTranslation !== false ? false : true}
-                                        />
-                                    </div>
-                                    {msg.role === "user" && <div className="w-[40px] shrink-0" />}
-                                </div>
-                            )}
-                            {/* çŠ¶æ€æ ï¼šä¸€å¾‹è£¸æ¸²æŸ“ï¼Œä¸å¥—ä¾¿åˆ©è´´å¤–æ¡†ï¼ˆè‡ªå®šä¹‰æ¨¡å¼ä¸‹äº¤ç»™ç”¨æˆ·çš„æ¸²æŸ“ä»£ç ï¼Œ
-                                å¦åˆ™ [çŠ¶æ€æ ] åŸæ–‡ç›´æ¥èµ° markdown/å†…è” HTMLï¼Œè®© AI ç›´å‡ºçš„å¡ç‰‡è‡ªå·±å½“å¤–æ¡†ï¼‰ã€‚
-                                çŠ¶æ€å€¼è·Ÿå†…å¿ƒç‹¬ç™½èµ°ï¼ˆç•™åœ¨ä¾¿åˆ©è´´é‡Œï¼‰ï¼›è¿™è½®æ²¡æœ‰å†…å¿ƒç‹¬ç™½æ—¶ä¾¿åˆ©è´´ä¸å‡ºç°ï¼Œ
-                                æ•°å€¼è£¸æ”¾åœ¨çŠ¶æ€æ ä¸Šæ–¹ã€‚ */}
-                            {hasFoldedPanel && expandedMonologueId === msg.id
-                                && (renderMsg.statusPanel || (!renderMsg.innerMonologue && cardStateValues && cardStateValues.length > 0)) && (
-                                <div className="chat-status-bare">
-                                    {!renderMsg.innerMonologue && cardStateValues && cardStateValues.length > 0 && (
-                                        <StateValuesPanel stateValues={cardStateValues} />
-                                    )}
-                                    {renderMsg.statusPanel && (
-                                        msg.statusRegionMode === "custom" && statusRegionCfg.renderHtml.trim() ? (
-                                            <CustomStatusFrame html={statusRegionCfg.renderHtml} raw={renderMsg.statusPanel} />
-                                        ) : (
-                                            <BilingualTextBlock text={msg.displayProjected ? renderMsg.statusPanel : renderDisplayText(renderMsg.statusPanel, 6, false)} mode="markdown" defaultExpanded={session.collapseBilingualTranslation !== false ? false : true} />
-                                        )
-                                    )}
-                                </div>
-                            )}
-                            {/* Inner monologue card (sticky note / journal style) */}
-                            {hasFoldedPanel && expandedMonologueId === msg.id && renderMsg.innerMonologue && (
-                                <div className="chat-thought-card">
-                                    {/* Decorative washi tape */}
-                                    <div className="chat-thought-tape-left" />
-                                    <div className="chat-thought-tape-right" />
-                                    {/* Title */}
-                                    <div className="chat-thought-title">
-                                        ğŸ’­ å†…å¿ƒç‹¬ç™½
-                                    </div>
-                                    {/* State values panel */}
-                                    {cardStateValues && cardStateValues.length > 0 && (
-                                        <StateValuesPanel stateValues={cardStateValues} />
-                                    )}
-                                    <div className="chat-thought-body">
-                                        <BilingualTextBlock text={msg.displayProjected ? renderMsg.innerMonologue : renderDisplayText(renderMsg.innerMonologue, 6, false)} mode="markdown" defaultExpanded={session.collapseBilingualTranslation !== false ? false : true} />
-                                    </div>
-                                    {/* Signature */}
-                                    <div className="chat-thought-sig">
-                                        â€” {session.isGroup ? (msg.senderName || "ç¾¤æˆå‘˜") : (character?.name || "TA")}
-                                    </div>
-                                </div>
-                            )}
-                        </div>
-                    );
-                })}
-                {/* æµå¼ç”Ÿæˆé¢„è§ˆï¼šç”Ÿæˆä¸­å®æ—¶æ˜¾ç¤ºåŸæ–‡å¢é‡ï¼Œç»“æŸåç”±æ­£å¼æ¶ˆæ¯æ›¿æ¢ */}
-                {!offlineMode && streamPreview && (
-                    <div className="chat-stream-preview" data-ui="stream-preview">
-                        {session.isGroup && streamPreview.parts && streamPreview.parts.length > 0 ? (
-                            /* æŒ‰ç©ºè¡Œå®šå‹ï¼šå†™å®Œçš„æ®µè½ç«‹å³æˆä¸ºç‹¬ç«‹æ°”æ³¡ï¼ˆä¸æœ€ç»ˆæ‹†æ¡åŒè§„åˆ™ï¼‰ï¼Œåªæœ‰æœ€åä¸€æ®µå¸¦å…‰æ ‡æ‰“å­— */
-                            streamPreview.parts.map((part, i) => {
-                                const senderChar = groupCharMap.get(part.characterId) || character;
-                                const isLastPart = i === (streamPreview.parts?.length ?? 0) - 1;
-                                return part.texts.map((segText, j) => {
-                                    const isTyping = isLastPart && j === part.texts.length - 1;
-                                    return (
-                                        <div key={`stream-${part.characterId}-${i}-${j}`} className="chat-msg-wrapper" data-role="assistant">
-                                            <div className="chat-msg-avatar flex flex-col items-center gap-1 shrink-0">
-                                                <div className="w-[40px] h-[40px] rounded-[20px] bg-[var(--c-input)] overflow-hidden">
-                                                    {senderChar?.avatar ? <img src={senderChar.avatar} className="w-full h-full object-cover" alt="" /> : <ChatFallbackAvatar />}
-                                                </div>
-                                            </div>
-                                            <div className="chat-msg-content-wrap flex flex-col min-w-0 max-w-[70%]">
-                                                <span className="chat-group-sender-name">{part.characterName}</span>
-                                                <div className="chat-bubble-role-assistant chat-stream-bubble break-words rounded-md px-3 py-2">
-                                                    {/* æµå¼é¢„è§ˆç”¨è½»é‡ pre-wrap æ¸²æŸ“ï¼šé¿å…æ¯å¸§è·‘ markdown/åŒè¯­è§£æå¯¼è‡´é—ªçƒå¡é¡¿ */}
-                                                    <div className="chat-stream-text whitespace-pre-wrap break-words">{segText}</div>
-                                                    {isTyping && <span className="chat-stream-cursor" aria-hidden="true" />}
-                                                </div>
-                                            </div>
-                                        </div>
-                                    );
-                                });
-                            })
-                        ) : streamPreview.texts && streamPreview.texts.length > 0 ? (
-                            streamPreview.texts.map((segText, j) => {
-                                const isTyping = j === (streamPreview.texts?.length ?? 0) - 1;
-                                return (
-                                    <div key={`stream-seg-${j}`} className="chat-msg-wrapper" data-role="assistant">
-                                        <div className="chat-msg-avatar flex flex-col items-center gap-1 shrink-0">
-                                            <div className="w-[40px] h-[40px] rounded-[20px] bg-[var(--c-input)] overflow-hidden">
-                                                {character?.avatar ? <img src={character.avatar} className="w-full h-full object-cover" alt="" /> : <ChatFallbackAvatar />}
-                                            </div>
-                                        </div>
-                                        <div className="chat-msg-content-wrap flex flex-col min-w-0 max-w-[70%]">
-                                            <div className="chat-bubble-role-assistant chat-stream-bubble break-words rounded-md px-3 py-2">
-                                                {/* æµå¼é¢„è§ˆç”¨è½»é‡ pre-wrap æ¸²æŸ“ï¼šé¿å…æ¯å¸§è·‘ markdown/åŒè¯­è§£æå¯¼è‡´é—ªçƒå¡é¡¿ */}
-                                                <div className="chat-stream-text whitespace-pre-wrap break-words">{segText}</div>
-                                                {isTyping && <span className="chat-stream-cursor" aria-hidden="true" />}
-                                            </div>
-                                        </div>
-                                    </div>
-                                );
-                            })
-                        ) : null}
-                    </div>
-                )}
-                {/* Scroll anchor: browser keeps this in view when content above changes height */}
-                <div style={{ overflowAnchor: 'auto', height: 1 }} />
-            </div>
-
-            {/* Input Bar â€” absolute at bottom, same layer as header */}
-            {isMultiSelectMode && !offlineMode && (
-                <div className="chat-multi-select-bar chat-room-main-pane" data-ui="multi-select">
-                    <button
-                        type="button"
-                        className="chat-multi-select-icon-btn"
-                        onClick={cancelMultiSelect}
-                        aria-label="é€€å‡ºå¤šé€‰"
-                        title="é€€å‡ºå¤šé€‰"
-                    >
-                        <X size={20} strokeWidth={1.8} />
-                    </button>
-                    <div className="chat-multi-select-summary">
-                        <strong>å·²é€‰ {selectedMessageIds.size} æ¡</strong>
-                        <span>
-                            {multiDeleteTargetIds.length > selectedMessageIds.size
-                                ? `å®é™…åˆ é™¤ ${multiDeleteTargetIds.length} æ¡ï¼Œå«éšè—å†å²`
-                                : `å®é™…åˆ é™¤ ${multiDeleteTargetIds.length} æ¡`}
-                        </span>
-                    </div>
-                    <button
-                        type="button"
-                        className="chat-multi-select-delete-btn"
-                        disabled={selectedMessageIds.size === 0 || multiDeleteTargetIds.length === 0}
-                        onClick={confirmMultiDelete}
-                    >
-                        <Trash2 size={18} strokeWidth={1.8} />
-                        åˆ é™¤
-                    </button>
-                </div>
-            )}
-            {!isMultiSelectMode && (offlineMode ? (
-                <OfflineTextInputBar
-                    key={session.id}
-                    ref={offlineTextInputRef}
-                    isOfflineGenerating={isOfflineGenerating}
-                    isSpectator={!!session.isGroup && !!session.isSpectator}
-                    showEmojiPanel={showEmojiPanel}
-                    enterToSendEnabled={enterToSendEnabled}
-                    onToggleOfflineMode={toggleOfflineMode}
-                    onCloseEmojiPanel={() => setShowEmojiPanel(false)}
-                    onToggleEmojiPanel={() => { setShowEmojiPanel(!showEmojiPanel); setShowStickerPanel(false); setShowPlusMenu(false); }}
-                    onSendText={handleOfflineSend}
-                    onStopGeneration={clearOfflineGeneration}
-                />
-            ) : (
-            <ChatTextInputBar
-                ref={chatTextInputRef}
-                characterName={character?.name || "å¯¹æ–¹"}
-                characterId={session.contactId}
-	                stickerCharacterIds={session.isGroup ? session.participantIds : undefined}
-	                isGroup={!!session.isGroup}
-	                isSpectator={!!session.isGroup && !!session.isSpectator}
-	                muteUntilMs={session.isGroup && session.groupMutes?.[GROUP_SELF_KEY] ? new Date(session.groupMutes[GROUP_SELF_KEY]).getTime() : 0}
-	                isGenerating={isGenerating}
-	                theaterMode={theaterMode}
-	                enterToSendEnabled={enterToSendEnabled}
-	                quotingMessage={quotingMessage}
-                showEmojiPanel={showEmojiPanel}
-                showStickerPanel={showStickerPanel}
-                showPlusMenu={showPlusMenu}
-                customPlusActions={customPlusActions}
-                onClearQuote={() => setQuotingMessage(null)}
-                onToggleOfflineMode={toggleOfflineMode}
-                onClosePanels={() => { setShowEmojiPanel(false); setShowStickerPanel(false); setShowPlusMenu(false); }}
-	                onToggleEmojiPanel={() => { setShowEmojiPanel(!showEmojiPanel); setShowStickerPanel(false); setShowPlusMenu(false); }}
-	                onToggleStickerPanel={() => { setShowStickerPanel(!showStickerPanel); setShowEmojiPanel(false); setShowPlusMenu(false); }}
-	                onTogglePlusMenu={() => { setShowPlusMenu(!showPlusMenu); setShowEmojiPanel(false); setShowStickerPanel(false); }}
-	                onToggleTheaterMode={toggleTheaterMode}
-	                onCloseTheaterMode={closeTheaterMode}
-	                onOpenRichModal={(modal) => { setShowPlusMenu(false); setRichModal(modal); }}
-                onOpenCustomPlusAction={handleOpenCustomPlusAction}
-                onStartVideoCall={() => { cancelFollowUp(session.id); setShowPlusMenu(false); setCallInitiator("user"); setShowVideoCall(true); }}
-                onStartVoiceCall={() => { cancelFollowUp(session.id); setShowPlusMenu(false); setCallInitiator("user"); setShowVoiceCall(true); }}
-                onSendText={handleSendText}
-                onStopGeneration={clearStuckGeneration}
-                onTriggerAIResponse={triggerAIResponse}
-                onSendSticker={(name, url) => { setShowStickerPanel(false); sendRichMessage("sticker", { label: name, stickerUrl: url }); }}
-            />
-            ))}
-
-            {showConfirmMultiDelete && (
-                <ConfirmDialog
-                    title="åˆ é™¤é€‰ä¸­æ¶ˆæ¯ï¼Ÿ"
-                    message={
-                        multiDeleteTargetIds.length > selectedMessageIds.size
-                            ? `å°†åˆ é™¤å·²é€‰æ¶ˆæ¯ï¼Œå¹¶ä¸€å¹¶åˆ é™¤ç›¸é‚»å·²é€‰æ¶ˆæ¯ä¹‹é—´çš„éšè—å†å²ã€‚å®é™…åˆ é™¤ ${multiDeleteTargetIds.length} æ¡ï¼Œåˆ é™¤åæ— æ³•æ¢å¤ã€‚`
-                            : `å°†åˆ é™¤å·²é€‰çš„ ${multiDeleteTargetIds.length} æ¡æ¶ˆæ¯ï¼Œåˆ é™¤åæ— æ³•æ¢å¤ã€‚`
-                    }
-                    icon={AlertCircle}
-                    variant="danger"
-                    confirmLabel="åˆ é™¤"
-                    cancelLabel="å–æ¶ˆ"
-                    onConfirm={handleMultiDeleteConfirmed}
-                    onCancel={() => setShowConfirmMultiDelete(false)}
-                />
-            )}
-
-            {/* Settings Panel â€” portaled outside session-scoped CSS, preserves chat room mount */}
-            {showSettings && wrapperRef.current?.parentElement && createPortal(
-                <div className="chat-settings-layer absolute inset-0 z-50">
-                    <ChatSettingsPanel
-                        session={session}
-                        onClose={() => {
-                            setShowSettings(false);
-                            // Reload messages in case history was cleared
-                            syncMessagesFromStorage();
-                        }}
-                        onJumpToMessage={(messageId) => {
-                            setShowSettings(false);
-                            jumpToStoredMessage(messageId);
-                        }}
-                        onToolHistoryCleared={syncMessagesFromStorage}
-                        offlineHistoryBusy={isOfflineGenerating}
-                        onOfflineHistoryCleared={() => {
-                            setOfflineTurns([]);
-                            setOfflineVisibleCount(OFFLINE_INITIAL_LOAD);
-                            setPendingOfflineUserText("");
-                            offlineGenerationInputRef.current = "";
-                            setActiveOfflineTarget(null);
-                            setContextMenuAnchor(null);
-                            setEditingOfflineTarget(null);
-                            setEditingOfflineContent("");
-                            showChatToast("å·²æ¸…ç©ºçº¿ä¸‹èŠå¤©è®°å½•");
-                        }}
-                        onDeleteFriend={() => onBack()}
-                        onSessionDeleted={() => {
-                            setShowSettings(false);
-                            (onDeleted ?? onBack)();
-                        }}
-                    />
-                </div>,
-                wrapperRef.current.parentElement
-            )}
-
-            {activeCustomChatPlus && activeCustomChatPlus.presentation === "none" && (
-                <div className="chat-custom-app-headless" aria-hidden="true">
-                    <CustomAppRunner
-                        app={activeCustomChatPlus.app}
-                        launchContext={activeCustomChatPlus.launchContext}
-                        embedded
-                        onClose={() => setActiveCustomChatPlus(null)}
-                        onNotice={showChatToast}
-                    />
-                </div>
-            )}
-
-            {activeCustomChatPlus && activeCustomChatPlus.presentation !== "none" && (
-                <div
-                    className={`chat-custom-app-layer is-${activeCustomChatPlus.presentation}`}
-                    role="presentation"
-                    onClick={() => setActiveCustomChatPlus(null)}
-                >
-                    <div
-                        className="chat-custom-app-shell"
-                        role="dialog"
-                        aria-modal="true"
-                        aria-label={activeCustomChatPlus.action.label}
-                        style={{
-                            "--chat-custom-app-panel-height": normalizeCustomPanelHeight(activeCustomChatPlus.action.panelHeight) ?? undefined,
-                        } as React.CSSProperties}
-                        onClick={event => event.stopPropagation()}
-                    >
-                        <div className="chat-custom-app-head">
-                            <div className="chat-custom-app-title">
-                                <span className="chat-custom-app-icon" aria-hidden="true">
-                                    {activeCustomChatPlus.app.iconDataUrl ? <img src={activeCustomChatPlus.app.iconDataUrl} alt="" /> : <Blocks size={18} />}
-                                </span>
-                                <span>{activeCustomChatPlus.action.label}</span>
-                            </div>
-                            <button
-                                type="button"
-                                className="chat-custom-app-close"
-                                onClick={() => setActiveCustomChatPlus(null)}
-                                aria-label="å…³é—­"
-                            >
-                                <X size={18} strokeWidth={2} />
-                            </button>
-                        </div>
-                        <div className="chat-custom-app-body">
-                            <CustomAppForegroundBoundary
-                                key={activeCustomChatPlus.app.id}
-                                appName={activeCustomChatPlus.app.name}
-                                appId={activeCustomChatPlus.app.id}
-                                appVersion={activeCustomChatPlus.app.version}
-                                manifestId={activeCustomChatPlus.app.manifest?.id}
-                                closeLabel="è¿”å›èŠå¤©"
-                                onClose={() => setActiveCustomChatPlus(null)}
-                            >
-                                <CustomAppRunner
-                                    app={activeCustomChatPlus.app}
-                                    launchContext={activeCustomChatPlus.launchContext}
-                                    embedded
-                                    onClose={() => setActiveCustomChatPlus(null)}
-                                    onNotice={showChatToast}
-                                />
-                            </CustomAppForegroundBoundary>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {/* Rich Media Input Modals */}
-            {richModal === "voice_msg" && (
-                <VoiceRecordModal
-                    characterId={session.contactId}
-                    onSend={(text, audioDataUrl) => {
-                        setRichModal(null);
-                        sendRichMessage("audio", { label: text }, "", audioDataUrl);
-                    }}
-                    onClose={() => setRichModal(null)}
-                />
-            )}
-            {richModal === "text_photo" && (
-                <TextPhotoModal
-                    onSend={(text) => { setRichModal(null); sendRichMessage("image", { label: text }); }}
-                    onClose={() => setRichModal(null)}
-                />
-            )}
-            {richModal === "photo" && (
-                <PhotoInputModal
-                    onSend={(desc, imageDataUrl) => { setRichModal(null); sendRichMessage("image", { label: desc }, "", imageDataUrl); }}
-                    onClose={() => setRichModal(null)}
-                />
-            )}
-            {richModal === "gift" && (
-                <GiftPickerModal
-                    gifts={availableShoppingGifts}
-                    isGroup={session.isGroup}
-                    recipients={groupCharacters}
-                    onSend={(gift, recipient) => {
-                        const sent = sendShoppingGiftMessage(gift, recipient);
-                        if (sent) setRichModal(null);
-                    }}
-                    onClose={() => setRichModal(null)}
-                />
-            )}
-            {richModal === "red_packet" && (
-                <RedPacketModal
-                    mode="red_packet"
-                    isGroup={session.isGroup}
-                    onSend={(amount, label, count) => {
-                        const sent = sendRichMessage("red_packet", { amount, label, status: "pending", count: count || 1 });
-                        if (sent) setRichModal(null);
-                    }}
-                    onClose={() => setRichModal(null)}
-                />
-            )}
-            {richModal === "transfer_target" && session.isGroup && (
-                <TransferTargetModal
-                    participants={groupCharacters}
-                    onSelect={(char) => {
-                        setTransferTarget(char);
-                        setRichModal("transfer");
-                    }}
-                    onClose={() => setRichModal(null)}
-                />
-            )}
-            {richModal === "transfer" && (
-                <RedPacketModal
-                    mode="transfer"
-                    onSend={(amount, label) => {
-                        if (session.isGroup && transferTarget) {
-                            const sent = sendRichMessage("transfer", {
-                                amount, label, status: "pending",
-                                senderName: userIdentity?.name || "ä½ ",
-                                recipientId: transferTarget.id,
-                                recipientName: transferTarget.name,
-                            });
-                            if (sent) {
-                                setRichModal(null);
-                                setTransferTarget(null);
-                            }
-                        } else {
-                            const sent = sendRichMessage("transfer", { amount, label, status: "pending" });
-                            if (sent) setRichModal(null);
-                        }
-                    }}
-                    onClose={() => { setRichModal(null); setTransferTarget(null); }}
-                />
-            )}
-            {richModal === "location" && (
-                <LocationInputModal
-                    onSend={(loc) => { setRichModal(null); sendRichMessage("location", { label: loc }); }}
-                    onClose={() => setRichModal(null)}
-                />
-            )}
-            {richModal === "system_instruction" && (
-                <SystemInstructionModal
-                    onSend={(text) => {
-                        const sent = sendSystemInstruction(text);
-                        if (sent) setRichModal(null);
-                    }}
-                    onClose={() => setRichModal(null)}
-                />
-            )}
-
-            {/* æ€ç»´é“¾åº•éƒ¨å¼¹çª—ï¼ˆClaude app é£æ ¼ï¼‰ */}
-            {reasoningSheetText !== null && (
-                <div
-                    className="modal-overlay modal-overlay-bottom"
-                    data-ui="modal"
-                    role="dialog"
-                    aria-modal="true"
-                    aria-label="æ€è€ƒè¿‡ç¨‹"
-                    onClick={() => setReasoningSheetText(null)}
-                >
-                    <div className="modal-sheet chat-reasoning-sheet" onClick={(e) => e.stopPropagation()}>
-                        <div className="chat-reasoning-sheet-handle" />
-                        <div className="chat-reasoning-sheet-header">
-                            <button
-                                type="button"
-                                className="chat-reasoning-sheet-close"
-                                onClick={handleTranslateReasoning}
-                                aria-label={reasoningTranslation ? "éšè—è¯‘æ–‡" : "ç¿»è¯‘æ€è€ƒè¿‡ç¨‹"}
-                                title={reasoningTranslation ? "éšè—è¯‘æ–‡" : "ç¿»è¯‘æ€è€ƒè¿‡ç¨‹"}
-                            >
-                                {reasoningTranslating
-                                    ? <Loader2 size={18} strokeWidth={2} className="animate-spin" />
-                                    : <Languages size={18} strokeWidth={2} {...(reasoningTranslation ? { color: "var(--c-icon-active)" } : {})} />}
-                            </button>
-                            <span className="chat-reasoning-sheet-title">æ€è€ƒè¿‡ç¨‹</span>
-                            <button
-                                type="button"
-                                className="chat-reasoning-sheet-close"
-                                onClick={() => setReasoningSheetText(null)}
-                                aria-label="å…³é—­"
-                            >
-                                <X size={18} strokeWidth={2} />
-                            </button>
-                        </div>
-                        <div className="chat-reasoning-sheet-body">
-                            {reasoningTranslateError && (
-                                <div className="chat-reasoning-translate-error">{reasoningTranslateError}</div>
-                            )}
-                            {reasoningTranslation && (
-                                <div className="chat-reasoning-view-switch">
-                                    {([["zh", "ä¸­æ–‡"], ["orig", "åŸæ–‡"], ["both", "å¯¹ç…§"]] as const).map(([mode, text]) => (
-                                        <button
-                                            key={mode}
-                                            type="button"
-                                            className="chat-reasoning-view-btn"
-                                            {...(reasoningViewMode === mode ? { "data-active": "" } : {})}
-                                            onClick={() => setReasoningViewMode(mode)}
-                                        >{text}</button>
-                                    ))}
-                                </div>
-                            )}
-                            {reasoningTranslation && reasoningViewMode !== "orig" && (
-                                <div className={reasoningViewMode === "both" ? "chat-reasoning-translation" : undefined}>
-                                    <BilingualTextBlock text={reasoningTranslation} mode="markdown" defaultExpanded />
-                                </div>
-                            )}
-                            {(reasoningViewMode !== "zh" || !reasoningTranslation) && (
-                                <BilingualTextBlock text={reasoningSheetText} mode="markdown" defaultExpanded />
-                            )}
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {/* Red Packet / Transfer Detail Modal */}
-            {mediaDetailMsg && (
-                <MediaDetailModal
-                    msg={mediaDetailMsg}
-                    userName={userIdentity?.name || "ä½ "}
-                    groupSize={session.isGroup ? (session.participantIds?.length || 0) + (session.isSpectator ? 0 : 1) : undefined}
-                    onAccept={(updatedMsg, sysText, actionType) => {
-                        const walletUpdatedMsg = updatedMsg.role === "assistant"
-                            ? creditIncomingMoneyMessage(updatedMsg, actionType)
-                            : updatedMsg;
-                        setMessages(prev => prev.map(m => m.id === walletUpdatedMsg.id ? walletUpdatedMsg : m));
-                        setMediaDetailMsg(null);
-                        const claimerN = userIdentity?.name || "ä½ ";
-                        const ownerN = walletUpdatedMsg.senderName || (walletUpdatedMsg.role === "assistant" ? (character?.name || "å¯¹æ–¹") : claimerN);
-                        const sysMsg = pushChatMessage({
-                            sessionId: session.id, role: "user", content: sysText,
-                            mediaType: actionType as ChatMessage["mediaType"],
-                            ...(session.isGroup ? { mediaData: { claimer: claimerN, owner: ownerN }, senderName: claimerN } : {}),
-                        });
-                        setMessages(prev => [...prev, sysMsg]);
-                    }}
-                    onClose={() => setMediaDetailMsg(null)}
-                />
-            )}
-
-            {editingOfflineTarget && (
-                <div className="chat-html-overlay" onClick={() => { setEditingOfflineTarget(null); setEditingOfflineContent(""); }}>
-                    <div
-                        className="g-card w-[min(84vw,420px)] max-h-[78vh] p-4 flex flex-col gap-3"
-                        onClick={(e) => e.stopPropagation()}
-                    >
-                        <div className="flex items-center justify-between gap-3">
-                            <div className="flex flex-col gap-1">
-                                <span className="menu-label">
-                                    {editingOfflineTarget.role === "user" ? "ç¼–è¾‘çº¿ä¸‹è¾“å…¥" : "ç¼–è¾‘çº¿ä¸‹å›å¤"}
-                                </span>
-                                <span className="menu-desc !mt-0">
-                                    {editingOfflineTarget.role === "user"
-                                        ? "ä¿å­˜åä¼šæ›´æ–°è¿™ä¸€è½®çº¿ä¸‹å†å²"
-                                        : "ä¿å­˜åä¼šé‡æ–°è§£æ content å’Œæ‘˜è¦ï¼Œå¹¶æ›´æ–°çŸ­æœŸè®°å¿†äº‹ä»¶æµ"}
-                                </span>
-                            </div>
-                            <button
-                                onClick={() => { setEditingOfflineTarget(null); setEditingOfflineContent(""); }}
-                                className="ui-bare-btn text-[var(--c-icon)] ts-18 leading-none"
-                                type="button"
-                            >âœ•</button>
-                        </div>
-                        <textarea
-                            autoFocus
-                            value={editingOfflineContent}
-                            onChange={(e) => setEditingOfflineContent(e.target.value)}
-                            className="w-full min-h-[220px] max-h-[52vh] resize-none rounded-2xl border border-[var(--c-border)] bg-[var(--c-input)] px-4 py-3 ts-14 text-[var(--c-text)] outline-none"
-                        />
-                        <div className="flex justify-end gap-2">
-                            <button
-                                onClick={() => { setEditingOfflineTarget(null); setEditingOfflineContent(""); }}
-                                className="ui-btn ui-btn-outline"
-                                type="button"
-                            >å–æ¶ˆ</button>
-                            <button
-                                onClick={handleOfflineEditSave}
-                                disabled={!editingOfflineContent.trim()}
-                                className="ui-btn ui-btn-primary"
-                                type="button"
-                            >ä¿å­˜</button>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {editingMessageId && (
-                <div className="chat-html-overlay" onClick={() => { setEditingMessageId(null); setEditingContent(""); }}>
-                    <div
-                        className="g-card w-[min(84vw,420px)] max-h-[78vh] p-4 flex flex-col gap-3"
-                        onClick={(e) => e.stopPropagation()}
-                    >
-                        <div className="flex items-center justify-between gap-3">
-                            <div className="flex flex-col gap-1">
-                                <span className="menu-label">{editingSystemInstruction ? "ç¼–è¾‘ç³»ç»ŸæŒ‡ä»¤" : "ç¼–è¾‘æ¶ˆæ¯"}</span>
-                                <span className="menu-desc !mt-0">{editingSystemInstruction ? "ä¿å­˜åä¼šæŒ‰å½“å‰ä½ç½®æ›´æ–°åç»­ä¸Šä¸‹æ–‡" : "ä¿å­˜åä¼šåŒæ­¥æ›´æ–°èŠå¤©è®°å½•å’Œåç»­ä¸Šä¸‹æ–‡"}</span>
-                            </div>
-                            <button
-                                onClick={() => { setEditingMessageId(null); setEditingContent(""); }}
-                                className="ui-bare-btn text-[var(--c-icon)] ts-18 leading-none"
-                                type="button"
-                            >âœ•</button>
-                        </div>
-                        <textarea
-                            autoFocus
-                            value={editingContent}
-                            onChange={(e) => setEditingContent(e.target.value)}
-                            className="w-full min-h-[180px] max-h-[52vh] resize-none rounded-2xl border border-[var(--c-border)] bg-[var(--c-input)] px-4 py-3 ts-14 text-[var(--c-text)] outline-none"
-                        />
-                        <div className="flex justify-end gap-2">
-                            <button
-                                onClick={() => { setEditingMessageId(null); setEditingContent(""); }}
-                                className="ui-btn ui-btn-outline"
-                                type="button"
-                            >å–æ¶ˆ</button>
-                            <button
-                                onClick={handleEditMessageSave}
-                                disabled={!editingContent.trim()}
-                                className="ui-btn ui-btn-primary"
-                                type="button"
-                            >ä¿å­˜</button>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {(editingResponseBatchId || editingResponseRoundId) && (
-                <div className="chat-html-overlay" onClick={() => { setEditingResponseBatchId(null); setEditingResponseRoundId(null); setEditingResponseContent(""); }}>
-                    <div
-                        className="g-card w-[min(84vw,420px)] max-h-[78vh] p-4 flex flex-col gap-3"
-                        onClick={(e) => e.stopPropagation()}
-                    >
-                        <div className="flex items-center justify-between gap-3">
-                            <div className="flex flex-col gap-1">
-                                <span className="menu-label">ç¼–è¾‘æœ¬æ¬¡å›å¤</span>
-                                <span className="menu-desc !mt-0">ä¿å­˜åä¼šæŒ‰æ–°çš„ç¼–è¾‘æ–‡æœ¬é‡æ–°æ‹†åˆ†è¿™æ¬¡ AI å›å¤</span>
-                            </div>
-                            <button
-                                onClick={() => { setEditingResponseBatchId(null); setEditingResponseRoundId(null); setEditingResponseContent(""); }}
-                                className="ui-bare-btn text-[var(--c-icon)] ts-18 leading-none"
-                                type="button"
-                            >âœ•</button>
-                        </div>
-                        <textarea
-                            autoFocus
-                            value={editingResponseContent}
-                            onChange={(e) => setEditingResponseContent(e.target.value)}
-                            className="w-full min-h-[220px] max-h-[52vh] resize-none rounded-2xl border border-[var(--c-border)] bg-[var(--c-input)] px-4 py-3 ts-14 text-[var(--c-text)] outline-none"
-                        />
-                        <div className="flex justify-end gap-2">
-                            <button
-                                onClick={() => { setEditingResponseBatchId(null); setEditingResponseRoundId(null); setEditingResponseContent(""); }}
-                                className="ui-btn ui-btn-outline"
-                                type="button"
-                            >å–æ¶ˆ</button>
-                            <button
-                                onClick={handleEditResponseSave}
-                                disabled={!editingResponseContent.trim()}
-                                className="ui-btn ui-btn-primary"
-                                type="button"
-                            >ä¿å­˜</button>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {cloudDeletePending && (
-                <div className="modal-overlay" data-ui="modal" role="alertdialog" aria-modal="true" aria-label="æ­£åœ¨åˆ é™¤äº‘ç«¯è®°å½•">
-                    <div className="modal-dialog" data-ui="modal-dialog" onClick={(e) => e.stopPropagation()}>
-                        <Loader2 size={30} className="animate-spin text-[var(--c-accent)]" />
-                        <div className="flex flex-col items-center gap-2 text-center">
-                            <h3 className="modal-title">æ­£åœ¨åˆ é™¤äº‘ç«¯è®°å½•</h3>
-                            <p className="menu-desc !mt-0">
-                                æ­£åœ¨åˆ é™¤ {cloudDeletePending.count} æ¡å¾®ä¿¡äº‘ç«¯è®°å½•ï¼Œè¯·ä¸è¦å…³é—­é¡µé¢ã€‚
-                            </p>
-                            <p className="menu-desc !mt-0">
-                                è¶…è¿‡ {Math.round(WEIXIN_CLOUD_DELETE_TIMEOUT_MS / 1000)} ç§’æœªå®Œæˆä¼šè‡ªåŠ¨åˆ¤å®šå¤±è´¥ã€‚
-                            </p>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {imageGenerationFailure && (
-                <GeneratedImageErrorDialog
-                    message={imageGenerationFailure}
-                    onClose={() => setImageGenerationFailure(null)}
-                />
-            )}
-
-            {/* Chat toast notification (overlay, does not affect layout) */}
-            {chatToast && (
-                <div className="chat-toast-overlay">
-                    <div className="wp-toast chat-toast-floating">
-                        {chatToast === "åŠ è½½éŸ³ä¹ä¸­..." ? (
-                            <span className="ui-loading-toast-content">
-                                <span className="ui-loading-spinner" />
-                                <span>{chatToast}</span>
-                            </span>
-                        ) : chatToast}
-                    </div>
-                </div>
-            )}
-
-            {/* å•èŠè¯­éŸ³/è§†é¢‘é€šè¯ï¼šå†…è”æŒ‚è½½ï¼ˆè€Œéæå‰ returnï¼‰ï¼Œä½¿ç¼©å°ä¸ºæ‚¬æµ®çª—æ—¶é€šè¯ç»„ä»¶
-                ä¸è¢«å¸è½½ï¼Œè®¡æ—¶/å­—å¹•ç­‰çŠ¶æ€å¾—ä»¥ä¿ç•™ï¼›ç»„ä»¶å†…éƒ¨ä¾æ® minimized å†³å®šæ¸²æŸ“
-                å…¨å±ç•Œé¢è¿˜æ˜¯å·¦ä¾§æ‚¬æµ®çª— */}
-            {showVoiceCall && character && (
-                <VoiceCallScreen
-                    session={session}
-                    character={character}
-                    initiator={callInitiator}
-                    minimized={callMinimized}
-                    onMinimize={() => setCallMinimized(true)}
-                    onRestore={() => setCallMinimized(false)}
-                    onEnd={() => returnFromCall(() => setShowVoiceCall(false))}
-                />
-            )}
-            {showVideoCall && character && (
-                <VideoCallScreen
-                    session={session}
-                    character={character}
-                    initiator={callInitiator}
-                    minimized={callMinimized}
-                    onMinimize={() => setCallMinimized(true)}
-                    onRestore={() => setCallMinimized(false)}
-                    onEnd={() => returnFromCall(() => setShowVideoCall(false))}
-                />
-            )}
-
-        </div >
-    );
-}
+YªçŠx-®éÜj×¢ëiºÚ+Š§j[h‘éÜ¢éí×mvëÄèµ©hºÚn¶X§zÍH\ÙHÛY[Â‚š[\ÜÈ›ÜØ\™™Y‹œ˜YÛY[Y[[Ë\ÙPØ[˜XÚË\ÙQY™™Xİ\ÙR[\\˜]]™R[™K\ÙS^[İ]Y™™Xİ\ÙSY[[Ë\ÙT™Y‹\ÙTİ]HHœ›ÛHœ™XXİÂš[\ÜÈÚ]Ù\ÜÚ[Û‹Ú]Y\ÜØYÙKÒUĞTÔÑUS‘Ô×ÕTUQÑU‘S•ÒUÒS’UPSÕ’TÒP“WÓQTÔĞQÑWĞÓÕS•ÒUÓĞQÓSÔ‘WÓQTÔĞQÑWĞÓÕS•ÒUÔ‘TUQTÕÔ‘TWÑU‘S•ØYÚ]\Ù][™ÜËØYÚ]Y\ÜØYÙ\ËØYÚ]ÛÛXİËØYÚ]Ù\ÜÚ[ÛœËØ]™PÚ]Ù\ÜÚ[ÛœË\ÚÚ]Y\ÜØYÙK\]PÚ]Y\ÜØYÙK[]PÚ]Y\ÜØYÙK[]PÚ]Y\ÜØYÙ\Ñœ›ÛK[]PÚ]Y\ÜØYÙ\ĞRYË™]˜XİÚ]Y\ÜØYÙKY]Ú]Y\ÜØYÙK\]SY\ÜØYÙSYYXQ]K™\XÙT™\ÜÛœÙP˜]ÚÚ]\Ë™\XÙQÜ›İ\™\ÜÛœÙT›İ[™\Ô™XY[™Ñ\Øİ\ÜÓY\ÜØYÙK\ÔŞ\İ[R[œİXİ[Û“Y\ÜØYÙKÜ™X]T™\ÜÛœÙP˜]ÚYÜ™X]T™\ÜÛœÙT›İ[™YÙ]]\İİ]U˜[Y\ËÙ]]\İÚ\˜Xİ\”İ]U˜[Y\ËÛÛ\\™PÚ]Y\ÜØYÙ\Ë\ÔÙ\ÜÚ[Û”İ™X[Z[™Ñ[˜X›YHœ›ÛHÛX‹ØÚ]\İÜ˜YÙHÂš[\ÜÈÛX[”İ™X[U^Ü]İ™X[T™]šY]ÔÙYÛY[Ëİš\]\˜[^Ëİš\[YĞ›ØÚÜÈHœ›ÛHÛX‹Üİ™X[K\™]šY]ÈÂš[\Ü\HÈİ]U˜[YHHœ›ÛHÛX‹ØÚ]\İÜ˜YÙHÂš[\ÜÈ\œÙTİ]U˜[Y\ËY\™ÙTİ]U˜[Y\ÈHœ›ÛHÛX‹Üİ]K]˜[YK\\œÙ\ˆÂš[\ÜÈ\œÙPRT™\ÜÛœÙK\H\œÙYY\ÜØYÙT\Hœ›ÛHÛX‹ÜšXÚ[Y\ÜØYÙK\\œÙ\ˆÂš[\ÜÈ\ÒÛ›İÛ”İXÚÙ\“X™[Hœ›ÛHÛX‹ÜİXÚÙ\‹Y]HÂš[\ÜÈ˜[œÛ]T™X\ÛÛš[™Õ^Hœ›ÛHÛX‹Ü™X\ÛÛš[™Ë]˜[œÛ]HÂš[\ÜÈY\ÜØYÙPX˜›KYYXQ]Z[[Ù[™]Ø\›TİXÚÙ\ØXÚKš[[™İX[^›ØÚË\Ôİ[™[Û™R[™]šY]ĞÛÛ[›Ü›X[^™U^X˜›PÛÛ[Hœ›ÛH‹‹ÛY\ÜØYÙKXX˜›HÂš[\ÜÈÙ[™\˜]Y[XYÙQ\œ›Ü‘X[ÙÈHœ›ÛH‹‹ÙÙ[™\˜]YZ[XYÙKY\œ›Ü‹YX[ÙÈÂš[\ÜÈİÒ[œ][Ù[^İÓ[Ù[›ÚXÙT™XÛÜ™[Ù[™YXÚÙ][Ù[ØØ][Û’[œ][Ù[Ş\İ[R[œİXİ[Û“[Ù[Hœ›ÛH‹‹ÜšXÚZ[œ][[Ù[ÈÂš[\ÜÈ[[ÚšT[™[İXÚÙ\”[™[Hœ›ÛH‹‹Ù[[ÚšK\[™[Âš[\ÜÈİXÚÙ\”ÙX\˜ÚİYÙÙ\İHœ›ÛH‹‹ÜİXÚÙ\‹\ÙX\˜Ú\İYÙÙ\İÂš[\ÜÈİ]U˜[Y\Ô[™[Hœ›ÛH‹‹Üİ]K]˜[Y\Ë\[™[Âš[\ÜÈÙ[™\˜]PÚ]ÛÛ\][Û‹Ù[™\˜]SÙ™›[™PÚ]ÛÛ\][Û‹›][ÛÛ\][Û”™\İ[Ú][™Ú[™Q\œ›ÜˆHœ›ÛHÛX‹ØÚ]Y[™Ú[™HÂš[\ÜÈ›Ü›X]Ù™›[™U\›–[\È›Ü›X]Ù™›[™U\›–[Ú\™YZ[Ù™›[™T›Û\\İÜH\ÈZ[Ù™›[™T›Û\\İÜTÚ\™YHœ›ÛHÛX‹ÛÙ™›[™K\›Û\XZ[\ˆÂš[\ÜÈÙ]İ]\Ô™YÚ[ÛÛÛ™šYË\Ğİ\İÛTİ]\Ô™YÚ[ÛXİ]™HHœ›ÛHÛX‹ØÚ]\İ]\Ë\™YÚ[ÛˆÂš[\ÜÈİ\İÛTİ]\Ñœ˜[YHHœ›ÛHØÛÛ\Û™[ËØÚ]Øİ\İÛK\İ]\ËYœ˜[YHÂš[\ÜÈÙ[™œ›İÜÙ\“›İYšXØ][ÛˆHœ›ÛHÛX‹Øœ›İÜÙ\‹[›İYšXØ][ÛˆÂš[\ÜÈ\Ü]ÚÚ]Y\ÜØYÙS›İXÙHHœ›ÛHÛX‹ØÚ][›İYšXØ][Û‹Y]™[ÈÂš[\ÜÈÚİ[Ù[™Ú][œ]Û‘[\ˆHœ›ÛHÛX‹ØÚ]Z[œ]ZÙ^X›Ø\™Âš[\ÜÈ\ÙPÚ]›İÛT™\Ù\™HHœ›ÛH‹‹İ\ÙKXÚ]X›İÛK\™\Ù\™HÂš[\Ü™XXİX\šÙİÛˆœ›ÛHœ™XXİ[X\šÙİÛˆÂš[\Ü™Z\T˜]Èœ›ÛHœ™Z\K\˜]ÈÂš[\Ü™[X\šÑÙ›Hœ›ÛHœ™[X\šËYÙ›HÂš[\ÜÈÜ™X]TÜ[Hœ›ÛHœ™XXİYÛHÂ‚š[\ÜÈØYÚ\˜Xİ\œÈHœ›ÛHÛX‹ØÚ\˜Xİ\‹\İÜ˜YÙHÂš[\ÜÈÚ\˜Xİ\ˆHœ›ÛHÛX‹ØÚ\˜Xİ\‹]\\ÈÂš[\ÜÈØYİ\İÛP\Ú]\ĞXİ[ÛœË\H™YÚ\İ\™Yİ\İÛP\Ú]\ĞXİ[ÛˆHœ›ÛHÛX‹Øİ\İÛKX\XÚ]Y\™Xİ]™\ÈÂš[\ÜÈÕTÕÓWĞT×ÕTUQÑU‘S•Ù][œİ[Yİ\İÛP\Hœ›ÛHÛX‹Øİ\İÛKX\\İÜ˜YÙHÂš[\ÜÈĞİ\İÛP\XÛÛ’Y\H[œİ[Yİ\İÛP\Hœ›ÛHÛX‹Øİ\İÛKX\]\\ÈÂš[\ÜÈİ\İÛP\[›™\ˆHœ›ÛHØÛÛ\Û™[ËØ\[X\šÙ]Øİ\İÛKX\\[›™\ˆÂš[\ÜÈİ\İÛP\›Ü™YÜ›İ[™›İ[™\HHœ›ÛHØÛÛ\Û™[ËØ\[X\šÙ]Øİ\İÛKX\Y˜Z[\™HÂ‚š[\ÜÈÚ]Ù][™ÜÔ[™[Hœ›ÛH‹‹ØÚ]\Ù][™ÜË\[™[Âš[\ÜÈ›ÚXÙPØ[ØÜ™Y[ˆHœ›ÛH‹‹İ›ÚXÙKXØ[\ØÜ™Y[ˆÂš[\ÜÈšY[ĞØ[ØÜ™Y[ˆHœ›ÛH‹‹İšY[ËXØ[\ØÜ™Y[ˆÂš[\ÜÈÜ›İ\Ø[ØÜ™Y[ˆHœ›ÛH‹‹ÙÜ›İ\XØ[\ØÜ™Y[ˆÂš[\ÜÈ˜[œÙ™\•\™Ù][Ù[Hœ›ÛH‹‹İ˜[œÙ™\‹]\™Ù][[Ù[Âš[\ÜÈÚYXÚÙ\“[Ù[Hœ›ÛH‹‹ÙÚY\XÚÙ\‹[[Ù[Âš[\ÜÈÛÛ™š\›QX[ÙÈHœ›ÛHØÛÛ\Û™[ËİZKÛ[Ù[Âš[\ÜÈ[]UÙZ^[ÛİYY\ÜØYÙ\Ñœ›ÛPÛİY[Z]ÙZ^[”Ş[˜ÕØ\İŞ[˜Ğ[ÙZ^[›İ[[Y\ÕĞÛİYHœ›ÛHÛX‹İÙZ^[‹XÛİY\Ş[˜ÈÂš[\ÜÈØYš[™[™ĞÛÛ™šYËØY™\Ù]ËØY™YÙ^\Ë™\ÛÛ™Pš[™[™Ë™\ÛÛ™U\Ù\’Y[]HHœ›ÛHÛX‹ÜÙ][™ÜË\İÜ˜YÙHÂš[\ÜÈÙ[™\˜]QÜ›İ\Ú]ÛÛ\][Û‹Ù[™\˜]QÜ›İ\Ù™›[™PÚ]ÛÛ\][Û‹\œÙQÜ›İ\Ú]™\ÜÛœÙKZ[Y]X›QÜ›İ\›İ[™^Hœ›ÛHÛX‹ÙÜ›İ\XÚ]Y[™Ú[™HÂš[\ÜÈ\[™Ú]Ù™›[™U\›‹[]PÚ]Ù™›[™U\›‹[]PÚ]Ù™›[™U\›œÑœ›ÛK^˜Xİ[šÚ[™ÕYËØYÚ]Ù™›[™U\›œË\œÙSÙ™›[™T™\ÜÛœÙKØ]™PÚ]Ù™›[™U\›œË\]PÚ]Ù™›[™U\›‹\HÚ]Ù™›[™U\›ˆHœ›ÛHÛX‹ØÚ][Ù™›[™K\İÜ˜YÙHÂš[\ÜÈ\Q\Ü^T™YÙ^\QY]™YÙ^Hœ›ÛHÛX‹ÛK\›Û\X\ÜÙ[X›\ˆÂš[\ÜÈØÚY[Q›ÛİÕ\Ø[˜Ù[›ÛİÕ\Ø[˜Ù[˜XÚÙÜ›İ[™Ù[™\˜][Û‹\Ğ˜XÚÙÜ›İ[™™\QÙ[™\˜][™ÈHœ›ÛHÛX‹Ù›ÛİË]\\Ù\šXÙHÂš[\ÜÈ\ÙRÙ^X›Ø\™\ÛZ\ÜĞ]]ÔÙ[™Hœ›ÛHØÛÛ\Û™[ËØÚ]İ\ÙKZÙ^X›Ø\™Y\ÛZ\ÜËX]]Ë\Ù[™Âš[\ÜÈØ[˜Ù[˜Z[İ]Ù^HHœ›ÛHÛX‹Ü\ÚX˜Z[İ]XÛY[Âš[\ÜÈS‘S‘×Ô‘TWÔ‘Q’VHœ›ÛHÛX‹ÙœšY[™\™\]Y\İY[™Ú[™HÂš[\Ü\HÈ\Ù\’Y[]HHœ›ÛHØÛÛ\Û™[ËÜÙ][™ÜËİ\Ù\‹ZY[]HÂš[\ÜÈ[\Ú\˜ÛK›ØÚÜËÚXÚË˜\Ú‹\Ù\‹Ú]œ›Û“YÚ]œ›Û”šYÚÛ\\˜›Ø\™ÛØÚËÚY[™İXYÙ\ËØY\Œ‹[Ü™RÜš^›Û[Hœ›ÛH›XÚYK\™XXİÂš[\ÜÈÙ]XYĞÚ]İ]HHœ›ÛHÛX‹ÙXYË\İÜ™HÂš[\ÜÈÙ\ÜÚ[Ûİ\İÛPÔÔÈHœ›ÛHØÛÛ\Û™[ËİZKÜÙ\ÜÚ[Û‹Xİ\İÛKXÜÜÈÂš[\ÜÈÙ]Ú]Xİ]™HHœ›ÛHÛX‹Û]\ÚXËXXİ[Û‹\]Y]YHÂš[\ÜÈÙ]]\ÚXĞÛÛ›ÛœšYÙHHœ›ÛHÛX‹Û]\ÚXËXÛÛ›ÛXœšYÙHÂš[\ÜÈš[™^XX›SX]ÚÙ]™]X\ÙS\šXÜËÙ]™]X\ÙTÛÛ™Ñ]Z[Hœ›ÛHÛX‹Û]\ÚXË\Ù\šXÙHÂš[\ÜÈ\›İ™SY[[ÜUÜš]T™\]Y\İHœ›ÛHÛX‹İÛÛY^Xİ]ÜˆÂš[\Ü\HÈY[[ÜUÜš]T™\]Y\İÛÛ™\İ[Hœ›ÛHÛX‹İÛÛY^Xİ]ÜˆÂš[\ÜÈ›Ü›X]Ú]ZU[YHHœ›ÛHÛX‹ØÚ]][YHÂš[\ÜÈ\œÙPXİ[Û•YÜÈHœ›ÛHÛX‹ØXİ[Û‹\\œÙ\ˆÂš[\ÜÈİ‘Ù]İ”Ù]İ”™[[İ™HHœ›ÛHÛX‹Úİ‹YˆÂš[\ÜÈÜ™Y]Ø[]˜[[˜ÙK^UÚ]Ø[]˜[[˜ÙHHœ›ÛHÛX‹İØ[]\İÜ˜YÙHÂš[\ÜÈØY[]™\™YÚÜ[™ÑÚYË\HÚÜ[™ÑÚYØ[™Y]HHœ›ÛHÛX‹ÜÚÜ[™ËYÚY]][ÈÂš[\ÜÈÙ]TÚÜ[™Ô^[Y[™\]Y\İHœ›ÛHÛX‹ÜÚÜ[™Ë\^[Y[\™\]Y\İÂš[\Ü\HÈ™YÙ^ÛÛ™šYÈHœ›ÛHÛX‹ÜÙ][™ÜË]\\ÈÂš[\ÜÈXXÜ›Ñ[™Ú[™HHœ›ÛHÛX‹ÛXXÜ›ËY[™Ú[™HÂš[\ÜÂˆÜ™X]T[™[™ĞÚ]Ù[™\˜]Y[XYÙQ]KˆÙ[™\˜]P[™\PÚ]Ù[™\˜]Y[XYÙKˆ\Ô[™[™ĞÚ]Ù[™\˜]Y[XYÙSY\ÜØYÙKŸHœ›ÛHÛX‹ÙÙ[™\˜]YZ[XYÙK\™]HÂš[\ÜÈØÜ›Û[[Y[Ú][ÛÛZ[™\ˆHœ›ÛHÛX‹ÙÛK\ØÜ›ÛÂš[\ÜÈÚ]˜[˜XÚĞ]˜]\ˆHœ›ÛH‹‹ØÚ]Y˜[˜XÚËX]˜]\ˆÂš[\ÜÈÚ]ØÜ™Y[‘Y™™Xİİ™\›^K\HXİ]™TØÜ™Y[‘Y™™XİHœ›ÛH‹‹ØÚ]\ØÜ™Y[‹YY™™XİÂš[\ÜÂˆ›Ü›X]Ú]XÙT™\İ[Y\ÜØYÙKˆ\ÑXÙSÛ›SY\ÜØYÙKˆX]ÚÚ]ØÜ™Y[‘Y™™Xİ[Kˆ›ÛÚ]XÙQ˜XÙKŸHœ›ÛHÛX‹ØÚ]\ØÜ™Y[‹YY™™XİÈÂš[\ÜÈX›ÜX›Q[^K›İÒYX›ÜYHœ›ÛHÛX‹ØX›Ü]][ÈÂš[\ÜÈÔ“ÕTÔÑS—ÒÑVKØ[‘Ü›İ\YZ[Xİ\QÜ›İ\YZ[Xİ[Û‹Z[Ü›İ\YZ[“›İXÙU^Ù]Ü›İ\Y[X™\‘\Ü^S˜[YKÙ]Ü›İ\]]T™[XZ[š[™Ó\ËÙ]Ü›İ\›ÛK\ÑÜ›İ\]]Y›Ü›X]]]T™[XZ[š[™ÓX™[™\ÛÛ™QÜ›İ\Y[X™\’Ù^PS˜[YK\HÜ›İ\YZ[Xİ[ÛˆHœ›ÛHÛX‹ÙÜ›İ\XYZ[ˆÂš[\ÜÈ^˜Xİ^ÛÛ\™Xİ]™U^Hœ›ÛHÛX‹İ^]ÛÛ\›İØÛÛÂš[\ÜÈ[Z]Ú]YÚ[‘]™[Ù]Ú]YÚ[’ÛÚĞ\Ë[Ú]YÚ[•˜[œÙ›Ü›HHœ›ÛHÛX‹ØÚ]\YÚ[‹ZÛÚÜÈÂš[\ÜÈÒUÔQÒS—ÕĞTÕÑU‘S•Ù]Ú]YÚ[”[[YHHœ›ÛHÛX‹ØÚ]\YÚ[‹\[[YHÂš[\ÜÈÚ]YÚ[”ÛİHœ›ÛHØÛÛ\Û™[ËØÚ]ØÚ]\YÚ[‹\ÛİÂ‚‹ËÈ8¥ 8¥ Ø[Ş\İ[HY\ÜØYÙH]Xİ[Ûˆ8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ ‹ËÈØ[Y\ÜØYÙ\È\™HİÜ™YÚ]\Ù\‹Ø\ÜÚ\İ[›ÛH›ÜˆÛÜœ™Xİ›Û\[\›˜][Û‹‹ËÈ]Úİ[™[™\ˆ\ÈÙ[\™YŞ\İ[H›İYšXØ][ÛœÈ[ˆHRK‚˜ÛÛœİĞSÔÖT×Ô‘HH×ù¢$JÎ¹d$KŠÊOÊÎ¹cäz-mù.¡Ÿ9£ ¹¥«y.¡Ÿ9¢ä¹îçy.¡Ÿ9cå¹­¢9.¡ŠJÎ¹ï©ÊÎº+ëzgìß:)áºh¤Jz`&º+çJKÎÂ™[˜İ[Ûˆ\ĞØ[Ş\Ó\ÙÊ\ÙÎˆÚ]Y\ÜØYÙJNˆ›ÛÛX[ˆÂˆ™]\›ˆĞSÔÖT×Ô‘K\İ
+\ÙË˜ÛÛ[
+NÂŸB‹ÊŠˆ™]\›œÈHY™™Xİ]™HRH›ÛNˆØ[Y\ÜØYÙ\È™[™\ˆ\ÈœŞ\İ[Hˆ™YØ\™\ÜÈÙˆİÜ™Y›ÛH
+‹Â˜ÛÛœİPÕSÓ—ÓQQPWÕTTÈH™]ÈÙ]
+ÈœÚÙH‹˜XØÙ\Ü™YÜXÚÙ]‹™XÛ[™WÜ™YÜXÚÙ]‹˜XØÙ\İ˜[œÙ™\ˆ‹™XÛ[™Wİ˜[œÙ™\ˆ‹˜XØÙ\Ü^[Y[Ü™\]Y\İ‹™XÛ[™WÜ^[Y[Ü™\]Y\İ‹™Ü›İ\ØYZ[—Û›İXÙH—JNÂ‹ËÈ9¢ãy. 9¢ãKùï©9ë¨yä!º`&¹çéKú`&º+çyåfyååy®,¹§äù¢$9àl:"l¹ìîùîçùl#ùkeûï#9¬¨y§"H<'ä«H:gh¹§oùaiycèø %8 %‹ËÈ9â­¹  y¨#Ëùa¡yoàùâë9æoKùâ­¹  y`/9£ ¹."¹c®ù/&º(ªù¦/¹é.¹l`¹d'¹£¢{ï#9£ º/oy¥í¹oázhnú-ìú/áùk ù.ë™[˜İ[ÛˆØ[Ø\œQ›ÛY[™[
+\ˆÈÛÛ[Îˆİš[™ÎÈYYXU\OÎˆÚ]Y\ÜØYÙVÈ›YYXU\H—HJNˆ›ÛÛX[ˆÂˆYˆ
+\›YYXU\HOOHœÚÙHˆ\›YYXU\HOOH™Ü›İ\ØYZ[—Û›İXÙHŠH™]\›ˆ˜[ÙNÂˆ™]\›ˆPĞSÔÖT×Ô‘K\İ
+\˜ÛÛ[ˆŠNÂŸB™[˜İ[ÛˆZT›ÛJ\ÙÎˆÚ]Y\ÜØYÙJNˆİš[™ÈÂˆYˆ
+\ÙËœ›ÛHOOHœŞ\İ[HˆPÕSÓ—ÓQQPWÕTTËš\Ê\ÙË›YYXU\HˆŠJH™]\›ˆœŞ\İ[HÂˆYˆ
+\ĞØ[Ş\Ó\ÙÊ\ÙÊJH™]\›ˆœŞ\İ[HÂˆ™]\›ˆ\ÙËœ›ÛNÂŸB‚™[˜İ[Ûˆ\ĞÚ]›ÛÛQ[[Y[š\ÚX›J[[Y[ˆS[[Y[[
+Nˆ›ÛÛX[ˆÂˆYˆ
+Y[[Y[Y[[Y[š\ĞÛÛ›™XİY
+H™]\›ˆ˜[ÙNÂˆÛÛœİ™XİH[[Y[™Ù]›İ[™[™ĞÛY[™Xİ
+
+NÂˆYˆ
+™XİÚYH™XİšZYÚH
+H™]\›ˆ˜[ÙNÂˆÛÛœİİ[HHÚ[™İË™Ù]ÛÛ\]Yİ[J[[Y[
+NÂˆ™]\›ˆİ[K™\Ü^HOOH››Û™Hˆ	‰ˆİ[Kš\ÚXš[]HOOHšY[ˆÂŸB‚™[˜İ[ÛˆÜ]Ù™›[™T\˜YÜ˜\Ê^ˆİš[™ÊNˆİš[™Ö×HÂˆÛÛœİ›Ü›X[^™YH^œ™\XÙJ×—ËÙË—ˆŠKš[J
+NÂˆYˆ
+[›Ü›X[^™Y
+H™]\›ˆ×NÂˆÛÛœİÜ]Z[•^H
+˜[YNˆİš[™ÊHOˆ˜[YBˆœÜ]
+×—Ê—ŠËÊBˆ›X\
+\Oˆ\š[J
+JBˆ™š[\Š›ÛÛX[ŠNÂ‚ˆÛÛœİ\Îˆİš[™Ö×HH×NÂˆÛÛœİ™[˜ÙTHÊŸŠJÈJŠJŸŸŠV×——J—–×××J×–ÈJ—ÊÏWŸ	
+KÙÎÂˆ]İ\œÛÜˆHÂˆ]X]Úˆ™YÑ^^XĞ\œ˜^H[Â‚ˆÚ[H
+
+X]ÚH™[˜ÙT™^XÊ›Ü›X[^™Y
+JHOOH[
+HÂˆÛÛœİ™[˜ÙTİ\HX]Úš[™^
+ÈX]ÚÌWK›[™İÂˆÛÛœİ™Y›Ü™HH›Ü›X[^™YœÛXÙJİ\œÛÜ‹™[˜ÙTİ\
+NÂˆ\Ëœ\Ú
+‹‹œÜ]Z[•^
+™Y›Ü™JJNÂ‚ˆÛÛœİ™[˜ÙY›ØÚÈH›Ü›X[^™YœÛXÙJ™[˜ÙTİ\™[˜ÙT›\İ[™^
+Kš[J
+NÂˆYˆ
+™[˜ÙY›ØÚÊH\Ëœ\Ú
+™[˜ÙY›ØÚÊNÂˆİ\œÛÜˆH™[˜ÙT›\İ[™^ÂˆB‚ˆ\Ëœ\Ú
+‹‹œÜ]Z[•^
+›Ü›X[^™YœÛXÙJİ\œÛÜŠJJNÂˆ™]\›ˆ\ÎÂŸB‚™[˜İ[Ûˆ\ÓÙ™›[™R[™]šY]Ê^ˆİš[™ÊNˆ›ÛÛX[ˆÂˆ™]\›ˆÜ]Ù™›[™T\˜YÜ˜\Ê^
+KœÛÛYJ\Oˆ\Ôİ[™[Û™R[™]šY]ĞÛÛ[
+\
+JNÂŸB‚˜ÛÛœİÙ™›[™P\ÜÚ\İ[^›ØÚÈHY[[Ê[˜İ[ÛˆÙ™›[™P\ÜÚ\İ[^›ØÚÊÂˆ^ˆY˜][^[™YŸNˆÂˆ^ˆİš[™ÎÂˆY˜][^[™Yˆ›ÛÛX[ÂŸJHÂˆÛÛœİ\˜YÜ˜\ÈH\ÙSY[[Ê
+
+HOˆÜ]Ù™›[™T\˜YÜ˜\Ê^
+Kİ^JNÂˆYˆ
+\˜YÜ˜\Ë›[™İHJHÂˆ™]\›ˆš[[™İX[^›ØÚÈ^^İ^H[ÙOH›X\šÙİÛˆˆY˜][^[™Y^ÙY˜][^[™YH[œ˜[YU˜\šX[H›Ù™›[™HˆÏÂˆBˆ™]\›ˆ
+ˆ]ˆÛ\ÜÓ˜[YOH˜Ú][Ù™›[™K\\˜YÜ˜\\İXÚÈ‚ˆÜ\˜YÜ˜\Ë›X\
+
+\˜YÜ˜\[™^
+HOˆ
+ˆ]ˆÛ\ÜÓ˜[YOH˜Ú][Ù™›[™K\\˜YÜ˜\ˆÙ^O^Ø	Ú[™^KIÜ\˜YÜ˜\œÛXÙJMŠ_XO‚ˆš[[™İX[^›ØÚÈ^^Ü\˜YÜ˜\H[ÙOH›X\šÙİÛˆˆY˜][^[™Y^ÙY˜][^[™YH[œ˜[YU˜\šX[H›Ù™›[™HˆÏ‚ˆÙ]‚ˆ
+J_BˆÙ]‚ˆ
+NÂŸJNÂ‚˜ÛÛœİÒUÕ’TÕPSÓQQPWÕTTÈH™]ÈÙ]
+ÂˆœİXÚÙ\ˆ‹ˆ™XÙH‹ˆœ™YÜXÚÙ]‹ˆ˜[œÙ™\ˆ‹ˆœ^[Y[Ü™\]Y\İ‹ˆ™ÚY‹ˆ˜ÛÛXİØØ\™‹ˆš[XYÙH‹ˆ›ØØ][Ûˆ‹ˆ›]\ÚX×ÜÚ\™H‹ˆX[ÚÛ™ÜÚWÛ›İWÜÚ\™H‹ˆ˜\ØØ\™‹ˆ˜]Y[È‹ˆšY[È‹ˆœ][İH‹ˆ›YYXWÙš[H‹—JNÂ‚˜ÛÛœİÑRVS—ĞÓÕQÑSUWÕSQSÕUÓTÈHMLÂ‚™[˜İ[ÛˆÚ][Y[İ]Š›ÛZ\ÙNˆ›ÛZ\ÙO‹[Y[İ]\Îˆ[X™\‹Y\ÜØYÙNˆİš[™ÊNˆ›ÛZ\ÙOˆÂˆ™]\›ˆ™]È›ÛZ\ÙOŠ
+™\ÛÛ™K™Z™Xİ
+HOˆÂˆÛÛœİ[Y\ˆHÚ[™İËœÙ][Y[İ]
+
+
+HOˆ™Z™Xİ
+™]È\œ›ÜŠY\ÜØYÙJJK[Y[İ]\ÊNÂˆ›ÛZ\ÙK[Šˆ˜[YHOˆÂˆÚ[™İË˜ÛX\•[Y[İ]
+[Y\ŠNÂˆ™\ÛÛ™J˜[YJNÂˆKˆ\œ›ÜˆOˆÂˆÚ[™İË˜ÛX\•[Y[İ]
+[Y\ŠNÂˆ™Z™Xİ
+\œ›ÜŠNÂˆKˆ
+NÂˆJNÂŸB‚™[˜İ[ÛˆÙ]ÙZ^[ÛİY[]U\™Ù]Ûİ[
+Y\ÜØYÙ\ÎˆÚ]Y\ÜØYÙV×JNˆ[X™\ˆÂˆÛÛœİ\™Ù]ÈH™]ÈÙ]İš[™ÏŠ
+NÂˆ›Üˆ
+ÛÛœİY\ÜØYÙHÙˆY\ÜØYÙ\ÊHÂˆÛÛœİŞ[˜ÈHY\ÜØYÙK˜ÛİYŞ[˜ÎÂˆYˆ
+Ş[˜ÏËœÛİ\˜ÙHOOHÙZ^[‹XÛİYŠHÛÛ[YNÂˆYˆ
+\Ş[˜Ë˜›İY\Ş[˜Ë™^\›˜[Y
+HÛÛ[YNÂˆ\™Ù]Ë˜Y
+	ÜŞ[˜Ë˜›İYWL	ÜŞ[˜Ë™^\›˜[YX
+NÂˆBˆ™]\›ˆ\™Ù]ËœÚ^™NÂŸB‚˜ÛÛœİÒUÓQQPWĞ•P“WÕTTÈH™]ÈÙ]
+ÂˆœİXÚÙ\ˆ‹ˆ™XÙH‹ˆœ™YÜXÚÙ]‹ˆ˜[œÙ™\ˆ‹ˆœ^[Y[Ü™\]Y\İ‹ˆ™ÚY‹ˆ˜ÛÛXİØØ\™‹ˆš[XYÙH‹ˆ›ØØ][Ûˆ‹ˆ›]\ÚX×ÜÚ\™H‹ˆX[ÚÛ™ÜÚWÛ›İWÜÚ\™H‹ˆ˜\ØØ\™‹ˆ›YYXWÙš[H‹—JNÂ‚˜ÛÛœİÕS‘SÓ‘WĞĞT‘Ğ•P“WÔÕSHHÂˆ˜XÚÙÜ›İ[™ˆ˜[œÜ\™[‹ˆ›Ü™\ˆ››Û™H‹ˆ›ŞÚYİÎˆ››Û™H‹ˆ˜XÚÙ›Üš[\ˆ››Û™H‹ˆÙXšÚ]˜XÚÙ›Üš[\ˆ››Û™H‹ˆY[™Îˆˆİ™\™›İÎˆš\ÚX›H‹ŸH\ÈÛÛœİÂ‚™[˜İ[ÛˆÙ]Ú]›İÕš\ÚX›PÛÛ[
+\ÙÎˆÚ]Y\ÜØYÙK\Ü^PÛÛ[Îˆİš[™ÊNˆİš[™ÈÂˆ™]\›ˆ›Ü›X[^™U^X˜›PÛÛ[
+\Ü^PÛÛ[ÏÈ\ÙË˜ÛÛ[
+NÂŸB‚™[˜İ[Ûˆ\ĞÚ]š\İX[YYXJ\ÙÎˆÚ]Y\ÜØYÙJNˆ›ÛÛX[ˆÂˆ™]\›ˆH[\ÙË›YYXU\H	‰ˆÒUÕ’TÕPSÓQQPWÕTTËš\Ê\ÙË›YYXU\JNÂŸB‹ÊŠˆ9 'yîí:dïº)é¹cäy§hyæ¡9cez(c9¤f:) {ï&¹cåºi¥¹.*ºgg¹ênº(c9nm¹biyé®ÈX\šÙİÛˆ9¨!ú+¬;ï"
+Š¸à X8à HÈ9ëb{ï"{ï#:`oùacy¦'ùcíùc§ù¨-ù¦/¹é.ˆ
+‹Â™[˜İ[Ûˆ™X\ÛÛš[™Ô™]šY]Ó[™J^ˆİš[™ÊNˆİš[™ÈÂˆ›Üˆ
+ÛÛœİ˜]Ó[™HÙˆ^œÜ]
+—ˆŠJHÂˆÛÛœİ[™HH˜]Ó[™Bˆœ™\XÙJØ
+ËÙËˆŠBˆœ™\XÙJÈO×Ê×—WJŠWW
+×ŠWJ—
+KÙË‰HŠBˆœ™\XÙJ×
+—
+Š×Š—JÊW
+—
+‹ÙË‰HŠBˆœ™\XÙJ××Ê×—×JÊW×ËÙË‰HŠBˆœ™\XÙJ×
+Š×Š—JÊW
+‹ÙË‰HŠBˆœ™\XÙJØ
+×˜JÊXÙË‰HŠBˆœ™\XÙJ×—ÊˆŞÌKŸWÊËËˆŠBˆœ™\XÙJ×—Ê—ÊËËˆŠBˆœ™\XÙJ×—Ê–ËJŠ×WÊËËˆŠBˆœ™\XÙJÖÊ˜JËÙËˆŠBˆš[J
+NÂˆYˆ
+[™JH™]\›ˆ[™NÂˆBˆ™]\›ˆ¹ 'z  ú/áùê"ÈÂŸB‚™[˜İ[Ûˆ\ÒY[Ú]›İÓY\ÜØYÙJ\ÙÎˆÚ]Y\ÜØYÙK\Ü^PÛÛ[Îˆİš[™ÊNˆ›ÛÛX[ˆÂˆYˆ
+\ÙË›YYXU\HOOHÛÛÜ™\İ[ˆ\ÙË›YYXU\HOOHÛÛØØ[ŠH™]\›ˆYNÂˆ™]\›ˆZ\ĞÚ]š\İX[YYXJ\ÙÊBˆ	‰ˆYÙ]Ú]›İÕš\ÚX›PÛÛ[
+\ÙË\Ü^PÛÛ[
+Bˆ	‰ˆZT›ÛJ\ÙÊHOOHœŞ\İ[H‚ˆ	‰ˆ[\ÙËœİ]\Ô[™[ˆ	‰ˆ[\ÙËš[›™\“[Û›ÛÙİYBˆ	‰ˆ[\ÙËœ™X\ÛÛš[™Õ^ÂŸB‚‹ËÈ8¥ 8¥ ˜XÚÙÜ›İ[™Ù[™\˜][Ûˆ˜XÚÚ[™È8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ ˜ÛÛœİÑS‘TUS‘×Ô‘Q’VH˜Ú]YÙ[™\˜][™ÎˆÂ˜ÛÛœİÒUĞ‘×ĞÓÓTUHH˜Ú]X™ËXÛÛ\]HÂ˜ÛÛœİÒUÓÑ‘“S‘WÓSÑWÔ‘Q’VH˜Ú][Ù™›[™K[[ÙNˆÂ˜ÛÛœİÒUÕPUT—ÓSÑWÔ‘Q’VH˜Ú]]X]\‹[[ÙNˆÂ˜ÛÛœİÑS‘TUS‘×ÓĞÒ×ÕÓTÈHH
+ˆŒ
+ˆLÂ˜ÛÛœİÑ‘“S‘WÒS’UPSÓĞQHLÂ˜ÛÛœİÑ‘“S‘WÓĞQÓSÔ‘WĞÓÕS•HLÂ‚\H[™[™Ó˜]]™UÛÛØ[HÂˆYˆİš[™ÎÂˆ˜[YNˆİš[™ÎÂŸNÂ‚\HXİ]™QÙ[™\˜][Û”[ˆHÂˆ[’Yˆİš[™ÎÂˆÛÛ›Û\ˆX›ÜÛÛ›Û\Âˆ[™[™Ó˜]]™UÛÛØ[Îˆ[™[™Ó˜]]™UÛÛØ[×NÂŸNÂ‚\HÙ[™\˜][Û”[‘İX\™HÂˆÚYÛ˜[ÎˆX›ÜÚYÛ˜[Âˆ\ĞXİ]™OÎˆ
+
+HOˆ›ÛÛX[ÂŸNÂ‚\H\ÜÚ\İ[Y\ÜØYÙQ˜YHÛZ]Ú]Y\ÜØYÙKšYˆ˜Ü™X]Y]ˆœİ]\Èˆ	ˆÈİ]\ÏÎˆÚ]Y\ÜØYÙVÈœİ]\È—HNÂ‚\HX[˜YÙYÙ[™\˜][Û“Ü[ÛœÈHÂˆ\İÜNˆÚ]Y\ÜØYÙV×NÂˆ\œ›Ü”™Yš^Îˆİš[™ÎÂˆÛ‘XÛ[™OÎˆ
+
+HOˆ›ÚY›ÛZ\ÙO›ÚYÂŸNÂ‚˜ÛÛœİXİ]™QÙ[™\˜][Û”[œÈH™]ÈX\İš[™ËXİ]™QÙ[™\˜][Û”[Š
+NÂ˜ÛÛœİXİ]™SÙ™›[™QÙ[™\˜][Û”[œÈH™]ÈX\İš[™ËÛZ]Xİ]™QÙ[™\˜][Û”[‹œ[™[™Ó˜]]™UÛÛØ[ÈŠ
+NÂ‚™[˜İ[ÛˆÙ[™\˜][Û“ØÚÒÙ^JÙ\ÜÚ[Û’Yˆİš[™ÊNˆİš[™ÈÂˆ™]\›ˆÑS‘TUS‘×Ô‘Q’V
+ÈÙ\ÜÚ[Û’YÂŸB‚™[˜İ[ÛˆÙ]Ù[™\˜][Û“ØÚÊÙ\ÜÚ[Û’Yˆİš[™ÊNˆ›ÚYÂˆİ”Ù]
+Ù[™\˜][Û“ØÚÒÙ^JÙ\ÜÚ[Û’Y
+K”ÓÓ‹œİš[™ÚYJÈİ\Y]ˆ]K››İÊ
+HJJNÂŸB‚™[˜İ[ÛˆÛX\‘Ù[™\˜][Û“ØÚÊÙ\ÜÚ[Û’Yˆİš[™ÊNˆ›ÚYÂˆİ”™[[İ™JÙ[™\˜][Û“ØÚÒÙ^JÙ\ÜÚ[Û’Y
+JNÂŸB‚™[˜İ[Ûˆ\ĞXİ]™QÙ[™\˜][Û“ØÚÊÙ\ÜÚ[Û’Yˆİš[™ÊNˆ›ÛÛX[ˆÂˆÛÛœİÙ^HHÙ[™\˜][Û“ØÚÒÙ^JÙ\ÜÚ[Û’Y
+NÂˆÛÛœİ˜]ÈHİ‘Ù]
+Ù^JNÂˆYˆ
+\˜]ÊH™]\›ˆ˜[ÙNÂˆ]İ\Y]HÂˆHÂˆÛÛœİ\œÙYH”ÓÓ‹œ\œÙJ˜]ÊNÂˆİ\Y]H[X™\Š\œÙYËœİ\Y]
+HÂˆHØ]ÚÂˆİ\Y]HÂˆBˆYˆ
+\İ\Y]]K››İÊ
+HHİ\Y]ˆÑS‘TUS‘×ÓĞÒ×ÕÓTÊHÂˆİ”™[[İ™JÙ^JNÂˆ™]\›ˆ˜[ÙNÂˆBˆ™]\›ˆYNÂŸB‚™[˜İ[ÛˆÜ™X]QÙ[™\˜][Û”[ŠÙ\ÜÚ[Û’Yˆİš[™ÊNˆXİ]™QÙ[™\˜][Û”[ˆÂˆÛÛœİ^\İ[™ÈHXİ]™QÙ[™\˜][Û”[œË™Ù]
+Ù\ÜÚ[Û’Y
+NÂˆ^\İ[™ÏË˜ÛÛ›Û\‹˜X›Ü
+
+NÂˆÛÛœİ[ˆXİ]™QÙ[™\˜][Û”[ˆHÂˆ[’Yˆ	Ñ]K››İÊ
+_KIÓX]œ˜[™ÛJ
+KÔİš[™ÊÍŠKœÛXÙJŠ_XˆÛÛ›Û\ˆ™]ÈX›ÜÛÛ›Û\Š
+Kˆ[™[™Ó˜]]™UÛÛØ[Îˆ×KˆNÂˆXİ]™QÙ[™\˜][Û”[œËœÙ]
+Ù\ÜÚ[Û’Y[ŠNÂˆ™]\›ˆ[ÂŸB‚™[˜İ[Ûˆ\ÑÙ[™\˜][Û”[Xİ]™JÙ\ÜÚ[Û’Yˆİš[™Ë[’Yˆİš[™ÊNˆ›ÛÛX[ˆÂˆÛÛœİ[ˆHXİ]™QÙ[™\˜][Û”[œË™Ù]
+Ù\ÜÚ[Û’Y
+NÂˆ™]\›ˆ›ÛÛX[Š[ˆ	‰ˆ[‹œ[’YOOH[’Y	‰ˆ\[‹˜ÛÛ›Û\‹œÚYÛ˜[˜X›ÜY
+NÂŸB‚™[˜İ[Ûˆš[š\ÚÙ[™\˜][Û”[ŠÙ\ÜÚ[Û’Yˆİš[™Ë[’Yˆİš[™ÊNˆ›ÛÛX[ˆÂˆÛÛœİ[ˆHXİ]™QÙ[™\˜][Û”[œË™Ù]
+Ù\ÜÚ[Û’Y
+NÂˆYˆ
+\[ˆ[‹œ[’YOOH[’Y
+H™]\›ˆ˜[ÙNÂˆXİ]™QÙ[™\˜][Û”[œË™[]JÙ\ÜÚ[Û’Y
+NÂˆ™]\›ˆYNÂŸB‚™[˜İ[Ûˆ˜XÚÓ˜]]™UÛÛØ[ÊÙ\ÜÚ[Û’Yˆİš[™Ë[’Yˆİš[™ËØ[Îˆ[™[™Ó˜]]™UÛÛØ[×JNˆ›ÚYÂˆÛÛœİ[ˆHXİ]™QÙ[™\˜][Û”[œË™Ù]
+Ù\ÜÚ[Û’Y
+NÂˆYˆ
+\[ˆ[‹œ[’YOOH[’Y
+H™]\›ÂˆÛÛœİ^\İ[™ÒYÈH™]ÈÙ]
+[‹œ[™[™Ó˜]]™UÛÛØ[Ë›X\
+Ø[OˆØ[šY
+JNÂˆ›Üˆ
+ÛÛœİØ[ÙˆØ[ÊHÂˆYˆ
+Ø[šY	‰ˆY^\İ[™ÒYËš\ÊØ[šY
+JHÂˆ[‹œ[™[™Ó˜]]™UÛÛØ[Ëœ\Ú
+Ø[
+NÂˆ^\İ[™ÒYË˜Y
+Ø[šY
+NÂˆBˆBŸB‚™[˜İ[Ûˆ™\ÛÛ™S˜]]™UÛÛØ[
+Ù\ÜÚ[Û’Yˆİš[™Ë[’Yˆİš[™ËÛÛØ[Yˆİš[™ÊNˆ›ÚYÂˆÛÛœİ[ˆHXİ]™QÙ[™\˜][Û”[œË™Ù]
+Ù\ÜÚ[Û’Y
+NÂˆYˆ
+\[ˆ[‹œ[’YOOH[’Y
+H™]\›Âˆ[‹œ[™[™Ó˜]]™UÛÛØ[ÈH[‹œ[™[™Ó˜]]™UÛÛØ[Ë™š[\ŠØ[OˆØ[šYOOHÛÛØ[Y
+NÂŸB‚™[˜İ[ÛˆØ[˜Ù[Ù[™\˜][Û”[ŠÙ\ÜÚ[Û’Yˆİš[™ÊNˆXİ]™QÙ[™\˜][Û”[ˆ[ÂˆÛÛœİ[ˆHXİ]™QÙ[™\˜][Û”[œË™Ù]
+Ù\ÜÚ[Û’Y
+NÂˆYˆ
+\[ŠH™]\›ˆ[Âˆ[‹˜ÛÛ›Û\‹˜X›Ü
+
+NÂˆXİ]™QÙ[™\˜][Û”[œË™[]JÙ\ÜÚ[Û’Y
+NÂˆ™]\›ˆ[ÂŸB‚™[˜İ[Ûˆ\ĞX›ÜZÙQ\œ›ÜŠ\œ›Üˆ[šÛ›İÛŠNˆ›ÛÛX[ˆÂˆYˆ
+Y\œ›ÜŠH™]\›ˆ˜[ÙNÂˆYˆ
+\œ›Üˆ[œİ[˜Ù[ÙˆÓQ^Ù\[Ûˆ	‰ˆ\œ›Ü‹›˜[YHOOHX›Ü\œ›ÜˆŠH™]\›ˆYNÂˆYˆ
+\œ›Üˆ[œİ[˜Ù[Ùˆ\œ›ÜŠHÂˆ™]\›ˆ\œ›Ü‹›˜[YHOOHX›Ü\œ›ÜˆˆØX›ÜYX›ÜÚK\İ
+\œ›Ü‹›Y\ÜØYÙJNÂˆBˆ™]\›ˆ˜[ÙNÂŸB‚™[˜İ[Ûˆ›İÒY‘Ù[™\˜][Û”İÜY
+İX\™ÎˆÙ[™\˜][Û”[‘İX\™
+Nˆ›ÚYÂˆ›İÒYX›ÜY
+İX\™ËœÚYÛ˜[
+NÂˆYˆ
+İX\™Ëš\ĞXİ]™H	‰ˆYİX\™š\ĞXİ]™J
+JHÂˆ›İÈ™]ÈÓQ^Ù\[ÛŠX›ÜY‹X›Ü\œ›ÜˆŠNÂˆBŸB‚™[˜İ[ÛˆÜ™X]SÙ™›[™QÙ[™\˜][Û”[ŠÙ\ÜÚ[Û’Yˆİš[™ÊNˆÛZ]Xİ]™QÙ[™\˜][Û”[‹œ[™[™Ó˜]]™UÛÛØ[ÈˆÂˆÛÛœİ^\İ[™ÈHXİ]™SÙ™›[™QÙ[™\˜][Û”[œË™Ù]
+Ù\ÜÚ[Û’Y
+NÂˆ^\İ[™ÏË˜ÛÛ›Û\‹˜X›Ü
+
+NÂˆÛÛœİ[ˆHÂˆ[’Yˆ	Ñ]K››İÊ
+_KIÓX]œ˜[™ÛJ
+KÔİš[™ÊÍŠKœÛXÙJŠ_XˆÛÛ›Û\ˆ™]ÈX›ÜÛÛ›Û\Š
+KˆNÂˆXİ]™SÙ™›[™QÙ[™\˜][Û”[œËœÙ]
+Ù\ÜÚ[Û’Y[ŠNÂˆ™]\›ˆ[ÂŸB‚™[˜İ[Ûˆ\ÓÙ™›[™QÙ[™\˜][Û”[Xİ]™JÙ\ÜÚ[Û’Yˆİš[™Ë[’Yˆİš[™ÊNˆ›ÛÛX[ˆÂˆÛÛœİ[ˆHXİ]™SÙ™›[™QÙ[™\˜][Û”[œË™Ù]
+Ù\ÜÚ[Û’Y
+NÂˆ™]\›ˆ›ÛÛX[Š[ˆ	‰ˆ[‹œ[’YOOH[’Y	‰ˆ\[‹˜ÛÛ›Û\‹œÚYÛ˜[˜X›ÜY
+NÂŸB‚™[˜İ[Ûˆš[š\ÚÙ™›[™QÙ[™\˜][Û”[ŠÙ\ÜÚ[Û’Yˆİš[™Ë[’Yˆİš[™ÊNˆ›ÛÛX[ˆÂˆÛÛœİ[ˆHXİ]™SÙ™›[™QÙ[™\˜][Û”[œË™Ù]
+Ù\ÜÚ[Û’Y
+NÂˆYˆ
+\[ˆ[‹œ[’YOOH[’Y
+H™]\›ˆ˜[ÙNÂˆXİ]™SÙ™›[™QÙ[™\˜][Û”[œË™[]JÙ\ÜÚ[Û’Y
+NÂˆ™]\›ˆYNÂŸB‚™[˜İ[ÛˆØ[˜Ù[Ù™›[™QÙ[™\˜][Û”[ŠÙ\ÜÚ[Û’Yˆİš[™ÊNˆ›ÛÛX[ˆÂˆÛÛœİ[ˆHXİ]™SÙ™›[™QÙ[™\˜][Û”[œË™Ù]
+Ù\ÜÚ[Û’Y
+NÂˆYˆ
+\[ŠH™]\›ˆ˜[ÙNÂˆ[‹˜ÛÛ›Û\‹˜X›Ü
+
+NÂˆXİ]™SÙ™›[™QÙ[™\˜][Û”[œË™[]JÙ\ÜÚ[Û’Y
+NÂˆ™]\›ˆYNÂŸB‚‹ËÈ8¥ 8¥ šXÚYYXH™\›ØÙ\ÜÚ[™ÈÛˆ[İ[8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ 8¥ ‚˜ÛÛœİSQWÑĞTHH
+ˆŒ
+ˆLÂ‚™[˜İ[ÛˆÚİ[ÚİÕ[Y\İ[\
+İ\œ™[\ÙÎˆİš[™Ë™]“\ÙÎˆİš[™È[
+Nˆ›ÛÛX[ˆÂˆYˆ
+\™]“\ÙÊH™]\›ˆYNÈËÈš\œİY\ÜØYÙH[Ø^\ÈÚİÜÈ[YBˆ™]\›ˆ™]È]Jİ\œ™[\ÙÊK™Ù][YJ
+HH™]È]J™]“\ÙÊK™Ù][YJ
+HˆSQWÑĞTÂŸB‚\HÚ]›ÛÛT›ÜÈHÂˆÙ\ÜÚ[ÛˆÚ]Ù\ÜÚ[ÛÂˆÛ˜XÚÎˆ
+
+HOˆ›ÚYÂˆÊŠˆ9/&º+çyg*:+¯¹ïkºhmz(ªùb(:fi9d#¹fçº, ûï&¹å,yi%¹l`¹cn:/oy§+: b¹i*yk©9nm¹fç¹b,9b%ú(j
+‹ÂˆÛ‘[]YÎˆ
+
+HOˆ›ÚYÂŸNÂ‚\HÙ™›[™PXİ[Û•\™Ù]HÂˆ\›’Yˆİš[™ÎÂˆ›ÛNˆ\Ù\ˆˆ˜\ÜÚ\İ[ÂŸNÂ‚\HÛÛ^Y[P[˜ÚÜˆHÂˆˆ[X™\ÂˆNˆ[X™\Âˆ›İÛVOÎˆ[X™\ÂŸNÂ‚\H™[™\Ú]Y\ÜØYÙHHÚ]Y\ÜØYÙH	ˆÂˆ\Ü^T›Ú™XİYÎˆ›ÛÛX[Âˆ\Ü^TÛİ\˜ÙRYÎˆİš[™ÎÂŸNÂ‚\HØÜ›Û[˜ÚÜ”Û˜\ÚİHÂˆY\ÜØYÙRYˆİš[™ÎÂˆÙ™œÙ][Nˆ[X™\ÂŸNÂ‚\H[™[™ÓY\ÜØYÙR[\HÂˆY\ÜØYÙRYˆİš[™ÎÂˆ˜[˜XÚÓY\ÜØYÙRYÎˆİš[™ÎÂŸNÂ‚˜ÛÛœİS”ÒQS•ÓQTÔĞQÑWÔ‘Q’VHZK]˜[œÚY[HÂ\HšXÚ[Ù[Ú[™HœİÈˆ^ÜİÈˆœ™YÜXÚÙ]ˆ˜[œÙ™\ˆˆ›ØØ][Ûˆˆ˜[œÙ™\—İ\™Ù]ˆ›ÚXÙWÛ\ÙÈˆ™ÚYˆœŞ\İ[WÚ[œİXİ[ÛˆÂ\HÚ]^[œ][™HHÂˆ\[™^ˆ
+^ˆİš[™ËÜ[ÛœÏÎˆÈ›Øİ\ÏÎˆ›ÛÛX[ˆJHOˆ›ÚYÂˆÛX\ˆ
+
+HOˆ›ÚYÂŸNÂ\HÙ™›[™U^[œ][™HHÂˆÛX\ˆ
+
+HOˆ›ÚYÂˆÙ]^ˆ
+^ˆİš[™ÊHOˆ›ÚYÂˆ™\İÜ™RY‘[\Nˆ
+^ˆİš[™ÊHOˆ›ÚYÂŸNÂ‚™[˜İ[Ûˆ\Õ˜[œÚY[Y\ÜØYÙJ\ÙÎˆXÚÏÚ]Y\ÜØYÙKšYˆİš[™ÊNˆ›ÛÛX[ˆÂˆ™]\›ˆ
+\[Ùˆ\ÙÈOOHœİš[™ÈˆÈ\ÙÈˆ\ÙËšY
+Kœİ\ÕÚ]
+S”ÒQS•ÓQTÔĞQÑWÔ‘Q’V
+NÂŸB‚™[˜İ[ÛˆÛÜU^ĞÛ\›Ø\™
+^ˆİš[™ÊNˆ›ÚYÂˆÛÛœİ˜[˜XÚĞÛÜHH
+
+HOˆÂˆÛÛœİHHØİ[Y[˜Ü™X]Q[[Y[
+^\™XHŠNÂˆK˜[YHH^ÂˆKœİ[K˜ÜÜÕ^HœÜÚ][Û™š^YÛY‹NNNN\İÜ‹NNNN\ÛÜXÚ]NŒÂˆØİ[Y[˜›ÙK˜\[™Ú[
+JNÂˆK™›Øİ\Ê
+NÂˆKœÙ[Xİ
+
+NÂˆHÈØİ[Y[™^XĞÛÛ[X[™
+˜ÛÜHŠNÈHØ]ÚßBˆØİ[Y[˜›ÙKœ™[[İ™PÚ[
+JNÂˆNÂˆYˆ
+˜]šYØ]Ü‹˜Û\›Ø\™ËÜš]U^
+HÂˆ˜]šYØ]Ü‹˜Û\›Ø\™Üš]U^
+^
+K˜Ø]Ú
+˜[˜XÚĞÛÜJNÂˆH[ÙHÂˆ˜[˜XÚĞÛÜJ
+NÂˆBŸB‚™[˜İ[ÛˆY[[ÜUÜš]T™\]Y\İØ\™
+Âˆ\ÙËˆÛ\›İ™KˆÛ’YÛ›Ü™KŸNˆÂˆ\ÙÎˆÚ]Y\ÜØYÙNÂˆÛ\›İ™Nˆ
+\ÙÎˆÚ]Y\ÜØYÙJHOˆ›ÚY›ÛZ\ÙO›ÚYÂˆÛ’YÛ›Ü™Nˆ
+\ÙÎˆÚ]Y\ÜØYÙJHOˆ›ÚYÂŸJHÂˆÛÛœİİ]\ÈH\ÙË›YYXQ]OË›Y[[ÜT™\]Y\İİ]\Èœ[™[™ÈÂˆÛÛœİÛÛ[H\ÙË›YYXQ]OË›Y[[ÜPÛÛ[\ÙË˜ÛÛ[ÂˆÛÛœİ™X\ÛÛˆH\ÙË›YYXQ]OË›Y[[ÜT™X\ÛÛÂˆÛÛœİ[\Ü[˜ÙHH\ÙË›YYXQ]OË›Y[[ÜR[\Ü[˜ÙNÂˆÛÛœİİ]\Õ^Hİ]\ÈOOH˜\›İ™YˆÈ¹mì¹a¦yaizeoù§'ú+¬9oáˆˆˆİ]\ÈOOHšYÛ›Ü™YˆÈ¹mì¹oïyåiy§+9«(ya¦yaiHˆˆ¹ëbyo¡y/h9èkº+©Â‚ˆ™]\›ˆ
+ˆ]ˆÛ\ÜÓ˜[YOHËVÌH›İ[™YL›Ü™\ˆ›Ü™\‹Vİ˜\ŠKXËX›Ü™\ŠWH™ËVİ˜\ŠKXËXØ\™
+WKÎMH˜XÚÙ›ÜX›\ˆMKLÈ›^›^XÛÛØ\LÈZKXX˜›K\ÚYİÈ‚ˆ]ˆÛ\ÜÓ˜[YOH™›^][\ËXÙ[\ˆ\İYKX™]ÙY[ˆØ\LÈ‚ˆÜ[ˆÛ\ÜÓ˜[YOH›Y[K[X™[¹kîy¥®y ìú+¬9/cú/æy.í¹.¢ÏÜÜ[‚ˆÜ[ˆÛ\ÜÓ˜[YOH›Y[KY\ØÈ[]LÚš[šËLÜİ]\Õ^OÜÜ[‚ˆÙ]‚ˆ]ˆÛ\ÜÓ˜[YOHœ›İ[™Y^™ËVİ˜\ŠKXËZ[œ]
+WKÍÌLÈKLˆ‚ˆÛ\ÜÓ˜[YOH›Y[KY\ØÈ[]LXY[™ËMˆÚ]\ÜXÙK\™K]Ü˜\ØÛÛ[OÜ‚ˆÙ]‚ˆÊ™X\ÛÛˆ\[Ùˆ[\Ü[˜ÙHOOH›[X™\ˆŠH	‰ˆ
+ˆ]ˆÛ\ÜÓ˜[YOH™›^›^XÛÛØ\LH‚ˆÜ™X\ÛÛˆ	‰ˆÜ[ˆÛ\ÜÓ˜[YOH›Y[KY\ØÈ[]L¹c§ùfè;ï&Ü™X\ÛÛŸOÜÜ[ŸBˆİ\[Ùˆ[\Ü[˜ÙHOOH›[X™\ˆˆ	‰ˆÜ[ˆÛ\ÜÓ˜[YOH›Y[KY\ØÈ[]Lºaãz) y )ûï&Ú[\Ü[˜ÙKÑš^Y
+Š_OÜÜ[ŸBˆÙ]‚ˆ
+_BˆÜİ]\ÈOOHœ[™[™ÈˆÈ
+ˆ]ˆÛ\ÜÓ˜[YOH™›^Ø\Lˆ‚ˆ]ÛˆÛÛXÚÏ^Ê
+HOˆ›ÚYÛ\›İ™J\ÙÊ_HÛ\ÜÓ˜[YOHZKXˆZKX‹\š[X\H›^LH¹èkº+©9a¦yaiOØ]Û‚ˆ]ÛˆÛÛXÚÏ^Ê
+HOˆÛ’YÛ›Ü™J\ÙÊ_HÛ\ÜÓ˜[YOHZKXˆZKX‹[İ][™H›^LH¹oïyåiOØ]Û‚ˆÙ]‚ˆ
+Hˆ[BˆÙ]‚ˆ
+NÂŸB‚™[˜İ[ÛˆŞ\İ[R[œİXİ[ÛØ\™
+ÈÛÛ[NˆÈÛÛ[ˆİš[™ÈJHÂˆ™]\›ˆ
+ˆ‚ˆ]ˆÛ\ÜÓ˜[YOH˜Ú]\Ş\İ[KZ[œİXİ[Û‹ZXY‚ˆÜ[ˆÛ\ÜÓ˜[YOH˜Ú]\Ş\İ[KZ[œİXİ[Û‹]]H¹ìîùîçù£!ù.éÜÜ[‚ˆÙ]‚ˆ]ˆÛ\ÜÓ˜[YOH˜Ú]\Ş\İ[KZ[œİXİ[Û‹X›ÙHØÛÛ[OÙ]‚ˆÏ‚ˆ
+NÂŸB‚\Hİ\İÛPÚ]\Ô™\Ù[][ÛˆHœ[™[ˆ›[Ù[ˆ™[ØÜ™Y[ˆˆ››Û™HÂ‚\HXİ]™Pİ\İÛPÚ]\ÈHÂˆ\ˆ[œİ[Yİ\İÛP\ÂˆXİ[Ûˆ™YÚ\İ\™Yİ\İÛP\Ú]\ĞXİ[ÛÂˆ™\Ù[][Ûˆ^ÛYOİ\İÛPÚ]\Ô™\Ù[][Û‹™[ØÜ™Y[ˆÂˆ][˜ÚÛÛ^ˆ™XÛÜ™İš[™Ë[šÛ›İÛÂŸNÂ‚™[˜İ[ÛˆÙ]İ\İÛPÚ]\Ô™\Ù[][ÛŠXİ[Ûˆ™YÚ\İ\™Yİ\İÛP\Ú]\ĞXİ[ÛŠNˆİ\İÛPÚ]\Ô™\Ù[][ÛˆÂˆYˆ
+Xİ[Û‹œ™\Ù[][ÛˆOOH™[ØÜ™Y[ˆˆXİ[Û‹œ™\Ù[][ÛˆOOH˜\ŠH™]\›ˆ™[ØÜ™Y[ˆÂˆYˆ
+Xİ[Û‹œ™\Ù[][ÛˆOOH›[Ù[ŠH™]\›ˆ›[Ù[ÂˆYˆ
+Xİ[Û‹œ™\Ù[][ÛˆOOH››Û™HŠH™]\›ˆ››Û™HÂˆ™]\›ˆœ[™[ÂŸB‚™[˜İ[Ûˆ›Ü›X[^™Pİ\İÛT[™[ZYÚ
+˜[YNˆ[šÛ›İÛŠNˆİš[™È[™Yš[™YÂˆÛÛœİ^Hİš[™Ê˜[YHÏÈˆŠKš[J
+NÂˆYˆ
+]^
+H™]\›ˆ[™Yš[™YÂˆYˆ
+×—Ì‹ßIË\İ
+^
+JH™]\›ˆ	ÓX]›X^
+ŒŒX]›Z[Š[X™\Š^
+JJ_\ÂˆYˆ
+×—Ì‹ß\	Ë\İ
+^
+JH™]\›ˆ^ÂˆYˆ
+×—Ì‹ß]š	Ë\İ
+^
+JH™]\›ˆ^ÂˆYˆ
+×˜Ø[×
+×ŠWJ×
+IË\İ
+^
+JH™]\›ˆ^Âˆ™]\›ˆ[™Yš[™YÂŸB‚˜ÛÛœİÚ]^[œ]˜\ˆHY[[Ê›ÜØ\™™YÚ]^[œ][™KÂˆÚ\˜Xİ\“˜[YNˆİš[™ÎÂˆÚ\˜Xİ\’Yˆİš[™ÎÂˆİXÚÙ\Ú\˜Xİ\’YÏÎˆİš[™Ö×NÂˆ\ÑÜ›İ\ˆ›ÛÛX[Âˆ\ÔÜXİ]Üˆ›ÛÛX[Âˆ]]U[[\Îˆ[X™\Âˆ\ÑÙ[™\˜][™Îˆ›ÛÛX[ÂˆX]\“[ÙNˆ›ÛÛX[Âˆ[\•ÔÙ[™[˜X›Yˆ›ÛÛX[Âˆ][İ[™ÓY\ÜØYÙNˆÚ]Y\ÜØYÙH[ÂˆÚİÑ[[ÚšT[™[ˆ›ÛÛX[ÂˆÚİÔİXÚÙ\”[™[ˆ›ÛÛX[ÂˆÚİÔ\ÓY[Nˆ›ÛÛX[Âˆİ\İÛT\ĞXİ[ÛœÎˆ™YÚ\İ\™Yİ\İÛP\Ú]\ĞXİ[Û–×NÂˆÛÛX\”][İNˆ
+
+HOˆ›ÚYÂˆÛ•ÙÙÛSÙ™›[™S[ÙNˆ
+
+HOˆ›ÚYÂˆÛÛÜÙT[™[Îˆ
+
+HOˆ›ÚYÂˆÛ•ÙÙÛQ[[ÚšT[™[ˆ
+
+HOˆ›ÚYÂˆÛ•ÙÙÛTİXÚÙ\”[™[ˆ
+
+HOˆ›ÚYÂˆÛ•ÙÙÛT\ÓY[Nˆ
+
+HOˆ›ÚYÂˆÛ•ÙÙÛUX]\“[ÙNˆ
+
+HOˆ›ÚYÂˆÛÛÜÙUX]\“[ÙNˆ
+
+HOˆ›ÚYÂˆÛ“Ü[”šXÚ[Ù[ˆ
+[Ù[ˆšXÚ[Ù[Ú[™
+HOˆ›ÚYÂˆÛ“Ü[İ\İÛT\ĞXİ[Ûˆ
+Xİ[Ûˆ™YÚ\İ\™Yİ\İÛP\Ú]\ĞXİ[ÛŠHOˆ›ÚYÂˆÛ”İ\šY[ĞØ[ˆ
+
+HOˆ›ÚYÂˆÛ”İ\›ÚXÙPØ[ˆ
+
+HOˆ›ÚYÂˆÛ”Ù[™^ˆ
+^ˆİš[™ËÜ[ÛœÏÎˆÈ]]Ô™\OÎˆ›ÛÛX[ˆJHOˆ›ÛÛX[ÂˆÛ”İÜÙ[™\˜][Ûˆ
+
+HOˆ›ÚYÂˆÛ•šYÙÙ\RT™\ÜÛœÙNˆ
+
+HOˆ›ÚYÂ‚[Û”Ù[™İXÚÙ\ˆ
+˜[YNˆİš[™Ë\›Îˆİš[™ÊHOˆ›ÚYÂŸOŠ[˜İ[ÛˆÚ]^[œ]˜\ŠÂˆÚ\˜Xİ\“˜[YKˆÚ\˜Xİ\’YˆİXÚÙ\Ú\˜Xİ\’YËˆ\ÑÜ›İ\ˆ\ÔÜXİ]Ü‹ˆ]]U[[\Ëˆ\ÑÙ[™\˜][™ËˆX]\“[ÙKˆ[\•ÔÙ[™[˜X›Yˆ][İ[™ÓY\ÜØYÙKˆÚİÑ[[ÚšT[™[ˆÚİÔİXÚÙ\”[™[ˆÚİÔ\ÓY[Kˆİ\İÛT\ĞXİ[ÛœËˆÛÛX\”][İKˆÛ•ÙÙÛSÙ™›[™S[ÙKˆÛÛÜÙT[™[ËˆÛ•ÙÙÛQ[[ÚšT[™[ˆÛ•ÙÙÛTİXÚÙ\”[™[ˆÛ•ÙÙÛT\ÓY[KˆÛ•ÙÙÛUX]\“[ÙKˆÛÛÜÙUX]\“[ÙKˆÛ“Ü[”šXÚ[Ù[ˆÛ“Ü[İ\İÛT\ĞXİ[Û‹ˆÛ”İ\šY[ĞØ[ˆÛ”İ\›ÚXÙPØ[ˆÛ”Ù[™^ˆÛ”İÜÙ[™\˜][Û‹ˆÛ•šYÙÙ\RT™\ÜÛœÙKˆÛ”Ù[™İXÚÙ\‹ŸK™YŠHÂˆÛÛœİÚ[œ]^Ù][œ]^HH\ÙTİ]JˆŠNÂˆÛÛœİ^\™XT™YˆH\ÙT™YS^\™XQ[[Y[[Š[
+NÂˆËÈ:(j9 áyc!y¤'9í(º e9 ìûï&‘TĞËùi,yá)¹ïkˆYH:f¤:%ãûï#:/¤ùaiycæ9c%ºaãy¥¬9o 9d+ÂˆÛÛœİÜİYÙÙ\İÛÜÙYÙ]İYÙÙ\İÛÜÙYHH\ÙTİ]J˜[ÙJNÂˆËÈ9fí:)à¹ï©ú(ªùé z* ;ï&º/¤ùaiy.#¹kã9j¤¹/dùaiycèùaj:`ê:e yk¦»ï#9cê¹åfyî¯ù."ùb!ù£h¹d£9å'ù¢$9£"zd«‚ˆÛÛœİÛ]]S›İÕXÚËÙ]]]S›İÕXÚ×HH\ÙTİ]J
+
+HOˆ]K››İÊ
+JNÂˆ\ÙQY™™Xİ
+
+
+HOˆÂˆYˆ
+[]]U[[\È]]U[[\ÈH]K››İÊ
+JH™]\›ÂˆÛÛœİ[Y\ˆHÚ[™İËœÙ][\˜[
+
+
+HOˆÙ]]]S›İÕXÚÊ]K››İÊ
+JKÌ
+NÂˆ™]\›ˆ
+
+HOˆÚ[™İË˜ÛX\’[\˜[
+[Y\ŠNÂˆKÛ]]U[[\×JNÂˆÛÛœİ]]T™[XZ[š[™Ó\ÈH]]U[[\Èˆ]]S›İÕXÚÈÈ]]U[[\ÈH]]S›İÕXÚÈˆÂˆÛÛœİ[œ]ØÚÙYH\ÔÜXİ]Üˆ]]T™[XZ[š[™Ó\ÈˆÂ‚ˆÛÛœİ™\Ù]^\™XRZYÚH
+
+HOˆÂˆYˆ
+^\™XT™Y‹˜İ\œ™[
+H^\™XT™Y‹˜İ\œ™[œİ[KšZYÚH˜]]ÈÂˆNÂ‚ˆÛÛœİ\[™^H\ÙPØ[˜XÚÊ
+^ˆİš[™ËÜ[ÛœÏÎˆÈ›Øİ\ÏÎˆ›ÛÛX[ˆJHOˆÂˆÙ][œ]^
+™]ˆOˆ™]ˆ
+È^
+NÂˆ™\]Y\İ[š[X][Û‘œ˜[YJ
+
+HOˆÂˆÛÛœİHH^\™XT™Y‹˜İ\œ™[ÂˆYˆ
+]JH™]\›ÂˆKœİ[KšZYÚH˜]]ÈÂˆKœİ[KšZYÚHX]›Z[ŠKœØÜ›ÛZYÚLŒ
+H
+ÈœÂˆYˆ
+Ü[ÛœÏË™›Øİ\ÈOOH˜[ÙJHK™›Øİ\Ê
+NÂˆJNÂˆK×JNÂ‚ˆ\ÙR[\\˜]]™R[™J™Y‹
+
+HOˆ
+Âˆ\[™^ˆÛX\ˆ
+
+HOˆÂˆÙ][œ]^
+ˆŠNÂˆ™\Ù]^\™XRZYÚ
+
+NÂˆKˆJKØ\[™^JNÂ‚ˆÛÛœİ[™TİX›Z]H
+
+HOˆÂˆYˆ
+[œ]ØÚÙY
+H™]\›ÂˆYˆ
+\ÑÙ[™\˜][™ÊHÂˆÛ”İÜÙ[™\˜][ÛŠ
+NÂˆ™]\›ÂˆBˆÛÛœİš[[YYH[œ]^š[J
+NÂˆYˆ
+]š[[YY
+H™]\›ÂˆYˆ
+[Û”Ù[™^
+š[[YY
+JH™]\›ÂˆÙ][œ]^
+ˆŠNÂˆ™\Ù]^\™XRZYÚ
+
+NÂˆÛÛÜÙT[™[Ê
+NÂˆNÂ‚ˆÛÛœİ[™[Ü[ˆHÚİÑ[[ÚšT[™[ÚİÔİXÚÙ\”[™[ÚİÔ\ÓY[NÂˆÛÛœİİYÙÙ\İÚ\˜Xİ\’YÈH\ÙSY[[Êˆ
+
+HOˆ
+\ÑÜ›İ\È
+İXÚÙ\Ú\˜Xİ\’YÈ×JHˆÚ\˜Xİ\’YÈØÚ\˜Xİ\’YHˆ×JKˆÚ\ÑÜ›İ\İXÚÙ\Ú\˜Xİ\’YËÚ\˜Xİ\’YKˆ
+NÂˆÛÛœİİYÙÙ\İ[˜X›YHZ[œ]ØÚÙY	‰ˆ\[™[Ü[ˆ	‰ˆ\İYÙÙ\İÛÜÙY	‰ˆ[œ]^š[J
+K›[™İˆÂˆÛÛœİ\ÓY[R][\ÈHÂˆÈXÛÛˆİ™ÈÚYHŒŒˆˆZYÚHŒŒˆˆšY]Ğ›ŞHŒˆš[H››Û™Hˆİ›ÚÙOH˜\ŠKXË]^
+Hˆİ›ÚÙUÚYHŒKHˆİ›ÚÙS[™XØ\Hœ›İ[™ˆİ›ÚÙS[™Z›Ú[Hœ›İ[™™XİHŒÈˆOHŒÈˆÚYHŒNˆZYÚHŒNˆHŒˆˆOHŒˆˆÏÚ\˜ÛHŞHHˆŞOHHˆHŒKHˆÏÛ[[™HÚ[ÏHŒŒHMHMˆLHŒHˆÏÜİ™Ï‹X™[ˆ¹áiùâaùh¦H‹ÛÛXÚÎˆ
+
+HOˆÛ“Ü[”šXÚ[Ù[
+œİÈŠHKˆÈXÛÛˆİ™ÈÚYHŒŒˆˆZYÚHŒŒˆˆšY]Ğ›ŞHŒˆš[H››Û™Hˆİ›ÚÙOH˜\ŠKXË]^
+Hˆİ›ÚÙUÚYHŒKHˆİ›ÚÙS[™XØ\Hœ›İ[™ˆİ›ÚÙS[™Z›Ú[Hœ›İ[™™XİHŒÈˆOHŒÈˆÚYHŒNˆZYÚHŒNˆHŒˆˆOHŒˆˆÏ[™HOHÈˆLOHˆHŒMÈˆLHˆÏ[™HOHÈˆLOHŒLˆˆHŒMˆLHŒLˆˆÏ[™HOHÈˆLOHŒMˆˆHŒLHˆLHŒMˆˆÏÜİ™Ï‹X™[ˆ¹¥¡ùkeùfï¹âaÈ‹ÛÛXÚÎˆ
+
+HOˆÛ“Ü[”šXÚ[Ù[
+^ÜİÈŠHKˆÈXÛÛˆ[\Ú\˜ÛHÚ^™O^ÌŒŸHİ›ÚÙUÚY^ÌK_HÛÛÜH˜\ŠKXË]^
+HˆÏ‹X™[ˆ¹ìîùîçù£!ù.é‹ÛÛXÚÎˆ
+
+HOˆÛ“Ü[”šXÚ[Ù[
+œŞ\İ[WÚ[œİXİ[ÛˆŠHKˆÈXÛÛˆÛ\\˜›Ø\™Ú^™O^ÌŒŸHİ›ÚÙUÚY^ÌK_HÛÛÜ^İX]\“[ÙHÈ˜\ŠKXËZXÛÛ‹XXİ]™JHˆˆ˜\ŠKXË]^
+HŸHÏ‹X™[ˆ¹åj¹i%¹£!ù.é9ª(yo#È‹Xİ]™NˆX]\“[ÙKÛÛXÚÎˆÛ•ÙÙÛUX]\“[ÙHKˆÈXÛÛˆİ™ÈÚYHŒŒˆˆZYÚHŒŒˆˆšY]Ğ›ŞHŒˆš[H››Û™Hˆİ›ÚÙOH˜\ŠKXË]^
+Hˆİ›ÚÙUÚYHŒKHˆİ›ÚÙS[™XØ\Hœ›İ[™ˆİ›ÚÙS[™Z›Ú[Hœ›İ[™]H“LŒÈÛMÈHÈUŞˆˆÏ™XİHŒHˆOHHˆÚYHŒMHˆZYÚHŒMˆHŒˆˆOHŒˆˆÏÜİ™Ï‹X™[ˆº)áºh¤z`&º+çH‹ÛÛXÚÎˆÛ”İ\šY[ĞØ[KˆÈXÛÛˆİ™ÈÚYHŒŒˆˆZYÚHŒŒˆˆšY]Ğ›ŞHŒˆš[H››Û™Hˆİ›ÚÙOH˜\ŠKXË]^
+Hˆİ›ÚÙUÚYHŒKHˆİ›ÚÙS[™XØ\Hœ›İ[™ˆİ›ÚÙS[™Z›Ú[Hœ›İ[™]H“LLˆ˜LÈÈLÈİØLÈÈˆXLÈÈLËLÖˆˆÏ]H“LNHLŒ˜MÈÈKLM‹LˆˆÏ[™HOHŒLˆˆLOHŒNHˆHŒLˆˆLHŒŒˆˆÏÜİ™Ï‹X™[ˆº+ëzgìú`&º+çH‹ÛÛXÚÎˆÛ”İ\›ÚXÙPØ[KˆÈXÛÛˆİ™ÈÚYHŒŒˆˆZYÚHŒŒˆˆšY]Ğ›ŞHŒˆš[H››Û™Hˆİ›ÚÙOH˜\ŠKXË]^
+Hˆİ›ÚÙUÚYHŒKHˆİ›ÚÙS[™XØ\Hœ›İ[™ˆİ›ÚÙS[™Z›Ú[Hœ›İ[™™XİHŒˆˆOHHˆÚYHŒŒˆZYÚHŒMˆHŒˆˆÏ[™HOHŒˆˆLOHŒLˆHŒŒˆˆLHŒLˆÏÜİ™Ï‹X™[ˆ¹î¨¹c!H‹ÛÛXÚÎˆ
+
+HOˆÛ“Ü[”šXÚ[Ù[
+œ™YÜXÚÙ]ŠHKˆÈXÛÛˆİ™ÈÚYHŒŒˆˆZYÚHŒŒˆˆšY]Ğ›ŞHŒˆš[H››Û™Hˆİ›ÚÙOH˜\ŠKXË]^
+Hˆİ›ÚÙUÚYHŒKHˆİ›ÚÙS[™XØ\Hœ›İ[™ˆİ›ÚÙS[™Z›Ú[Hœ›İ[™Ú\˜ÛHŞHŒLˆˆŞOHŒLˆˆHŒLˆÏ^HŒLˆˆOHŒMˆˆ^[˜ÚÜH›ZYHˆ›ÛÚ^™OHŒLˆˆš[H˜\ŠKXË]^
+Hˆİ›ÚÙOH››Û™H°©Oİ^Üİ™Ï‹X™[ˆº/k:-)ˆ‹ÛÛXÚÎˆ
+
+HOˆÛ“Ü[”šXÚ[Ù[
+\ÑÜ›İ\È˜[œÙ™\—İ\™Ù]ˆˆ˜[œÙ™\ˆŠHKˆÈXÛÛˆÚYÚ^™O^ÌŒŸHİ›ÚÙUÚY^ÌK_HÛÛÜH˜\ŠKXË]^
+HˆÏ‹X™[ˆ¹é/9âjH‹ÛÛXÚÎˆ
+
+HOˆÛ“Ü[”šXÚ[Ù[
+™ÚYŠHKˆÈXÛÛˆİ™ÈÚYHŒŒˆˆZYÚHŒŒˆˆšY]Ğ›ŞHŒˆš[H››Û™Hˆİ›ÚÙOH˜\ŠKXË]^
+Hˆİ›ÚÙUÚYHŒKHˆİ›ÚÙS[™XØ\Hœ›İ[™ˆİ›ÚÙS[™Z›Ú[Hœ›İ[™]H“LŒHLÌËNHLËNHLÜËNKM‹NKLLØNHHHNˆˆÏÚ\˜ÛHŞHŒLˆˆŞOHŒLˆHŒÈˆÏÜİ™Ï‹X™[ˆ¹/cyïkˆ‹ÛÛXÚÎˆ
+
+HOˆÛ“Ü[”šXÚ[Ù[
+›ØØ][ÛˆŠHKˆÈXÛÛˆİ™ÈÚYHŒŒˆˆZYÚHŒŒˆˆšY]Ğ›ŞHŒˆš[H››Û™Hˆİ›ÚÙOH˜\ŠKXË]^
+Hˆİ›ÚÙUÚYHŒKHˆİ›ÚÙS[™XØ\Hœ›İ[™ˆİ›ÚÙS[™Z›Ú[Hœ›İ[™]H“LLˆ˜LÈÈLÈİØLÈÈˆXLÈÈLËLÖˆˆÏ]H“LNHLŒ˜MÈÈKLM‹LˆˆÏ[™HOHŒLˆˆLOHŒNHˆHŒLˆˆLHŒŒˆˆÏ[™HOHˆLOHŒŒˆˆHŒMˆˆLHŒŒˆˆÏÜİ™Ï‹X™[ˆº+ëzgìù§hH‹ÛÛXÚÎˆ
+
+HOˆÛ“Ü[”šXÚ[Ù[
+›ÚXÙWÛ\ÙÈŠHKˆ‹‹˜İ\İÛT\ĞXİ[ÛœË›X\
+Xİ[ÛˆOˆ
+ÂˆXÛÛˆXİ[Û‹˜\XÛÛ‘]U\›ˆÈÜ[ˆÛ\ÜÓ˜[YOH˜Ú]\\ËXİ\İÛKX\ZXÛÛˆˆİ[O^ŞÈ˜XÚÙÜ›İ[™[XYÙNˆ\›
+	ØXİ[Û‹˜\XÛÛ‘]U\›JX_H\šXKZY[HYHˆÏ‚ˆˆ›ØÚÜÈÚ^™O^ÌŒŸHİ›ÚÙUÚY^ÌK_HÛÛÜH˜\ŠKXË]^
+HˆÏ‹ˆX™[ˆXİ[Û‹›X™[ˆÛÛXÚÎˆ
+
+HOˆÛ“Ü[İ\İÛT\ĞXİ[ÛŠXİ[ÛŠKˆJJKˆNÂ‚ˆ™]\›ˆ
+ˆ]ˆÛ\ÜÓ˜[YOH˜Ú]Z[œ]X˜\ˆÚ]\›ÛÛK[XZ[‹\[™H›^›^XÛÛˆ]K]ZOHš[œ]‚ˆİX]\“[ÙH	‰ˆ
+ˆ]ˆÛ\ÜÓ˜[YOH˜Ú]]X]\‹[[ÙK\İš\ˆ›ÛOHœİ]\È‚ˆÜ[ˆÛ\ÜÓ˜[YOH˜Ú]]X]\‹[[ÙKZXÛÛˆˆ\šXKZY[HYH‚ˆÛ\\˜›Ø\™Ú^™O^ÌMŸHİ›ÚÙUÚY^ÌKHÏ‚ˆÜÜ[‚ˆÜ[ˆÛ\ÜÓ˜[YOH˜Ú]]X]\‹[[ÙK]]H¹åj¹i%¹£!ù.é9ª(yo#ÏÜÜ[‚ˆ]Û‚ˆ\OH˜]Ûˆ‚ˆÛ\ÜÓ˜[YOH˜Ú]]X]\‹[[ÙKXÛÜÙH‚ˆÛÛXÚÏ^ÛÛÛÜÙUX]\“[Ù_Bˆ\šXK[X™[H¹alúeëyåj¹i%¹£!ù.é9ª(yo#È‚ˆ]OH¹alúeëyåj¹i%¹£!ù.é9ª(yo#È‚ˆ‚ˆÚ^™O^ÌMHİ›ÚÙUÚY^ÌŸHÏ‚ˆØ]Û‚ˆÙ]‚ˆ
+_BˆÜ][İ[™ÓY\ÜØYÙH	‰ˆ
+ˆ]ˆÛ\ÜÓ˜[YOH˜Ú]\][İKX˜\ˆ‚ˆ]ˆÛ\ÜÓ˜[YOH™›^LHËLLˆ^Vİ˜\ŠKXËZXÛÛŠWHİ™\™›İËZY[ˆ^Y[\Ú\ÈÚ]\ÜXÙK[›İÜ˜\‚ˆ9o%yå*Ü][İ[™ÓY\ÜØYÙKœ›ÛHOOH\Ù\ˆˆÈ¹/hˆˆÚ\˜Xİ\“˜[Y_NˆÜ][İ[™ÓY\ÜØYÙK˜ÛÛ[œÛXÙJ
+_BˆÙ]‚ˆ]ÛˆÛÛXÚÏ^ÛÛÛX\”][İ_HÛ\ÜÓ˜[YOHZKX˜\™KXˆ^Vİ˜\ŠKXËZXÛÛŠWHËLMˆXY[™Ë[›Û™HVÌœH¸§%OØ]Û‚ˆÙ]‚ˆ
+_B‚ˆÜİYÙÙ\İ[˜X›Y	‰ˆ
+ˆİXÚÙ\”ÙX\˜ÚİYÙÙ\İˆ]Y\O^Ú[œ]^BˆÚ\˜Xİ\’YÏ^ÜİYÙÙ\İÚ\˜Xİ\’YßBˆÛ”Ù[™^Ê˜[YK\›
+HOˆÂˆÛ”Ù[™İXÚÙ\Š˜[YK\›
+NÂˆÙ][œ]^
+ˆŠNÂˆ™\Ù]^\™XRZYÚ
+
+NÂˆ_BˆÛÛÜÙO^Ê
+HOˆÙ]İYÙÙ\İÛÜÙY
+YJ_BˆÏ‚ˆ
+_Bˆ^\™XBˆ™Y^İ^\™XT™YŸBˆ›İÜÏ^Ì_Bˆ˜[YO^Ú[œ]^BˆÛÚ[™ÙO^ÙHOˆÂˆÙ][œ]^
+K\™Ù]˜[YJNÂˆÙ]İYÙÙ\İÛÜÙY
+˜[ÙJNÂˆK\™Ù]œİ[KšZYÚH˜]]ÈÂˆK\™Ù]œİ[KšZYÚHX]›Z[ŠK\™Ù]œØÜ›ÛZYÚLŒ
+H
+ÈœÂˆ_BˆÛ‘›Øİ\Ï^ÊJHOˆÂˆYˆ
+[™[Ü[ŠHÂˆK\™Ù]˜›\Š
+NÂˆÛÛÜÙT[™[Ê
+NÂˆÛÛœİ\™Ù]HK\™Ù]\ÈS^\™XQ[[Y[Âˆ™\]Y\İ[š[X][Û‘œ˜[YJ
+
+HOˆ™\]Y\İ[š[X][Û‘œ˜[YJ
+
+HOˆ\™Ù]™›Øİ\Ê
+JJNÂˆBˆÙ]İYÙÙ\İÛÜÙY
+˜[ÙJNÂˆ_BˆÛ›\^Ê
+HOˆÙ]İYÙÙ\İÛÜÙY
+YJ_BˆÛ’Ù^QİÛ^ÙHOˆÂˆYˆ
+KšÙ^HOOH‘\ØØ\HŠHÂˆÙ]İYÙÙ\İÛÜÙY
+YJNÂˆ™]\›ÂˆBˆYˆ
+Úİ[Ù[™Ú][œ]Û‘[\ŠK[\•ÔÙ[™[˜X›Y
+JHÂˆKœ™]™[Y˜][
+
+NÂˆ[™TİX›Z]
+
+NÂˆBˆ_Bˆ[\’Ù^R[^Ù[\•ÔÙ[™[˜X›YÈœÙ[™ˆˆ™[\ˆŸBˆÛ\ÜÓ˜[YOH˜Ú]Z[œ]]^\™XH‚ˆ\ØX›Y^Ú[œ]ØÚÙYBˆXÙZÛ\^Ú[œ]ØÚÙYˆÈ
+\ÔÜXİ]ÜˆÈ¹fí:)à¹.+{ï#9/h9.#yg*:/æy.*¹ï©:aãˆˆ9é z* 9.+{ï#9bjy/fIÓX]˜ÙZ[
+]]T™[XZ[š[™Ó\ÈÈŒ
+_yb!ºd§Ø
+Bˆˆ
+X]\“[ÙHÈ¹a¦y."ùåj¹i%¹£!ù.é‹‹ˆˆˆ[™Yš[™Y
+_BˆÏ‚‚ˆ]ˆÛ\ÜÓ˜[YOH˜Ú]Z[œ]XXİ[ÛœÈ‚ˆ]Û‚ˆÛÛXÚÏ^ÛÛ•ÙÙÛSÙ™›[™S[Ù_BˆÛ\ÜÓ˜[YOHZKX˜\™KXˆ^Vİ˜\ŠKXË]^
+WHÚ][Ù™›[™K]ÙÙÛH‚ˆ\šXK[X™[H¹î¯ù."ùª(yo#È‚ˆ]OH¹î¯ù."ùª(yo#È‚ˆ‚ˆİ™ÈÚYHŒˆZYÚHŒˆšY]Ğ›ŞHŒˆš[H››Û™Hˆİ›ÚÙOH˜İ\œ™[ÛÛÜˆˆİ›ÚÙUÚYHŒKHˆİ›ÚÙS[™XØ\Hœ›İ[™ˆİ›ÚÙS[™Z›Ú[Hœ›İ[™ˆ\šXKZY[HYH‚ˆ]H“LŒHLÌËNHLËNHLÔÌÈMÈÈLNHHHNˆˆÏ‚ˆÚ\˜ÛHŞHŒLˆˆŞOHŒLˆHŒÈˆÏ‚ˆÜİ™Ï‚ˆØ]Û‚ˆ]ÛˆÛÛXÚÏ^ÛÛ•ÙÙÛQ[[ÚšT[™[H\ØX›Y^Ú[œ]ØÚÙYHÛ\ÜÓ˜[YOHZKX˜\™KXˆ^Vİ˜\ŠKXË]^
+WHˆİ[O^Ú[œ]ØÚÙYÈÈÜXÚ]NˆŒÍHHˆ[™Yš[™YO‚ˆİ™ÈÚYHŒˆZYÚHŒˆšY]Ğ›ŞHŒˆš[H››Û™Hˆİ›ÚÙOH˜İ\œ™[ÛÛÜˆˆİ›ÚÙUÚYHŒKHˆİ›ÚÙS[™XØ\Hœ›İ[™ˆİ›ÚÙS[™Z›Ú[Hœ›İ[™Ú\˜ÛHŞHŒLˆˆŞOHŒLˆˆHŒLˆÏ]H“NMÌKHˆˆLˆLˆˆÏ[™HOHHˆLOHHˆHKŒHˆLHHˆÏ[™HOHŒMHˆLOHHˆHŒMKŒHˆLHHˆÏÜİ™Ï‚ˆØ]Û‚ˆ]ÛˆÛÛXÚÏ^ÛÛ•ÙÙÛTİXÚÙ\”[™[H\ØX›Y^Ú[œ]ØÚÙYHÛ\ÜÓ˜[YOHZKX˜\™KXˆ^Vİ˜\ŠKXË]^
+WHˆİ[O^Ú[œ]ØÚÙYÈÈÜXÚ]NˆŒÍHHˆ[™Yš[™YO‚ˆİ™ÈÚYHŒˆZYÚHŒˆšY]Ğ›ŞHŒˆš[H››Û™Hˆİ›ÚÙOH˜İ\œ™[ÛÛÜˆˆİ›ÚÙUÚYHŒKHˆİ›ÚÙS[™XØ\Hœ›İ[™ˆİ›ÚÙS[™Z›Ú[Hœ›İ[™]H“LMKHÒXLˆˆLˆŒMLˆˆˆšMLˆˆ‹L•SMKHÖˆˆÏÛ[[™HÚ[ÏHŒMÈMŒHˆÏ]H“NLÚˆÏ]H“LMˆLÚˆÏ]H“LLMØËKŒÈKŒ‹Hˆ\ÌKKKŒˆ‹KHˆÏÜİ™Ï‚ˆØ]Û‚ˆ]ÛˆÛÛXÚÏ^ÛÛ•ÙÙÛT\ÓY[_H\ØX›Y^Ú[œ]ØÚÙYHÛ\ÜÓ˜[YOHZKX˜\™KXˆ^Vİ˜\ŠKXË]^
+WHˆİ[O^Ú[œ]ØÚÙYÈÈÜXÚ]NˆŒÍHHˆ[™Yš[™YO‚ˆİ™ÈÚYHŒˆZYÚHŒˆšY]Ğ›ŞHŒˆš[H››Û™Hˆİ›ÚÙOH˜İ\œ™[ÛÛÜˆˆİ›ÚÙUÚYHŒKHˆİ›ÚÙS[™XØ\Hœ›İ[™ˆİ›ÚÙS[™Z›Ú[Hœ›İ[™Ú\˜ÛHŞHŒLˆˆŞOHŒLˆˆHŒLˆÏ[™HOHŒLˆˆLOHˆHŒLˆˆLHŒMˆˆÏ[™HOHˆLOHŒLˆˆHŒMˆˆLHŒLˆˆÏÜİ™Ï‚ˆØ]Û‚ˆ]Û‚ˆÛÛXÚÏ^Ú[™TİX›Z]Bˆ\ØX›Y^ÈZ\ÑÙ[™\˜][™È	‰ˆ
+[œ]ØÚÙYZ[œ]^š[J
+J_Bˆİ[O^Ú[œ]ØÚÙY	‰ˆZ\ÑÙ[™\˜][™ÈÈÈÜXÚ]NˆŒÍHHˆ[™Yš[™YBˆÛ\ÜÓ˜[YOHZKX˜\™KXˆ^Vİ˜\ŠKXË]^
+WH‚ˆ\šXK[X™[^Ú\ÑÙ[™\˜][™ÈÈ¹`g9«h¹§+:/k¹å'ù¢$ˆˆ¹cäz` HŸBˆ]O^Ú\ÑÙ[™\˜][™ÈÈ¹`g9«h¹§+:/k¹å'ù¢$ˆˆ¹cäz` HŸBˆ‚ˆÚ\ÑÙ[™\˜][™ÈÈ
+ˆİ™ÈÚYHŒŒˆˆZYÚHŒŒˆˆšY]Ğ›ŞHŒˆš[H››Û™Hˆİ›ÚÙOH˜İ\œ™[ÛÛÜˆˆİ›ÚÙUÚYHŒKHˆİ›ÚÙS[™XØ\Hœ›İ[™ˆİ›ÚÙS[™Z›Ú[Hœ›İ[™ˆ\šXKZY[HYH‚ˆÚ\˜ÛHŞHŒLˆˆŞOHŒLˆˆHŒLˆÏ‚ˆ™XİHHˆOHHˆÚYHˆˆZYÚHˆˆHŒHˆÏ‚ˆÜİ™Ï‚ˆ
+Hˆ
+ˆİ™ÈÚYHŒˆZYÚHŒˆšY]Ğ›ŞHŒˆš[H››Û™Hˆİ›ÚÙOH˜İ\œ™[ÛÛÜˆˆİ›ÚÙUÚYHŒKHˆİ›ÚÙS[™XØ\Hœ›İ[™ˆİ›ÚÙS[™Z›Ú[Hœ›İ[™[™HOHŒŒˆˆLOHŒˆˆHŒLHˆLHŒLÈˆÏÛYÛÛˆÚ[ÏHŒŒˆˆMHŒˆLHLÈˆHŒˆˆˆÏÜİ™Ï‚ˆ
+_BˆØ]Û‚ˆÈZ\ÑÙ[™\˜][™È	‰ˆ
+ˆ]Û‚ˆÛ\ÜÓ˜[YOHZKX˜\™KXˆ^Vİ˜\ŠKXË]^
+WH‚ˆ]O^ÈZ[œ]ØÚÙY	‰ˆ[œ]^š[J
+HÈ¹cäz` z/¤ùaiy¨a¹a¡yk®ynmº)é¹cäyfç¹i#Hˆˆº)é¹cäHRH9..ùbª9fç¹i#HŸBˆÛÛXÚÏ^Ê
+HOˆÂˆÛÛœİš[[YYH[œ]^š[J
+NÂˆËÈ:/¤ùaiy¨a¹mì¹§"y¥¡ùkeûï&¹cäz` z/¤ùaiy¨a¹a¡yk®ynm¹êâùclú)é¹cäyª(yg¢ùfç¹i#{ï"9. 9«(y£"ze+¹k£9¢$;ï"{ï#ˆËÈ:`oùacxà#9¢dùk£9keùcm9oæ:+¬9cäz` xà#{ï&ù¬¨y¥¡ùkeù¥í¹¢cycêº)é¹cäHRH9..ùbª9fç¹i#BˆYˆ
+Z[œ]ØÚÙY	‰ˆš[[YY
+HÂˆYˆ
+[Û”Ù[™^
+š[[YYÈ]]Ô™\NˆYHJJH™]\›ÂˆÙ][œ]^
+ˆŠNÂˆ™\Ù]^\™XRZYÚ
+
+NÂˆH[ÙHÂˆÛ•šYÙÙ\RT™\ÜÛœÙJ
+NÂˆBˆÛÛÜÙT[™[Ê
+NÂˆ_Bˆ‚ˆİ™ÈÚYHŒŒˆZYÚHŒŒˆšY]Ğ›ŞHŒˆš[H››Û™Hˆİ›ÚÙOH˜İ\œ™[ÛÛÜˆˆİ›ÚÙUÚYHŒKHˆİ›ÚÙS[™XØ\Hœ›İ[™ˆİ›ÚÙS[™Z›Ú[Hœ›İ[™‚ˆ]H“NKLÍÈMKPLˆˆHMŒŒÛM‹ŒLÍKLKN˜KKHHKMŒ“HKLÍLˆˆKLÍÈ[KN‹M‹ŒLÍXKKHHMŒÈMŒŒÈPLˆˆMKHKLÍÛ‹ŒLÍHKN˜KKHHMŒÓMKHMŒŒØLˆˆLKÍÈKÍÛLKNˆ‹ŒLÍXKKHKKMŒÈˆˆÏ‚ˆ]H“LŒİˆÏ]H“LŒˆZMˆÏ‚ˆÜİ™Ï‚ˆØ]Û‚ˆ
+_BˆÙ]‚‚ˆÜÚİÔ\ÓY[H	‰ˆ
+ˆ]ˆÛ\ÜÓ˜[YOH˜Ú]\\Ë[Y[H‚ˆÜ\ÓY[R][\Ë›X\
+
+][KJHOˆ
+ˆ]ˆÙ^O^Ø	Ú][K›X™[KIÚ_XHÛÛXÚÏ^Ú][K›ÛÛXÚßHÛ\ÜÓ˜[YOH˜Ú]\\Ë[Y[KZ][H›^›^XÛÛ][\ËXÙ[\ˆØ\LKHİ\œÛÜ‹\Ú[\ˆˆË‹‹Š][K˜Xİ]™HÈÈ™]KXXİ]™HˆˆˆHˆßJ_O‚ˆ]ˆÛ\ÜÓ˜[YOH˜Ú]\\ËZXÛÛ‹X›Ş‚ˆÚ][KšXÛÛŸBˆÙ]‚ˆÜ[ˆÛ\ÜÓ˜[YOHËLLH^Vİ˜\ŠKXË]^
+WHÚ][K›X™[OÜÜ[‚ˆÙ]‚ˆ
+J_BˆÙ]‚ˆ
+_BˆÜÚİÔ\ÓY[H	‰ˆ
+ˆÚ]YÚ[”Ûİ˜[YOH˜Ú]š[œ]ÛÛ˜\ˆˆÛİ›ÜÏ^ŞÈ\ÑÜ›İ\_HÛ\ÜÓ˜[YOH˜Ú]\YÚ[‹Z[œ]]ÛÛ˜\ˆˆÏ‚ˆ
+_B‚ˆÜÚİÑ[[ÚšT[™[	‰ˆ
+ˆ[[ÚšT[™[ˆÛ”Ù[Xİ^Ê[[ÚšJHOˆ\[™^
+[[ÚšKÈ›Øİ\Îˆ˜[ÙHJ_BˆÛ‘Y™™XİÙ[™^Ê^
+HOˆÂˆYˆ
+[œ]ØÚÙY\ÑÙ[™\˜][™ÊH™]\›ÂˆÛ”Ù[™^
+^
+NÂˆÛÛÜÙT[™[Ê
+NÂˆ_BˆÏ‚ˆ
+_B‚ˆÜÚİÔİXÚÙ\”[™[	‰ˆ
+ˆİXÚÙ\”[™[ˆÛ”Ù[™^ÛÛ”Ù[™İXÚÙ\ŸBˆÚ\˜Xİ\’Y^ØÚ\˜Xİ\’YBˆÚ\˜Xİ\’YÏ^ÜİXÚÙ\Ú\˜Xİ\’YßBˆÏ‚ˆ
+_BˆÙ]‚ˆ
+NÂŸJJNÂ‚˜ÛÛœİÙ™›[™U^[œ]˜\ˆHY[[Ê›ÜØ\™™YÙ™›[™U^[œ][™KÂˆ\ÓÙ™›[™QÙ[™\˜][™Îˆ›ÛÛX[Âˆ\ÔÜXİ]Üˆ›ÛÛX[ÂˆÚİÑ[[ÚšT[™[ˆ›ÛÛX[Âˆ[\•ÔÙ[™[˜X›Yˆ›ÛÛX[ÂˆÛ•ÙÙÛSÙ™›[™S[ÙNˆ
+
+HOˆ›ÚYÂˆÛÛÜÙQ[[ÚšT[™[ˆ
+
+HOˆ›ÚYÂˆÛ•ÙÙÛQ[[ÚšT[™[ˆ
+
+HOˆ›ÚYÂˆÛ”Ù[™^ˆ
+^ˆİš[™ÊHOˆ›ÛÛX[ÂˆÛ”İÜÙ[™\˜][Ûˆ
+
+HOˆ›ÚYÂŸOŠ[˜İ[ÛˆÙ™›[™U^[œ]˜\ŠÂˆ\ÓÙ™›[™QÙ[™\˜][™Ëˆ\ÔÜXİ]Ü‹ˆÚİÑ[[ÚšT[™[ˆ[\•ÔÙ[™[˜X›YˆÛ•ÙÙÛSÙ™›[™S[ÙKˆÛÛÜÙQ[[ÚšT[™[ˆÛ•ÙÙÛQ[[ÚšT[™[ˆÛ”Ù[™^ˆÛ”İÜÙ[™\˜][Û‹ŸK™YŠHÂˆÛÛœİÚ[œ]^Ù][œ]^HH\ÙTİ]JˆŠNÂˆÛÛœİ[œ]^™YˆH\ÙT™YŠˆŠNÂˆÛÛœİ^\™XT™YˆH\ÙT™YS^\™XQ[[Y[[Š[
+NÂ‚ˆÛÛœİ™\Ù]^\™XRZYÚH
+
+HOˆÂˆYˆ
+^\™XT™Y‹˜İ\œ™[
+H^\™XT™Y‹˜İ\œ™[œİ[KšZYÚH˜]]ÈÂˆNÂ‚ˆÛÛœİ™\Ú^™U^\™XHH\ÙPØ[˜XÚÊ
+
+HOˆÂˆÛÛœİHH^\™XT™Y‹˜İ\œ™[ÂˆYˆ
+]JH™]\›ÂˆKœİ[KšZYÚH˜]]ÈÂˆKœİ[KšZYÚHX]›Z[ŠKœØÜ›ÛZYÚLŒ
+H
+ÈœÂˆK×JNÂ‚ˆÛÛœİÙ]^[™™\Ú^™HH\ÙPØ[˜XÚÊ
+^ˆİš[™ÊHOˆÂˆ[œ]^™Y‹˜İ\œ™[H^ÂˆÙ][œ]^
+^
+NÂˆ™\]Y\İ[š[X][Û‘œ˜[YJ™\Ú^™U^\™XJNÂˆKÜ™\Ú^™U^\™XWJNÂ‚ˆÛÛœİ\[™^H\ÙPØ[˜XÚÊ
+^ˆİš[™ËÜ[ÛœÏÎˆÈ›Øİ\ÏÎˆ›ÛÛX[ˆJHOˆÂˆÛÛœİ™^^H[œ]^™Y‹˜İ\œ™[
+È^Âˆ[œ]^™Y‹˜İ\œ™[H™^^ÂˆÙ][œ]^
+™^^
+NÂˆ™\]Y\İ[š[X][Û‘œ˜[YJ
+
+HOˆÂˆ™\Ú^™U^\™XJ
+NÂˆYˆ
+Ü[ÛœÏË™›Øİ\ÈOOH˜[ÙJH^\™XT™Y‹˜İ\œ™[Ë™›Øİ\Ê
+NÂˆJNÂˆKÜ™\Ú^™U^\™XWJNÂ‚ˆ\ÙR[\\˜]]™R[™J™Y‹
+
+HOˆ
+ÂˆÛX\ˆ
+
+HOˆÂˆ[œ]^™Y‹˜İ\œ™[HˆÂˆÙ][œ]^
+ˆŠNÂˆ™\Ù]^\™XRZYÚ
+
+NÂˆKˆÙ]^ˆÙ]^[™™\Ú^™Kˆ™\İÜ™RY‘[\Nˆ
+^ˆİš[™ÊHOˆÂˆYˆ
+[œ]^™Y‹˜İ\œ™[š[J
+JH™]\›ÂˆÙ]^[™™\Ú^™J^
+NÂˆKˆJKÜÙ]^[™™\Ú^™WJNÂ‚ˆÛÛœİ[™TİX›Z]H
+
+HOˆÂˆYˆ
+\ÓÙ™›[™QÙ[™\˜][™ÊHÂˆÛ”Ù[™^
+[œ]^™Y‹˜İ\œ™[
+NÂˆ™]\›ÂˆBˆÛÛœİš[[YYH[œ]^™Y‹˜İ\œ™[š[J
+NÂˆYˆ
+]š[[YY	‰ˆZ\ÔÜXİ]ÜŠH™]\›ÂˆYˆ
+[Û”Ù[™^
+š[[YY
+JH™]\›Âˆ[œ]^™Y‹˜İ\œ™[HˆÂˆÙ][œ]^
+ˆŠNÂˆ™\Ù]^\™XRZYÚ
+
+NÂˆNÂ‚ˆ™]\›ˆ
+ˆ]ˆÛ\ÜÓ˜[YOH˜Ú]Z[œ]X˜\ˆÚ]\›ÛÛK[XZ[‹\[™H›^›^XÛÛˆ]K]ZOHš[œ]‚ˆ^\™XBˆ™Y^İ^\™XT™YŸBˆ›İÜÏ^Ì_Bˆ˜[YO^Ú[œ]^BˆÛÚ[™ÙO^ÙHOˆÂˆ[œ]^™Y‹˜İ\œ™[HK\™Ù]˜[YNÂˆÙ][œ]^
+K\™Ù]˜[YJNÂˆK\™Ù]œİ[KšZYÚH˜]]ÈÂˆK\™Ù]œİ[KšZYÚHX]›Z[ŠK\™Ù]œØÜ›ÛZYÚLŒ
+H
+ÈœÂˆ_BˆÛ‘›Øİ\Ï^ÊJHOˆÂˆYˆ
+ÚİÑ[[ÚšT[™[
+HÂˆK\™Ù]˜›\Š
+NÂˆÛÛÜÙQ[[ÚšT[™[
+
+NÂˆÛÛœİ\™Ù]HK\™Ù]\ÈS^\™XQ[[Y[Âˆ™\]Y\İ[š[X][Û‘œ˜[YJ
+
+HOˆ™\]Y\İ[š[X][Û‘œ˜[YJ
+
+HOˆ\™Ù]™›Øİ\Ê
+JJNÂˆBˆ_BˆÛ’Ù^QİÛ^ÙHOˆÂˆYˆ
+Úİ[Ù[™Ú][œ]Û‘[\ŠK[\•ÔÙ[™[˜X›Y
+JHÂˆKœ™]™[Y˜][
+
+NÂˆ[™TİX›Z]
+
+NÂˆBˆ_Bˆ[\’Ù^R[^Ù[\•ÔÙ[™[˜X›YÈœÙ[™ˆˆ™[\ˆŸBˆÛ\ÜÓ˜[YOH˜Ú]Z[œ]]^\™XH‚ˆ\ØX›Y^Ú\ÔÜXİ]ÜŸBˆXÙZÛ\^Ú\ÔÜXİ]ÜˆÈ¹fí:)à¹.+{ï#9à®ycìù/©ù£"zd«¹£ª:/æù.å¹.ë9æ¡9î¯ù."ù.¤¹bªˆˆ[™Yš[™YBˆÏ‚ˆ]ˆÛ\ÜÓ˜[YOH˜Ú]Z[œ]XXİ[ÛœÈ‚ˆ]Û‚ˆ\OH˜]Ûˆ‚ˆÛÛXÚÏ^ÛÛ•ÙÙÛSÙ™›[™S[Ù_Bˆ\ØX›Y^Ú\ÓÙ™›[™QÙ[™\˜][™ßBˆÛ\ÜÓ˜[YOHZKX˜\™KXˆ^Vİ˜\ŠKXË]^
+WH‚ˆ\šXK[X™[Hº/å9fç¹î¯ù."¹ª(yo#È‚ˆ]OHº/å9fç¹î¯ù."¹ª(yo#È‚ˆ‚ˆİ™ÈÚYHŒˆZYÚHŒˆšY]Ğ›ŞHŒˆš[H››Û™Hˆİ›ÚÙOH˜İ\œ™[ÛÛÜˆˆİ›ÚÙUÚYHŒKHˆİ›ÚÙS[™XØ\Hœ›İ[™ˆİ›ÚÙS[™Z›Ú[Hœ›İ[™ˆ\šXKZY[HYH‚ˆ]H“LŒHMXMKMMHÕØMHMLMHˆˆÏ‚ˆ]H“NZˆÏ‚ˆ]H“NLÚHˆÏ‚ˆÜİ™Ï‚ˆØ]Û‚ˆ]Û‚ˆÛÛXÚÏ^ÛÛ•ÙÙÛQ[[ÚšT[™[Bˆ\ØX›Y^Ú\ÔÜXİ]ÜŸBˆÛ\ÜÓ˜[YOHZKX˜\™KXˆ^Vİ˜\ŠKXË]^
+WH‚ˆİ[O^Ú\ÔÜXİ]ÜˆÈÈÜXÚ]NˆŒÍHHˆ[™Yš[™YBˆ\šXK[X™[Hº(j9 áH‚ˆ]OHº(j9 áH‚ˆ‚ˆİ™ÈÚYHŒˆZYÚHŒˆšY]Ğ›ŞHŒˆš[H››Û™Hˆİ›ÚÙOH˜İ\œ™[ÛÛÜˆˆİ›ÚÙUÚYHŒKHˆİ›ÚÙS[™XØ\Hœ›İ[™ˆİ›ÚÙS[™Z›Ú[Hœ›İ[™Ú\˜ÛHŞHŒLˆˆŞOHŒLˆˆHŒLˆÏ]H“NMÌKHˆˆLˆLˆˆÏ[™HOHHˆLOHHˆHKŒHˆLHHˆÏ[™HOHŒMHˆLOHHˆHŒMKŒHˆLHHˆÏÜİ™Ï‚ˆØ]Û‚ˆ]Û‚ˆ\OH˜]Ûˆ‚ˆÛÛXÚÏ^Ê
+HOˆÈYˆ
+\ÓÙ™›[™QÙ[™\˜][™ÊHÛ”İÜÙ[™\˜][ÛŠ
+NÈ[ÙH[™TİX›Z]
+
+NÈ_Bˆ\ØX›Y^ÈZ\ÓÙ™›[™QÙ[™\˜][™È	‰ˆZ\ÔÜXİ]Üˆ	‰ˆZ[œ]^š[J
+_BˆÛ\ÜÓ˜[YOHZKX˜\™KXˆ^Vİ˜\ŠKXË]^
+WH‚ˆ\šXK[X™[^Ú\ÓÙ™›[™QÙ[™\˜][™ÈÈ¹`g9«h¹î¯ù."ùå'ù¢$ˆˆ¹cäz` HŸBˆ]O^Ú\ÓÙ™›[™QÙ[™\˜][™ÈÈ¹`g9«h¹î¯ù."ùå'ù¢$ˆˆ¹cäz` HŸBˆ‚ˆÚ\ÓÙ™›[™QÙ[™\˜][™ÈÈ
+ˆİ™ÈÚYHŒŒˆˆZYÚHŒŒˆˆšY]Ğ›ŞHŒˆš[H››Û™Hˆİ›ÚÙOH˜İ\œ™[ÛÛÜˆˆİ›ÚÙUÚYHŒKHˆİ›ÚÙS[™XØ\Hœ›İ[™ˆİ›ÚÙS[™Z›Ú[Hœ›İ[™ˆ\šXKZY[HYH‚ˆÚ\˜ÛHŞHŒLˆˆŞOHŒLˆˆHŒLˆÏ‚ˆ™XİHHˆOHHˆÚYHˆˆZYÚHˆˆHŒHˆÏ‚ˆÜİ™Ï‚ˆ
+Hˆ
+ˆİ™ÈÚYHŒˆZYÚHŒˆšY]Ğ›ŞHŒˆš[H››Û™Hˆİ›ÚÙOH˜İ\œ™[ÛÛÜˆˆİ›ÚÙUÚYHŒKHˆİ›ÚÙS[™XØ\Hœ›İ[™ˆİ›ÚÙS[™Z›Ú[Hœ›İ[™[™HOHŒŒˆˆLOHŒˆˆHŒLHˆLHŒLÈˆÏÛYÛÛˆÚ[ÏHŒŒˆˆMHŒˆLHLÈˆHŒˆˆˆÏÜİ™Ï‚ˆ
+_BˆØ]Û‚ˆÙ]‚ˆÜÚİÑ[[ÚšT[™[	‰ˆ
+ˆ[[ÚšT[™[Û”Ù[Xİ^Ê[[ÚšJHOˆ\[™^
+[[ÚšKÈ›Øİ\Îˆ˜[ÙHJ_HÏ‚ˆ
+_BˆÙ]‚ˆ
+NÂŸJJNÂ‚™^Ü[˜İ[ÛˆÚ]›ÛÛJÈÙ\ÜÚ[Û‹Û˜XÚËÛ‘[]YNˆÚ]›ÛÛT›ÜÊHÂˆÛÛœİÛ]™PÔÔËÙ]]™PÔÔ×HH\ÙTİ]JÙ\ÜÚ[Û‹˜İ\İÛPÔÔÈˆŠNÂˆÛÛœİÛY\ÜØYÙ\ËÙ]Y\ÜØYÙ\×HH\ÙTİ]OÚ]Y\ÜØYÙV×OŠ×JNÂˆÛÛœİİ˜[œÚY[Y\ÜØYÙ\ËÙ]˜[œÚY[Y\ÜØYÙ\×HH\ÙTİ]OÚ]Y\ÜØYÙV×OŠ×JNÂˆÛÛœİÜİXÚÙ\”™XYKÙ]İXÚÙ\”™XYWHH\ÙTİ]J˜[ÙJNÂˆÛÛœİØÚ\˜Xİ\‹Ù]Ú\˜Xİ\—HH\ÙTİ]OÚ\˜Xİ\ˆ[Š
+
+HOˆÂˆÛÛœİÚ\œÈHØYÚ\˜Xİ\œÊ
+NÂˆ™]\›ˆÚ\œË™š[™
+ÈOˆËšYOOHÙ\ÜÚ[Û‹˜ÛÛXİY
+H[ÂˆJNÂˆÛÛœİÚ\ÑÙ[™\˜][™ËÙ]\ÑÙ[™\˜][™×HH\ÙTİ]J˜[ÙJNÂˆÛÛœİÛÙ™›[™S[ÙKÙ]Ù™›[™S[ÙWHH\ÙTİ]J˜[ÙJNÂˆÛÛœİİX]\“[ÙKÙ]X]\“[ÙWHH\ÙTİ]J
+
+HOˆİ‘Ù]
+ÒUÕPUT—ÓSÑWÔ‘Q’V
+ÈÙ\ÜÚ[Û‹šY
+HOOHŒHŠNÂˆÛÛœİÛÙ™›[™U\›œËÙ]Ù™›[™U\›œ×HH\ÙTİ]OÚ]Ù™›[™U\›–×OŠ×JNÂˆÛÛœİÛÙ™›[™Uš\ÚX›PÛİ[Ù]Ù™›[™Uš\ÚX›PÛİ[HH\ÙTİ]JÑ‘“S‘WÒS’UPSÓĞQ
+NÂˆÛÛœİÜ[™[™ÓÙ™›[™U\Ù\•^Ù][™[™ÓÙ™›[™U\Ù\•^HH\ÙTİ]JˆŠNÂˆÛÛœİÚ\ÓÙ™›[™QÙ[™\˜][™ËÙ]\ÓÙ™›[™QÙ[™\˜][™×HH\ÙTİ]J˜[ÙJNÂˆËÈ9­`yo#ùå'ù¢$:h¡:)â;ï&¹î¯ù."»ï"9cez b‹ùï©: b»ï"y.#¹î¯ù."ùd!9. 9.ï{ï#9å'ù¢$9.+yk§¹¥í¹b-ù¥¬;ï#9îäù§gùd#¹®!yên‚ˆÛÛœİÜİ™X[T™]šY]ËÙ]İ™X[T™]šY]×HH\ÙTİ]O[ÂˆÊŠˆ9cez b»ï&¹£"yênº(c9k¦¹g¢ùæ¡9b!¹«­y¬%9¬èyb%ú(j;ï#9§ 9d#¹. 9«­yg*9¢dùkeÈ
+‹Âˆ^ÏÎˆİš[™Ö×NÂˆ\ÏÎˆÈÚ\˜Xİ\’Yˆİš[™ÎÈÚ\˜Xİ\“˜[YNˆİš[™ÎÈ^Îˆİš[™Ö×HV×NÂˆOŠ[
+NÂˆÛÛœİÛÙ™›[™Tİ™X[T™]šY]ËÙ]Ù™›[™Tİ™X[T™]šY]×HH\ÙTİ]O[ÈÛÛ[ˆİš[™ÎÈİ[[X\Nˆİš[™ÈOŠ[
+NÂˆÛÛœİİ™X[PXØİ[T™YˆH\ÙT™YŠˆŠNÂˆÛÛœİÙ™›[™Tİ™X[PXØİ[T™YˆH\ÙT™YŠˆŠNÂˆËÈ9ï©: b‹ùcez b¹­`yo#úh¡:)â:)èù§¤9æ¡Qˆ9d"9nm¹n)ûï":fd:h¤{ï&¹. 9n)ù§ 9i&º)èù§¤9. 9«(yaj9¥¡ûï"BˆÛÛœİİ™X[T\œÙQœ˜[YT™YˆH\ÙT™YŠ
+NÂˆËÈ9î¯ù."ùª(yo#ù­`yo#úh¡:)â:)èù§¤9æ¡Qˆ9d"9nm¹n)ûï"9âë9êâù.£¹î¯ù."»ï#:`oùacy.¤¹æî9nl¹¢l;ï"BˆÛÛœİÙ™›[™Tİ™X[Qœ˜[YT™YˆH\ÙT™YŠ
+NÂˆÛÛœİØXİ]™SÙ™›[™U\™Ù]Ù]Xİ]™SÙ™›[™U\™Ù]HH\ÙTİ]OÙ™›[™PXİ[Û•\™Ù][Š[
+NÂˆÛÛœİÙY][™ÓÙ™›[™U\™Ù]Ù]Y][™ÓÙ™›[™U\™Ù]HH\ÙTİ]OÙ™›[™PXİ[Û•\™Ù][Š[
+NÂˆÛÛœİÙY][™ÓÙ™›[™PÛÛ[Ù]Y][™ÓÙ™›[™PÛÛ[HH\ÙTİ]JˆŠNÂˆÛÛœİÜ™YÙ^™]š\Ú[Û‹Ù]™YÙ^™]š\Ú[Û—HH\ÙTİ]J
+NÂˆËÈÚ]\ˆ\™H\™H[œÙ[\Ù\ˆY\ÜØYÙ\ÈØZ][™È›ÜˆRHÙ[™\˜][Û‚ˆÛÛœİÜ[™[™ÑÙ[™\˜]KÙ][™[™ÑÙ[™\˜]WHH\ÙTİ]J˜[ÙJNÂˆÛÛœİØÚ]Ø\İÙ]Ú]Ø\İHH\ÙTİ]Oİš[™È[Š[
+NÂˆÛÛœİÚ]Ø\İ[Y\ˆH\ÙT™Y™]\›•\O\[ÙˆÙ][Y[İ]Š[™Yš[™Y
+NÂˆËÈ:!ê¹bª9å'ùfï¹i,z-){ï&¹o.y. 9«(yo.yê¥ù£ä9é.»ï#9alù£¢yclù­¢9i,{ï"9d#9. :/kºaã9i&¹o(9i,z-)ycê¹£ä9é.¹ë+9. 9§h{ï"BˆÛÛœİÚ[XYÙQÙ[™\˜][Û‘˜Z[\™KÙ][XYÙQÙ[™\˜][Û‘˜Z[\™WHH\ÙTİ]Oİš[™È[Š[
+NÂˆÛÛœİØÛİY[]T[™[™ËÙ]ÛİY[]T[™[™×HH\ÙTİ]OÈÛİ[ˆ[X™\ˆH[Š[
+NÂˆÛÛœİÜÚİÔ\ÓY[KÙ]ÚİÔ\ÓY[WHH\ÙTİ]J˜[ÙJNÂˆÛÛœİØİ\İÛT\ĞXİ[ÛœËÙ]İ\İÛT\ĞXİ[Ûœ×HH\ÙTİ]O™YÚ\İ\™Yİ\İÛP\Ú]\ĞXİ[Û–×OŠ
+
+HOˆØYİ\İÛP\Ú]\ĞXİ[ÛœÊ
+JNÂˆÛÛœİØXİ]™Pİ\İÛPÚ]\ËÙ]Xİ]™Pİ\İÛPÚ]\×HH\ÙTİ]OXİ]™Pİ\İÛPÚ]\È[Š[
+NÂˆÛÛœİÜÚİÔÙ][™ÜËÙ]ÚİÔÙ][™Ü×HH\ÙTİ]J˜[ÙJNÂˆÛÛœİÜÚİÕ›ÚXÙPØ[Ù]ÚİÕ›ÚXÙPØ[HH\ÙTİ]J˜[ÙJNÂˆÛÛœİÜÚİÕšY[ĞØ[Ù]ÚİÕšY[ĞØ[HH\ÙTİ]J˜[ÙJNÂˆÛÛœİØØ[Z[š[Z^™YÙ]Ø[Z[š[Z^™YHH\ÙTİ]J˜[ÙJNÂˆÛÛœİØØ[[š]X]Ü‹Ù]Ø[[š]X]Ü—HH\ÙTİ]O\Ù\ˆˆ˜Ú\˜Xİ\ˆŠ\Ù\ˆŠNÂˆÛÛœİØØ[[š]X]Ü“˜[YKÙ]Ø[[š]X]Ü“˜[YWHH\ÙTİ]Oİš[™ÏŠˆŠNÂˆÛÛœİİ\Ù\’Y[]KÙ]\Ù\’Y[]WHH\ÙTİ]O\Ù\’Y[]H[Š[
+NÂˆÛÛœİÙ[\•ÔÙ[™[˜X›YÙ][\•ÔÙ[™[˜X›YHH\ÙTİ]J
+
+HOˆØYÚ]\Ù][™ÜÊ
+K™[\•ÔÙ[™[˜X›YOOHYJNÂ‚ˆËÈšXÚYYXH[œ][Ù[ÂˆÛÛœİÜšXÚ[Ù[Ù]šXÚ[Ù[HH\ÙTİ]OšXÚ[Ù[Ú[™[Š[
+NÂˆÛÛœİİ˜[œÙ™\•\™Ù]Ù]˜[œÙ™\•\™Ù]HH\ÙTİ]OÚ\˜Xİ\ˆ[Š[
+NÂˆËÈYYXH]Z[[Ù[
+™YXÚÙ]È˜[œÙ™\ˆ]Z[šY]ÊBˆÛÛœİÛYYXQ]Z[\ÙËÙ]YYXQ]Z[\Ù×HH\ÙTİ]OÚ]Y\ÜØYÙH[Š[
+NÂˆËÈ][İH™\BˆÛÛœİÜ][İ[™ÓY\ÜØYÙKÙ]][İ[™ÓY\ÜØYÙWHH\ÙTİ]OÚ]Y\ÜØYÙH[Š[
+NÂˆËÈ[[ÚšH[™[ˆÛÛœİÜÚİÑ[[ÚšT[™[Ù]ÚİÑ[[ÚšT[™[HH\ÙTİ]J˜[ÙJNÂˆÛÛœİÜÚİÔİXÚÙ\”[™[Ù]ÚİÔİXÚÙ\”[™[HH\ÙTİ]J˜[ÙJNÂˆÛÛœİÚ]^[œ]™YˆH\ÙT™YÚ]^[œ][™H[Š[
+NÂˆÛÛœİÙ™›[™U^[œ]™YˆH\ÙT™YÙ™›[™U^[œ][™H[Š[
+NÂ‚ˆ\ÙQY™™Xİ
+
+
+HOˆÂˆÛÛœİŞ[˜Ñ[\•ÔÙ[™H
+
+HOˆÂˆÙ][\•ÔÙ[™[˜X›Y
+ØYÚ]\Ù][™ÜÊ
+K™[\•ÔÙ[™[˜X›YOOHYJNÂˆNÂˆÚ[™İË˜Y]™[\İ[™\ŠÒUĞTÔÑUS‘Ô×ÕTUQÑU‘S•Ş[˜Ñ[\•ÔÙ[™
+NÂˆ™]\›ˆ
+
+HOˆÚ[™İËœ™[[İ™Q]™[\İ[™\ŠÒUĞTÔÑUS‘Ô×ÕTUQÑU‘S•Ş[˜Ñ[\•ÔÙ[™
+NÂˆK×JNÂ‚ˆ\ÙQY™™Xİ
+
+
+HOˆÂˆÛÛœİŞ[˜Ğİ\İÛT\ĞXİ[ÛœÈH
+
+HOˆÙ]İ\İÛT\ĞXİ[ÛœÊØYİ\İÛP\Ú]\ĞXİ[ÛœÊ
+JNÂˆÚ[™İË˜Y]™[\İ[™\ŠÕTÕÓWĞT×ÕTUQÑU‘S•Ş[˜Ğİ\İÛT\ĞXİ[ÛœÊNÂˆ™]\›ˆ
+
+HOˆÚ[™İËœ™[[İ™Q]™[\İ[™\ŠÕTÕÓWĞT×ÕTUQÑU‘S•Ş[˜Ğİ\İÛT\ĞXİ[ÛœÊNÂˆK×JNÂ‚ˆ\ÙQY™™Xİ
+
+
+HOˆÂˆÙ]X]\“[ÙJİ‘Ù]
+ÒUÕPUT—ÓSÑWÔ‘Q’V
+ÈÙ\ÜÚ[Û‹šY
+HOOHŒHŠNÂˆKÜÙ\ÜÚ[Û‹šYJNÂ‚ˆËÈ: b¹i*y£ä¹.í»ï&º/æùaiz b¹i*ynoù¤«HÙ\ÜÚ[Û‹›Ü[™Yˆ\ÙQY™™Xİ
+
+
+HOˆÂˆ[Z]Ú]YÚ[‘]™[
+œÙ\ÜÚ[Û‹›Ü[™Y‹ÈÙ\ÜÚ[Û’YˆÙ\ÜÚ[Û‹šY\ÑÜ›İ\ˆH\Ù\ÜÚ[Û‹š\ÑÜ›İ\JNÂˆKÜÙ\ÜÚ[Û‹šYÙ\ÜÚ[Û‹š\ÑÜ›İ\JNÂ‚ˆËÈ: b¹i*y£ä¹.í»ï&¹æäyd+9£ä¹.íˆØ\İ;ï"9¥+ù£ yn.:jnùb¨:/oy  H
+È9¢bùbª9alúeë{ï"BˆÛÛœİÚ]Ø\İY™YˆH\ÙT™Yİš[™È[Š[
+NÂˆ\ÙQY™™Xİ
+
+
+HOˆÂˆÛÛœİ[™\ˆH
+Nˆ]™[
+HOˆÂˆÛÛœİ]Z[H
+H\Èİ\İÛQ]™[ÈYÎˆİš[™ÎÈ^ˆİš[™ÎÈ\˜][Û“\ÏÎˆ[X™\ÈÛÜÙOÎˆ›ÛÛX[ˆOŠK™]Z[È^ˆˆˆNÂˆËÈ9alúeëz+íù¬`»ï&¹.áyodùalúeëyæ¡9¦+ùodùbcy«hùg*9¦/¹é.¹æ¡:`¨ù§hy¥í¹¢cy®!zfiˆYˆ
+]Z[˜ÛÜÙJHÂˆYˆ
+Ú]Ø\İY™Y‹˜İ\œ™[OOH]Z[šY
+HÂˆÛX\•[Y[İ]
+Ú]Ø\İ[Y\‹˜İ\œ™[
+NÂˆÙ]Ú]Ø\İ
+[
+NÂˆÚ]Ø\İY™Y‹˜İ\œ™[H[ÂˆBˆ™]\›ÂˆBˆYˆ
+Y]Z[^
+H™]\›ÂˆÛX\•[Y[İ]
+Ú]Ø\İ[Y\‹˜İ\œ™[
+NÂˆÚ]Ø\İY™Y‹˜İ\œ™[H]Z[šYÏÈ[ÂˆÙ]Ú]Ø\İ
+]Z[^
+NÂˆËÈ\˜][Û“\ÈH:(j9é.¹n.:jnûï"9b¨:/oy  {ï"{ï#9.#z!ê¹bª9­¢9i,{ï&ùï.¹ç yå*\ÂˆYˆ
+]Z[™\˜][Û“\ÈOOH[™Yš[™Y]Z[™\˜][Û“\Èˆ
+HÂˆÚ]Ø\İ[Y\‹˜İ\œ™[HÙ][Y[İ]
+
+
+HOˆÂˆÙ]Ú]Ø\İ
+[
+NÂˆÚ]Ø\İY™Y‹˜İ\œ™[H[ÂˆK]Z[™\˜][Û“\ÈÏÈ
+NÂˆBˆNÂˆÚ[™İË˜Y]™[\İ[™\ŠÒUÔQÒS—ÕĞTÕÑU‘S•[™\ŠNÂˆ™]\›ˆ
+
+HOˆÚ[™İËœ™[[İ™Q]™[\İ[™\ŠÒUÔQÒS—ÕĞTÕÑU‘S•[™\ŠNÂˆK×JNÂ‚ˆÛÛœİØ™Ò[XYÙT™\ÛÛ™YÙ]™Ò[XYÙT™\ÛÛ™YHH\ÙTİ]Oİš[™È[Š[
+NÂˆÛÛœİØ™ÓØY[™ËÙ]™ÓØY[™×HH\ÙTİ]JH\Ù\ÜÚ[Û‹˜˜XÚÙÜ›İ[™[XYÙJNÂ‚ˆÛÛœİÜ˜\\”™YˆH\ÙT™YS]‘[[Y[Š[
+NÂ‚ˆËÈ9aj9lcùâny¥b;ï&¹doy.+z)é¹cäz+ãyæ¡9¥¬9­¢9 kù¤«y¥/º(j9 ázfêùé/:"¬{ï"9o«¹/èyd#9«/»ï"BˆÛÛœİØXİ]™TØÜ™Y[‘Y™™XİÙ]Xİ]™TØÜ™Y[‘Y™™XİHH\ÙTİ]OXİ]™TØÜ™Y[‘Y™™Xİ[Š[
+NÂˆÛÛœİØÜ™Y[‘ÙY[”™YˆH\ÙT™YÙ]İš[™ÏŠ™]ÈÙ]
+
+JNÂˆÛÛœİØÜ™Y[‘[İ[Y]™YˆH\ÙT™YŠ]K››İÊ
+JNÂ‚ˆ\ÙQY™™Xİ
+
+
+HOˆÂˆÛÛœİÙY[ˆHØÜ™Y[‘ÙY[”™Y‹˜İ\œ™[Âˆ]š\™YHXİ]™TØÜ™Y[‘Y™™XİOOH[Âˆ›Üˆ
+ÛÛœİ\ÙÈÙˆY\ÜØYÙ\ÊHÂˆYˆ
+ÙY[‹š\Ê\ÙËšY
+JHÛÛ[YNÂˆÙY[‹˜Y
+\ÙËšY
+NÂˆYˆ
+\ÙËœ›ÛHOOH\Ù\ˆˆ	‰ˆ\ÙËœ›ÛHOOH˜\ÜÚ\İ[ŠHÛÛ[YNÂˆËÈ9cê¹kîy§+9«(y¢dùo : b¹i*yk©9.bùd#¹.©ùå'ùæ¡9­¢9 kùå'ù¥b;ï#9c¡¹cì¹b¨:/oKùïîúhmy.#z)é¹cäBˆYˆ
+™]È]J\ÙË˜Ü™X]Y]
+K™Ù][YJ
+HØÜ™Y[‘[İ[Y]™Y‹˜İ\œ™[
+HÛÛ[YNÂˆËÈ:j¬9kd9¬%9¬è{ï&¹¬%9¬èz!ê¹mìyïîù®æ¹k¦¹¨/;ï#:/æzaã9d#9«iy¤«yaj9lcúj¬9kd;ï"9à®y¥l9. :!í;ï"BˆYˆ
+\ÙË›YYXU\HOOH™XÙHŠHÂˆYˆ
+š\™Y
+HÛÛ[YNÂˆÛÛœİ˜XÙHHX]›Z[Š‹X]›X^
+K[X™\Š\ÙË›YYXQ]OË™XÙQ˜XÙJHJJNÂˆÙ]Xİ]™TØÜ™Y[‘Y™™Xİ
+È[’Yˆ\ÙËšYY™™Xİˆ™XÙH‹[[Úš\Îˆˆ‹XÙQ˜XÙNˆ˜XÙHJNÂˆš\™YHYNÂˆÛÛ[YNÂˆBˆYˆ
+\ÙË›YYXU\H[\ÙË˜ÛÛ[
+HÛÛ[YNÂˆÛÛœİ]HX]ÚÚ]ØÜ™Y[‘Y™™Xİ[J\ÙË˜ÛÛ[
+NÂˆYˆ
+Z]
+HÛÛ[YNÂˆYˆ
+]™Y™™XİOOH™XÙHŠHÂˆËÈ9ceyâë9. 9§hzj¬9kd9fï¹¨!ûï":)äº"l¹cäyæ¡;ï"{ï&¹c§ùg,:/k9¢$:j¬9kd9¬%9¬è{ï"9a¡yk®y/çy£ yfï¹¨!ûï"{ï#ˆËÈ9à®y¥l9å,yìîùîçù¥àyæoyak9n ûï#:`oùacyîäù§§9£ ¹g*:)äº"l¹­¢9 kù."º(ªùª(y.ïÂˆÛÛœİ˜XÙHH›ÛÚ]XÙQ˜XÙJ
+NÂˆÛÛœİ]ÚHÂˆYYXU\Nˆ™XÙHˆ\ÈÛÛœİˆYYXQ]NˆÈ‹‹›\ÙË›YYXQ]KXÙQ˜XÙNˆ˜XÙHKˆNÂˆ\]PÚ]Y\ÜØYÙJ\ÙËšY]Ú
+NÂˆÙ]Y\ÜØYÙ\Ê™]ˆOˆ™]‹›X\
+HOˆ
+KšYOOH\ÙËšYÈÈ‹‹›K‹‹œ]ÚHˆJJJNÂˆÛÛœİXÙP\ÚYHH\ÚÚ]Y\ÜØYÙJÂˆÙ\ÜÚ[Û’YˆÙ\ÜÚ[Û‹šYˆ›ÛNˆœŞ\İ[H‹ˆÛÛ[ˆ›Ü›X]Ú]XÙT™\İ[Y\ÜØYÙJ˜XÙJKˆJNÂˆÙ]Y\ÜØYÙ\Ê™]ˆOˆË‹‹œ™]‹XÙP\ÚYWJNÂˆYˆ
+Yš\™Y
+HÂˆÙ]Xİ]™TØÜ™Y[‘Y™™Xİ
+È[’Yˆ\ÙËšYY™™Xİˆ™XÙH‹[[Úš\Îˆˆ‹XÙQ˜XÙNˆ˜XÙHJNÂˆš\™YHYNÂˆBˆÛÛ[YNÂˆBˆYˆ
+š\™Y
+HÛÛ[YNÂˆÙ]Xİ]™TØÜ™Y[‘Y™™Xİ
+È[’Yˆ\ÙËšY‹‹š]JNÂˆš\™YHYNÂˆBˆËÈ\Û[Y\ØX›K[™^[[™H™XXİZÛÚÜËÙ^]\İ]™KY\ÂˆKÛY\ÜØYÙ\×JNÂ‚ˆ\ÙQY™™Xİ
+
+
+HOˆÂˆYˆ
+\Ù\ÜÚ[Û‹˜˜XÚÙÜ›İ[™[XYÙJHÂˆÙ]™Ò[XYÙT™\ÛÛ™Y
+[
+NÂˆÙ]™ÓØY[™Ê˜[ÙJNÂˆ™]\›ÂˆBˆYˆ
+Ù\ÜÚ[Û‹˜˜XÚÙÜ›İ[™[XYÙKœİ\ÕÚ]
+™]NˆŠHÙ\ÜÚ[Û‹˜˜XÚÙÜ›İ[™[XYÙKœİ\ÕÚ]
+šŠJHÂˆÙ]™Ò[XYÙT™\ÛÛ™Y
+Ù\ÜÚ[Û‹˜˜XÚÙÜ›İ[™[XYÙJNÂˆÙ]™ÓØY[™Ê˜[ÙJNÂˆ™]\›ÂˆBˆËÈ]	ÜÈ[ˆQ8 %ØYœ›ÛH[™^Y‚ˆÙ]™ÓØY[™ÊYJNÂˆ[\Ü
+ÛX‹ØÚ]X\ÜÙ]\İÜ˜YÙHŠK[Š
+ÈÙ]Ú][XYÙQœ›ÛR[™^YˆJHOˆÂˆÙ]Ú][XYÙQœ›ÛR[™^YŠÙ\ÜÚ[Û‹˜˜XÚÙÜ›İ[™[XYÙHJK[Š]U\›OˆÂˆYˆ
+]U\›
+HÂˆÙ]™Ò[XYÙT™\ÛÛ™Y
+]U\›
+NÂˆBˆÙ]™ÓØY[™Ê˜[ÙJNÂˆJNÂˆJNÂˆKÜÙ\ÜÚ[Û‹˜˜XÚÙÜ›İ[™[XYÙWJNÂ‚ˆËÈY\ÜØYÙHXİ[ÛœÈİ]BˆÛÛœİØXİ]™SY\ÜØYÙRYÙ]Xİ]™SY\ÜØYÙRYHH\ÙTİ]Oİš[™È[Š[
+NÂˆÛÛœİØÛÛ^Y[P[˜ÚÜ‹Ù]ÛÛ^Y[P[˜ÚÜ—HH\ÙTİ]OÛÛ^Y[P[˜ÚÜˆ[Š[
+NÂˆÛÛœİÚ\Ó][TÙ[Xİ[ÙKÙ]\Ó][TÙ[Xİ[ÙWHH\ÙTİ]J˜[ÙJNÂˆÛÛœİÜÙ[XİYY\ÜØYÙRYËÙ]Ù[XİYY\ÜØYÙRY×HH\ÙTİ]OÙ]İš[™ÏŠ™]ÈÙ]
+
+JNÂˆÛÛœİÜÚİĞÛÛ™š\›S][Q[]KÙ]ÚİĞÛÛ™š\›S][Q[]WHH\ÙTİ]J˜[ÙJNÂˆÛÛœİÙ^[™Y[Û›ÛÙİYRYÙ]^[™Y[šÚ[™ÒYHH\ÙTİ]Oİš[™È[Š[
+NÂˆËÈ9 'yîí:dï¹n¥z`ê9o.yê¥ûï&¹kf9odùbcy§éyç"ùæ¡™X\ÛÛš[™È9¥¡ù§+;ï#[H9alúeëBˆÛÛœİÜ™X\ÛÛš[™ÔÚY]^Ù]™X\ÛÛš[™ÔÚY]^HH\ÙTİ]Oİš[™È[Š[
+NÂˆËÈ9 'yîí:dï¹ïîú+ä{ï"9o.yê¥ùa¡yà®yaîùïîú+äy£"zd«¹å'ù¢$;ï#9b!ù£h¹o.yê¥ùa¡yk®y¥íºaãyïk»ï"BˆÛÛœİÜ™X\ÛÛš[™Õ˜[œÛ][Û‹Ù]™X\ÛÛš[™Õ˜[œÛ][Û—HH\ÙTİ]Oİš[™È[Š[
+NÂˆÛÛœİÜ™X\ÛÛš[™Õ˜[œÛ][™ËÙ]™X\ÛÛš[™Õ˜[œÛ][™×HH\ÙTİ]J˜[ÙJNÂˆÛÛœİÜ™X\ÛÛš[™Õ˜[œÛ]Q\œ›Ü‹Ù]™X\ÛÛš[™Õ˜[œÛ]Q\œ›Ü—HH\ÙTİ]Oİš[™È[Š[
+NÂˆËÈ:+äy¥¡ù¦/¹é.¹ª(yo#ûï&¹kîyáiûï"9.+y¥¡ùg*9."»ï"KÈ9.áy.+y¥¡ÈÈ9.áyc§ù¥¡ÂˆÛÛœİÜ™X\ÛÛš[™ÕšY]Ó[ÙKÙ]™X\ÛÛš[™ÕšY]Ó[ÙWHH\ÙTİ]O˜›İˆšˆ›ÜšYÈŠ˜›İŠNÂˆ\ÙQY™™Xİ
+
+
+HOˆÂˆÙ]™X\ÛÛš[™Õ˜[œÛ][ÛŠ[
+NÂˆÙ]™X\ÛÛš[™Õ˜[œÛ][™Ê˜[ÙJNÂˆÙ]™X\ÛÛš[™Õ˜[œÛ]Q\œ›ÜŠ[
+NÂˆÙ]™X\ÛÛš[™ÕšY]Ó[ÙJ˜›İŠNÂˆKÜ™X\ÛÛš[™ÔÚY]^JNÂˆÛÛœİ[™U˜[œÛ]T™X\ÛÛš[™ÈH\Ş[˜È
+
+HOˆÂˆYˆ
+\™X\ÛÛš[™ÔÚY]^™X\ÛÛš[™Õ˜[œÛ][™ÊH™]\›ÂˆYˆ
+™X\ÛÛš[™Õ˜[œÛ][ÛŠHÈÙ]™X\ÛÛš[™Õ˜[œÛ][ÛŠ[
+NÈÙ]™X\ÛÛš[™ÕšY]Ó[ÙJ˜›İŠNÈ™]\›ÈBˆÙ]™X\ÛÛš[™Õ˜[œÛ][™ÊYJNÂˆÙ]™X\ÛÛš[™Õ˜[œÛ]Q\œ›ÜŠ[
+NÂˆHÂˆÛÛœİ™\İ[H]ØZ]˜[œÛ]T™X\ÛÛš[™Õ^
+™X\ÛÛš[™ÔÚY]^
+NÂˆYˆ
+™\İ[˜ÛÛ[
+HÈÙ]™X\ÛÛš[™Õ˜[œÛ][ÛŠ™\İ[˜ÛÛ[
+NÈÙ]™X\ÛÛš[™ÕšY]Ó[ÙJ˜›İŠNÈBˆ[ÙHÙ]™X\ÛÛš[™Õ˜[œÛ]Q\œ›ÜŠ™\İ[™\œ›Üˆ¹ïîú+äyi,z-){ï#:+íúaãz+åHŠNÂˆHØ]ÚÂˆÙ]™X\ÛÛš[™Õ˜[œÛ]Q\œ›ÜŠ¹ïîú+äyi,z-){ï#:+íúaãz+åHŠNÂˆHš[˜[HÂˆÙ]™X\ÛÛš[™Õ˜[œÛ][™Ê˜[ÙJNÂˆBˆNÂˆÛÛœİİ›ÚXÙU^YËÙ]›ÚXÙU^Y×HH\ÙTİ]OÙ]İš[™ÏŠ™]ÈÙ]
+
+JNÂˆÛÛœİÙY][™ÓY\ÜØYÙRYÙ]Y][™ÓY\ÜØYÙRYHH\ÙTİ]Oİš[™È[Š[
+NÂˆÛÛœİÙY][™ĞÛÛ[Ù]Y][™ĞÛÛ[HH\ÙTİ]JˆŠNÂˆÛÛœİÙY][™Ô™\ÜÛœÙP˜]ÚYÙ]Y][™Ô™\ÜÛœÙP˜]ÚYHH\ÙTİ]Oİš[™È[Š[
+NÂˆÛÛœİÙY][™Ô™\ÜÛœÙT›İ[™YÙ]Y][™Ô™\ÜÛœÙT›İ[™YHH\ÙTİ]Oİš[™È[Š[
+NÂˆÛÛœİÙY][™Ô™\ÜÛœÙPÛÛ[Ù]Y][™Ô™\ÜÛœÙPÛÛ[HH\ÙTİ]JˆŠNÂˆÛÛœİÙ^[™Y›ÚXÙPØ[YËÙ]^[™Y›ÚXÙPØ[Y×HH\ÙTİ]OÙ]İš[™ÏŠ™]ÈÙ]
+
+JNÂˆÛÛœİÚYÚYÚY\ÜØYÙRYÙ]YÚYÚY\ÜØYÙRYHH\ÙTİ]Oİš[™È[Š[
+NÂˆÛÛœİÚ\Ó[Ü™KÙ]\Ó[Ü™WHH\ÙTİ]J˜[ÙJNÂˆÛÛœİS’UPSÓĞQHÒUÒS’UPSÕ’TÒP“WÓQTÔĞQÑWĞÓÕS•ÂˆÛÛœİĞQÓSÔ‘WĞÓÕS•HÒUÓĞQÓSÔ‘WÓQTÔĞQÑWĞÓÕS•Â‚‚ˆÛÛœİÛ™Ô™\ÜÕ[Y\”™YˆH\ÙT™Y›ÙR”Ë•[Y[İ][Š[
+NÂˆÛÛœİİ\ÜÔ™YˆH\ÙT™YÈˆ[X™\‹Nˆ[X™\ˆH[Š[
+NÂˆÛÛœİÛ™Ô™\ÜÕšYÙÙ\™Y™YˆH\ÙT™YŠ˜[ÙJNÂ‚ˆÛÛœİØÜ›Û™YˆH\ÙT™YS]‘[[Y[Š[
+NÂˆÛÛœİ[İ[Y™YˆH\ÙT™YŠYJNÂˆÛÛœİ\ÑÙ[™\˜][™Ô™YˆH\ÙT™YŠ˜[ÙJNÂˆÛÛœİš\ÚX›SY\ÜØYÙ\Ô™YˆH\ÙT™YÚ]Y\ÜØYÙV×OŠ×JNÂˆÛÛœİ\Ó[Ü™T™YˆH\ÙT™YŠ˜[ÙJNÂˆÛÛœİÙ™›[™QÙ[™\˜][Û’[œ]™YˆH\ÙT™YŠˆŠNÂˆ\ÙQY™™Xİ
+
+
+HOˆ
+
+HOˆÈ[İ[Y™Y‹˜İ\œ™[H˜[ÙNÈK×JNÂˆ\ÙQY™™Xİ
+
+
+HOˆÈš\ÚX›SY\ÜØYÙ\Ô™Y‹˜İ\œ™[HY\ÜØYÙ\ÎÈKÛY\ÜØYÙ\×JNÂˆ\ÙQY™™Xİ
+
+
+HOˆÈ\Ó[Ü™T™Y‹˜İ\œ™[H\Ó[Ü™NÈKÚ\Ó[Ü™WJNÂˆ\ÙPÚ]›İÛT™\Ù\™JˆÜ˜\\”™Y‹ˆØÜ›Û™Y‹ˆ	ÜÙ\ÜÚ[Û‹šYN‰ÛÙ™›[™S[Ù_N‰Ú\Ó][TÙ[Xİ[Ù_N‰ÜÚİÑ[[ÚšT[™[N‰ÜÚİÔİXÚÙ\”[™[N‰ÜÚİÔ\ÓY[_N‰İX]\“[Ù_N‰ÈH\][İ[™ÓY\ÜØYÙ_Xˆ
+NÂ‚ˆÛÛœİÙ[XİİÜ™YY\ÜØYÙUÚ[™İÈH\ÙPØ[˜XÚÊ
+[\ÙÜÎˆÚ]Y\ÜØYÙV×JHOˆÂˆYˆ
+[\ÙÜË›[™İHS’UPSÓĞQ
+HÂˆ™]\›ˆÈ™^Y\ÜØYÙ\Îˆ[\ÙÜË™^\Ó[Ü™Nˆ˜[ÙHNÂˆB‚ˆÛÛœİš\ÚX›TİÜ™YY\ÜØYÙ\ÈHš\ÚX›SY\ÜØYÙ\Ô™Y‹˜İ\œ™[™š[\Š\ÙÈOˆZ\Õ˜[œÚY[Y\ÜØYÙJ\ÙÊJNÂˆÛÛœİİ\œ™[š\ÚX›PÛİ[HX]›X^
+š\ÚX›TİÜ™YY\ÜØYÙ\Ë›[™İS’UPSÓĞQ
+NÂ‚ˆYˆ
+Z\Ó[Ü™T™Y‹˜İ\œ™[	‰ˆš\ÚX›TİÜ™YY\ÜØYÙ\Ë›[™İH[\ÙÜË›[™İ
+HÂˆ™]\›ˆÈ™^Y\ÜØYÙ\Îˆ[\ÙÜË™^\Ó[Ü™Nˆ˜[ÙHNÂˆB‚ˆÛÛœİš\œİš\ÚX›RYHš\ÚX›TİÜ™YY\ÜØYÙ\ÖÌOËšYÂˆÛÛœİš\œİš\ÚX›R[™^Hš\œİš\ÚX›RYˆÈ[\ÙÜË™š[™[™^
+\ÙÈOˆ\ÙËšYOOHš\œİš\ÚX›RY
+BˆˆLNÂˆÛÛœİİ\[™^Hš\œİš\ÚX›R[™^HˆÈš\œİš\ÚX›R[™^ˆˆX]›X^
+[\ÙÜË›[™İHİ\œ™[š\ÚX›PÛİ[
+NÂ‚ˆ™]\›ˆÂˆ™^Y\ÜØYÙ\Îˆ[\ÙÜËœÛXÙJİ\[™^
+Kˆ™^\Ó[Ü™Nˆİ\[™^ˆˆNÂˆK×JNÂ‚ˆÛÛœİ\TİÜ™YY\ÜØYÙUÚ[™İÈH\ÙPØ[˜XÚÊ
+[\ÙÜÎˆÚ]Y\ÜØYÙV×JHOˆÂˆÛÛœİÈ™^Y\ÜØYÙ\Ë™^\Ó[Ü™HHHÙ[XİİÜ™YY\ÜØYÙUÚ[™İÊ[\ÙÜÊNÂˆš\ÚX›SY\ÜØYÙ\Ô™Y‹˜İ\œ™[H™^Y\ÜØYÙ\ÎÂˆ\Ó[Ü™T™Y‹˜İ\œ™[H™^\Ó[Ü™NÂˆÙ]\Ó[Ü™J™^\Ó[Ü™JNÂˆÙ]Y\ÜØYÙ\Ê™^Y\ÜØYÙ\ÊNÂˆKÜÙ[XİİÜ™YY\ÜØYÙUÚ[™İ×JNÂ‚ˆÛÛœİŞ[˜ÓY\ÜØYÙ\Ñœ›ÛTİÜ˜YÙHH\ÙPØ[˜XÚÊ
+
+HOˆÂˆ\TİÜ™YY\ÜØYÙUÚ[™İÊØYÚ]Y\ÜØYÙ\ÊÙ\ÜÚ[Û‹šY
+JNÂˆKØ\TİÜ™YY\ÜØYÙUÚ[™İËÙ\ÜÚ[Û‹šYJNÂ‚ˆÛÛœİÛÜÙPÛÛ^Y[HH
+
+HOˆÂˆÙ]Xİ]™SY\ÜØYÙRY
+[
+NÂˆÙ]Xİ]™SÙ™›[™U\™Ù]
+[
+NÂˆÙ]ÛÛ^Y[P[˜ÚÜŠ[
+NÂˆNÂ‚ˆÛÛœİÜ[“Y\ÜØYÙPÛÛ^Y[HH
+\ÙÒYˆİš[™Ë[˜ÚÜˆÛÛ^Y[P[˜ÚÜŠHOˆÂˆÙ]Xİ]™SÙ™›[™U\™Ù]
+[
+NÂˆÙ]ÛÛ^Y[P[˜ÚÜŠ[˜ÚÜŠNÂˆÙ]Xİ]™SY\ÜØYÙRY
+\ÙÒY
+NÂˆNÂ‚ˆÛÛœİÜ[“Ù™›[™PÛÛ^Y[HH
+\™Ù]ˆÙ™›[™PXİ[Û•\™Ù][˜ÚÜˆÛÛ^Y[P[˜ÚÜŠHOˆÂˆÙ]Xİ]™SY\ÜØYÙRY
+[
+NÂˆÙ]ÛÛ^Y[P[˜ÚÜŠ[˜ÚÜŠNÂˆÙ]Xİ]™SÙ™›[™U\™Ù]
+\™Ù]
+NÂˆNÂ‚ˆÛÛœİÙ][[Y[ÛÛ^Y[P[˜ÚÜˆH
+\™Ù]ˆ]™[\™Ù][
+NˆÛÛ^Y[P[˜ÚÜˆOˆÂˆYˆ
+J\™Ù][œİ[˜Ù[ÙˆS[[Y[
+JH™]\›ˆÈˆNˆNÂˆÛÛœİ™XİH\™Ù]™Ù]›İ[™[™ĞÛY[™Xİ
+
+NÂˆ™]\›ˆÂˆˆ™Xİ›Y
+È™XİÚYÈ‹ˆNˆ™XİÜˆ›İÛVNˆ™Xİ˜›İÛKˆNÂˆNÂ‚ˆÛÛœİÙ]ÛÛ^Y[R[š]X[İ[HH
+
+HOˆÂˆ™]\›ˆÈYˆÜˆš\ÚXš[]NˆšY[ˆˆ\ÈÛÛœİNÂˆNÂ‚ˆÛÛœİÜÚ][Û‘›Ø][™ĞÛÛ^Y[HH
+[ˆS]‘[[Y[[
+HOˆÂˆÛÛœİÜ˜\\ˆHÜ˜\\”™Y‹˜İ\œ™[ÂˆYˆ
+Y[XÛÛ^Y[P[˜ÚÜˆ]Ü˜\\ŠH™]\›ÂˆÛÛœİX\™Ú[ˆHÂˆÛÛœİØ\HLÂˆÛÛœİ[˜ÚÜˆHÛÛ^Y[P[˜ÚÜÂˆÛÛœİY[UÈH[›Ù™œÙ]ÚYÂˆÛÛœİY[RH[›Ù™œÙ]ZYÚÂˆÛÛœİÜ˜\\”™XİHÜ˜\\‹™Ù]›İ[™[™ĞÛY[™Xİ
+
+NÂˆÛÛœİØØ[VHÜ˜\\‹›Ù™œÙ]ÚYˆÈÜ˜\\”™XİÚYÈÜ˜\\‹›Ù™œÙ]ÚYˆNÂˆÛÛœİØØ[VHHÜ˜\\‹›Ù™œÙ]ZYÚˆÈÜ˜\\”™XİšZYÚÈÜ˜\\‹›Ù™œÙ]ZYÚˆNÂˆÛÛœİØØ[H
+[˜ÚÜ‹HÜ˜\\”™Xİ›Y
+HÈ
+ØØ[VJNÂˆÛÛœİØØ[ÜHH
+[˜ÚÜ‹HHÜ˜\\”™XİÜ
+HÈ
+ØØ[VHJNÂˆÛÛœİØØ[›İÛVHH
+
+[˜ÚÜ‹˜›İÛVHÏÈ[˜ÚÜ‹JHHÜ˜\\”™XİÜ
+HÈ
+ØØ[VHJNÂˆÛÛœİšY]ÜÜÈHÜ˜\\‹˜ÛY[ÚYÂˆÛÛœİšY]ÜÜHÜ˜\\‹˜ÛY[ZYÚÂˆ]YHØØ[HY[UÈÈÂˆYHX]›X^
+X\™Ú[‹X]›Z[ŠYšY]ÜÜÈHY[UÈHX\™Ú[ŠJNÂˆÛÛœİXÙP™[İÈHØØ[ÜHHY[RHØ\X\™Ú[Âˆ]ÜHXÙP™[İÈÈØØ[›İÛVH
+ÈØ\ˆØØ[ÜHHY[RHØ\ÂˆÜHX]›X^
+X\™Ú[‹X]›Z[ŠÜšY]ÜÜHY[RHX\™Ú[ŠJNÂˆ[œİ[K›YH	ÛY\Âˆ[œİ[KÜH	İÜ\Âˆ[œİ[KœšYÚH˜]]ÈÂˆ[œİ[K˜›İÛHH˜]]ÈÂˆ[œİ[Kš\ÚXš[]HHš\ÚX›HÂˆÛÛœİšHH[œ]Y\TÙ[XİÜŠ–Ù]K[Y[K]šX[™ÛWHŠH\ÈS[[Y[[ÂˆYˆ
+šJHÂˆÛÛœİšSYHX]›X^
+MX]›Z[ŠØØ[HYY[UÈHM
+JNÂˆšKœİ[K›YH	İšSY\ÂˆšKœİ[KœšYÚH˜]]ÈÂˆšKœİ[K˜[œÙ›Ü›HH˜[œÛ]V
+ML	JHÂˆYˆ
+XÙP™[İÊHÂˆšKœİ[KÜH‹MœÂˆšKœİ[K˜›İÛHH˜]]ÈÂˆšKœİ[K˜›Ü™\•ÜH››Û™HÂˆšKœİ[K˜›Ü™\›İÛHHœÛÛY˜\ŠKXİ[Y[KX™ËÌ˜Ì˜Ì˜ÊHÂˆH[ÙHÂˆšKœİ[KÜH˜]]ÈÂˆšKœİ[K˜›İÛHH‹MœÂˆšKœİ[K˜›Ü™\›İÛHH››Û™HÂˆšKœİ[K˜›Ü™\•ÜHœÛÛY˜\ŠKXİ[Y[KX™ËÌ˜Ì˜Ì˜ÊHÂˆBˆBˆNÂ‚ˆËÈKKH]\ÚXÈXİ[Ûˆ]Y]YNˆÙ[™]\ÚXÈÜ\˜][ÛœÈ\ÈŞ\İ[HY\ÜØYÙ\ÈKKBˆ\ÙQY™™Xİ
+
+
+HOˆÂˆÛÛœİ›\ÚØ[˜XÚÈH
+^ˆİš[™ÊHOˆÂˆÛÛœİŞ\Ó\ÙÈH\ÚÚ]Y\ÜØYÙJÈÙ\ÜÚ[Û’YˆÙ\ÜÚ[Û‹šY›ÛNˆœŞ\İ[H‹ÛÛ[ˆ^JNÂˆÙ]Y\ÜØYÙ\Ê™]ˆOˆË‹‹œ™]‹Ş\Ó\Ù×JNÂˆNÂˆÙ]Ú]Xİ]™JYK›\ÚØ[˜XÚÊNÂˆ™]\›ˆ
+
+HOˆÈÙ]Ú]Xİ]™J˜[ÙJNÈNÂˆKÜÙ\ÜÚ[Û‹šYJNÂ‚ˆËÈKKH›ÛİË]\ˆ\İ[ˆ›Üˆ˜XÚÙÜ›İ[™Ù\šXÙH]™[ÈKKBˆ\ÙQY™™Xİ
+
+
+HOˆÂˆÛÛœİÛ”İ\YH
+Nˆ]™[
+HOˆÂˆÛÛœİ]Z[H
+H\Èİ\İÛQ]™[
+K™]Z[ÂˆYˆ
+]Z[ËœÙ\ÜÚ[Û’YOOHÙ\ÜÚ[Û‹šY
+HÂˆÛÛœÛÛK›ÙÊ–ĞÚ]›ÛÛWH›Ûİİ\\İ\Y™XÙZ]™YÙ][™È\ÑÙ[™\˜][™Ï]YHŠNÂˆÙ]\ÑÙ[™\˜][™ÊYJNÂˆBˆNÂˆÛÛœİÛ“Y\ÜØYÙTØ]™YH
+Nˆ]™[
+HOˆÂˆÛÛœİ]Z[H
+H\Èİ\İÛQ]™[ÈÙ\ÜÚ[Û’YÎˆİš[™ÎÈY\ÜØYÙOÎˆÚ]Y\ÜØYÙHOŠK™]Z[ÂˆYˆ
+]Z[ËœÙ\ÜÚ[Û’YOOHÙ\ÜÚ[Û‹šYY]Z[›Y\ÜØYÙJH™]\›ÂˆÙ]Y\ÜØYÙ\Ê™]ˆOˆ
+ˆ™]‹œÛÛYJ][HOˆ][KšYOOH]Z[›Y\ÜØYÙHKšY
+BˆÈ™]‚ˆˆË‹‹œ™]‹]Z[›Y\ÜØYÙHWBˆ
+JNÂˆNÂˆÛÛœİÛ‘š\™YH
+Nˆ]™[
+HOˆÂˆÛÛœİ]Z[H
+H\Èİ\İÛQ]™[
+K™]Z[ÂˆYˆ
+]Z[ËœÙ\ÜÚ[Û’YOOHÙ\ÜÚ[Û‹šY
+HÂˆÛÛœÛÛK›ÙÊ–ĞÚ]›ÛÛWH›Ûİİ\Yš\™Y™XÙZ]™Y™[ØY[™ÈY\ÜØYÙ\ËÙ][™È\ÑÙ[™\˜][™ÏY˜[ÙHŠNÂˆËÈ™[ØYY\ÜØYÙ\Èœ›ÛHİÜ˜YÙH
+HÙ\šXÙH[™XYHØ]™Y[JBˆŞ[˜ÓY\ÜØYÙ\Ñœ›ÛTİÜ˜YÙJ
+NÂˆÙ]\ÑÙ[™\˜][™Ê˜[ÙJNÂˆBˆNÂˆÚ[™İË˜Y]™[\İ[™\Š™›Ûİİ\\İ\Y‹Û”İ\Y
+NÂˆÚ[™İË˜Y]™[\İ[™\Š™›Ûİİ\[Y\ÜØYÙK\Ø]™Y‹Û“Y\ÜØYÙTØ]™Y
+NÂˆÚ[™İË˜Y]™[\İ[™\Š™›Ûİİ\Yš\™Y‹Û‘š\™Y
+NÂˆËÈ9å'ù¢$9.+z`%9¢cz/æùaiz b¹i*yk©9/&ºe&z/áÈ›Ûİİ\\İ\Y9.¢ù.í»ï#ˆËÈ9£ º/oy¥í¹..ùbª9§éy. 9«(yd#¹cì9å'ù¢$9â­¹  {ï#9¢¢¸à#9«hùg*:/¤ùaixà#z(iyfç¹§iBˆYˆ
+\Ğ˜XÚÙÜ›İ[™™\QÙ[™\˜][™ÊÙ\ÜÚ[Û‹šY
+JHÂˆÙ]\ÑÙ[™\˜][™ÊYJNÂˆBˆ™]\›ˆ
+
+HOˆÂˆÚ[™İËœ™[[İ™Q]™[\İ[™\Š™›Ûİİ\\İ\Y‹Û”İ\Y
+NÂˆÚ[™İËœ™[[İ™Q]™[\İ[™\Š™›Ûİİ\[Y\ÜØYÙK\Ø]™Y‹Û“Y\ÜØYÙTØ]™Y
+NÂˆÚ[™İËœ™[[İ™Q]™[\İ[™\Š™›Ûİİ\Yš\™Y‹Û‘š\™Y
+NÂˆNÂˆKÜÙ\ÜÚ[Û‹šYŞ[˜ÓY\ÜØYÙ\Ñœ›ÛTİÜ˜YÙWJNÂ‚ˆËÈ\İ[ˆ›Üˆ]™HÔÔÈ\]\Èœ›ÛH9l#ùcmÂˆ\ÙQY™™Xİ
+
+
+HOˆÂˆÛÛœİÛÔÔÕ\]HH
+Nˆ]™[
+HOˆÂˆÛÛœİ]Z[H
+H\Èİ\İÛQ]™[
+K™]Z[ÂˆYˆ
+]Z[ËœÙ\ÜÚ[Û’YOOHÙ\ÜÚ[Û‹šY
+HÂˆÙ]]™PÔÔÊ]Z[˜ÜÜÈˆŠNÂˆBˆNÂˆÚ[™İË˜Y]™[\İ[™\Š˜Ú]\Ù\ÜÚ[Û‹XÜÜË]\]Y‹ÛÔÔÕ\]JNÂˆ™]\›ˆ
+
+HOˆÚ[™İËœ™[[İ™Q]™[\İ[™\Š˜Ú]\Ù\ÜÚ[Û‹XÜÜË]\]Y‹ÛÔÔÕ\]JNÂˆKÜÙ\ÜÚ[Û‹šYJNÂ‚ˆËÈ\İ[ˆ›ÜˆÙPÚ]œšYÙNˆ™[ØYœ›ÛHİÜ˜YÙH
+™\Ù\™\ÈšXÚ›Ü›X][™ÊBˆ\ÙQY™™Xİ
+
+
+HOˆÂˆÛÛœİÛ•ÙZ^[•\]HH
+Nˆ]™[
+HOˆÂˆÛÛœİ]Z[H
+H\Èİ\İÛQ]™[
+K™]Z[ÂˆYˆ
+]Z[ËœÙ\ÜÚ[Û’YOOHÙ\ÜÚ[Û‹šY
+HÂˆŞ[˜ÓY\ÜØYÙ\Ñœ›ÛTİÜ˜YÙJ
+NÂˆBˆNÂˆÛÛœİÛ•ÙZ^[‘Ù[™\˜][™ÈH
+Nˆ]™[
+HOˆÂˆÛÛœİ]Z[H
+H\Èİ\İÛQ]™[
+K™]Z[ÂˆYˆ
+]Z[ËœÙ\ÜÚ[Û’YOOHÙ\ÜÚ[Û‹šY
+HÂˆÙ]\ÑÙ[™\˜][™Ê›ÛÛX[Š]Z[™Ù[™\˜][™ÊJNÂˆ\ÑÙ[™\˜][™Ô™Y‹˜İ\œ™[H›ÛÛX[Š]Z[™Ù[™\˜][™ÊNÂˆBˆNÂˆÚ[™İË˜Y]™[\İ[™\ŠÙZ^[‹[Y\ÜØYÙ\Ë]\]Y‹Û•ÙZ^[•\]JNÂˆÚ[™İË˜Y]™[\İ[™\ŠÙZ^[‹YÙ[™\˜][™È‹Û•ÙZ^[‘Ù[™\˜][™ÊNÂˆ™]\›ˆ
+
+HOˆÂˆÚ[™İËœ™[[İ™Q]™[\İ[™\ŠÙZ^[‹[Y\ÜØYÙ\Ë]\]Y‹Û•ÙZ^[•\]JNÂˆÚ[™İËœ™[[İ™Q]™[\İ[™\ŠÙZ^[‹YÙ[™\˜][™È‹Û•ÙZ^[‘Ù[™\˜][™ÊNÂˆNÂˆKÜÙ\ÜÚ[Û‹šYŞ[˜ÓY\ÜØYÙ\Ñœ›ÛTİÜ˜YÙWJNÂ‚ˆËÈ\İ[ˆ›ÜˆY\ÜØYÙ\È[œÙ\YHİ\ˆ\ËİXÚ\ÈÚ\™K]ËXÚ]Ø\™Ë‚ˆ\ÙQY™™Xİ
+
+
+HOˆÂˆÛÛœİÛ‘^\›˜[Y\ÜØYÙU\]HH
+Nˆ]™[
+HOˆÂˆÛÛœİ]Z[H
+H\Èİ\İÛQ]™[
+K™]Z[ÂˆYˆ
+]Z[ËœÙ\ÜÚ[Û’YOOHÙ\ÜÚ[Û‹šY
+HÂˆŞ[˜ÓY\ÜØYÙ\Ñœ›ÛTİÜ˜YÙJ
+NÂˆBˆNÂˆÚ[™İË˜Y]™[\İ[™\Š˜Ú][Y\ÜØYÙ\Ë]\]Y‹Û‘^\›˜[Y\ÜØYÙU\]JNÂˆ™]\›ˆ
+
+HOˆÚ[™İËœ™[[İ™Q]™[\İ[™\Š˜Ú][Y\ÜØYÙ\Ë]\]Y‹Û‘^\›˜[Y\ÜØYÙU\]JNÂˆKÜÙ\ÜÚ[Û‹šYŞ[˜ÓY\ÜØYÙ\Ñœ›ÛTİÜ˜YÙWJNÂ‚ˆËÈKKH˜XÚÙÜ›İ[™Ù[™\˜][Ûˆ™[ØYY\ÜØYÙ\ÈÚ[ˆH™ÈTHØ[ÛÛ\]\ÈKKBˆ\ÙQY™™Xİ
+
+
+HOˆÂˆÛÛœİ[™\ˆH
+Nˆ]™[
+HOˆÂˆÛÛœİ]Z[H
+H\Èİ\İÛQ]™[
+K™]Z[ÂˆYˆ
+]Z[ËœÙ\ÜÚ[Û’YOOHÙ\ÜÚ[Û‹šY
+HÂˆŞ[˜ÓY\ÜØYÙ\Ñœ›ÛTİÜ˜YÙJ
+NÂˆ\ÑÙ[™\˜][™Ô™Y‹˜İ\œ™[H˜[ÙNÂˆÙ]\ÑÙ[™\˜][™Ê˜[ÙJNÂˆÛX\‘Ù[™\˜][Û“ØÚÊÙ\ÜÚ[Û‹šY
+NÂˆBˆNÂˆÚ[™İË˜Y]™[\İ[™\ŠÒUĞ‘×ĞÓÓTUK[™\ŠNÂˆ™]\›ˆ
+
+HOˆÚ[™İËœ™[[İ™Q]™[\İ[™\ŠÒUĞ‘×ĞÓÓTUK[™\ŠNÂˆKÜÙ\ÜÚ[Û‹šYŞ[˜ÓY\ÜØYÙ\Ñœ›ÛTİÜ˜YÙWJNÂ‚‚ˆËÈÜ›İ\Ú]ˆX\ÙˆÚ\˜Xİ\’Y8¡¤ˆÚ\˜Xİ\ˆ›Üˆ]ZXÚÈÛÚİ\ˆÛÛœİÜ›İ\Ú\“X\H\ÙSY[[Ê
+
+HOˆÂˆYˆ
+\Ù\ÜÚ[Û‹š\ÑÜ›İ\
+H™]\›ˆ™]ÈX\İš[™ËÚ\˜Xİ\Š
+NÂˆÛÛœİÚ\œÈHØYÚ\˜Xİ\œÊ
+NÂˆÛÛœİX\H™]ÈX\İš[™ËÚ\˜Xİ\Š
+NÂˆ›Üˆ
+ÛÛœİYÙˆÙ\ÜÚ[Û‹œ\XÚ\[YÈ×JHÂˆÛÛœİÈHÚ\œË™š[™
+ÚOˆÚšYOOHY
+NÂˆYˆ
+ÊHX\œÙ]
+YÊNÂˆBˆ™]\›ˆX\ÂˆKÜÙ\ÜÚ[Û‹š\ÑÜ›İ\Ù\ÜÚ[Û‹œ\XÚ\[Y×JNÂ‚ˆËÈ›]\œ˜^HÙˆÜ›İ\Ú\˜Xİ\œÈ›ÜˆÛÛ\Û™[È]™YY]ˆÛÛœİÜ›İ\Ú\˜Xİ\œÈH\ÙSY[[Ê
+
+HOˆË‹‹™Ü›İ\Ú\“X\˜[Y\Ê
+WKÙÜ›İ\Ú\“X\JNÂˆÛÛœİÜ›İ\Ú\˜Xİ\“˜[Y\ÈH\ÙSY[[Ê
+
+HOˆÜ›İ\Ú\˜Xİ\œË›X\
+][HOˆ][K›˜[YJK™š[\Š›ÛÛX[ŠKš›Ú[Š¸à HŠKÙÜ›İ\Ú\˜Xİ\œ×JNÂ‚ˆÛÛœİXİ]™T™YÙ^\ÈH\ÙSY[[Ï™YÙ^ÛÛ™šYÖ×OŠ
+
+HOˆÂˆÛÛœİš[™[™ÜÈHØYš[™[™ĞÛÛ™šYÊ
+NÂˆÛÛœİXİ]™TÛİH™\ÛÛ™Pš[™[™Êš[™[™ÜËÙ\ÜÚ[Û‹š\ÑÜ›İ\È[™Yš[™YˆÙ\ÜÚ[Û‹˜ÛÛXİYÙ\ÜÚ[Û‹š\ÑÜ›İ\È™Ü›İ\ØÚ]ˆˆ˜Ú]ŠNÂˆÛÛœİ[™YÙ^\ÈHØY™YÙ^\Ê
+NÂˆ™]\›ˆ
+Xİ]™TÛİœ™YÙ^YÈ×JBˆ›X\
+YOˆ[™YÙ^\Ë™š[™
+™YÙ^Oˆ™YÙ^šYOOHY
+JBˆ™š[\Š
+™YÙ^
+Nˆ™YÙ^\È™YÙ^ÛÛ™šYÈOˆ›ÛÛX[Š™YÙ^
+JNÂˆKÜ™YÙ^™]š\Ú[Û‹Ù\ÜÚ[Û‹˜ÛÛXİYÙ\ÜÚ[Û‹š\ÑÜ›İ\JNÂ‚ˆËÈ9­`yo#úh¡:)â9æ¡9¨!ùëo¹aà9c%ºacyïk»ï&¹.#¹o%y¤ã¹d#9®¤;ï"9odùbcy/&º+çyîäyk¦¹æ¡:h¡:+¯»ï"xà ºh¡:+¯¹o 9d+ù¨!ùëo¹o#ù 'yîí:dï¹¥í»ï#ˆËÈ9å'ù¢$:/áùê"ù.+yæ¡:h¡:)â9.gú) y£"yd#9. 9ieù¨!ùëo¹biy£¢y 'z  ú/áùê"Ëù¤f:) {ï#9d)¹b&y§ 9îâ9­¢9 kúaã:(ªùo%y¤ã¹biy£¢yæ¡9a¡yk®BˆËÈ9/&¹ab9g*:h¡:)â9¬%9¬èzaã:eê¹ã¬;ï"ÛX[”İ™X[U^:!êº.ªù.#yã':acyïk¹g¢ù¨!ùëo¹d#{ï#9å,z/æzaã9îçù. 9/(9ai{ï"xà ‚ˆÛÛœİİ™X[T™]šY]ÕYĞÛÛ™šYÈH\ÙSY[[Ê
+
+HOˆÂˆÛÛœİš[™[™ÜÈHØYš[™[™ĞÛÛ™šYÊ
+NÂˆÛÛœİÛİH™\ÛÛ™Pš[™[™Êš[™[™ÜËÙ\ÜÚ[Û‹š\ÑÜ›İ\È[™Yš[™YˆÙ\ÜÚ[Û‹˜ÛÛXİYÙ\ÜÚ[Û‹š\ÑÜ›İ\È™Ü›İ\ØÚ]ˆˆ˜Ú]ŠNÂˆÛÛœİ™\Ù]HØY™\Ù]Ê
+K™š[™
+][HOˆ][KšYOOHÛİœ™\Ù]Y
+H[ÂˆÛÛœİÚ]İYÚÛÛ\]H
+YÎˆİš[™ÊNˆİš[™Ö×HOˆ
+YÈOOH[šÚ[™ÈˆÈÈ[šÚ[™È‹İYÚ‹[šÈ—HˆİY×JNÂˆ™]\›ˆÂˆÛ›[™Nˆ™\Ù]Ë›Û›[™Wİ[šÚ[™×Ù[˜X›YOOHYBˆÈÚ]İYÚÛÛ\]
+™\Ù]›Û›[™Wİ[šÚ[™×İYÏËš[J
+H[šÚ[™ÈŠBˆˆ×KˆÙ™›[™U[šÚ[™Îˆ™\Ù]Ë›Ù™›[™Wİ[šÚ[™×Ù[˜X›YOOHYBˆÈÚ]İYÚÛÛ\]
+™\Ù][šÚ[™×İYÏËš[J
+H[šÚ[™ÈŠBˆˆ×Kˆİ[[X\UYÎˆ™\Ù]ËœİÜWÜİ[[X\WİYÏËš[J
+Hœİ[[X\H‹ˆËÈ:h¡:+¯¸à#9be:fi9¥¡ù§+8à#{ï&¹o%y¤ã¹§ 9îâ9/&¹b(;ï#:h¡:)â:f-¹«­yd#9«iyb(;ï#:`oùaczeê¹ã¬;ï"9keúghºaãùb(:fi;ï#9¢$9§+9§ y/c»ï"Bˆİš\^Îˆ
+™\Ù]Ëœİš\İ^È×JK™š[\Š›ÛÛX[ŠKˆNÂˆKÜ™YÙ^™]š\Ú[Û‹Ù\ÜÚ[Û‹˜ÛÛXİYÙ\ÜÚ[Û‹š\ÑÜ›İ\JNÂ‚ˆÛÛœİ\Ü^T™YÙ^XXÜ›Ñ[™Ú[™HH\ÙSY[[Ê
+
+HOˆÂˆÛÛœİÚ\“˜[YHHÙ\ÜÚ[Û‹š\ÑÜ›İ\ˆÈ
+Ù\ÜÚ[Û‹™Ü›İ\˜[YHÜ›İ\Ú\˜Xİ\“˜[Y\È¹ï©: bˆŠBˆˆ
+Ú\˜Xİ\Ë›˜[YH¹kîy¥®HŠNÂˆÛÛœİ[™Ú[™HH™]ÈXXÜ›Ñ[™Ú[™JÚ\“˜[YK\Ù\’Y[]OË›˜[YH¹/hŠNÂˆ[™Ú[™K™Ü›İ\HÜ›İ\Ú\˜Xİ\“˜[Y\È
+Ù\ÜÚ[Û‹š\ÑÜ›İ\È
+Ù\ÜÚ[Û‹™Ü›İ\˜[YH¹ï©: bˆŠHˆˆŠNÂˆ™]\›ˆ[™Ú[™NÂˆKØÚ\˜Xİ\Ë›˜[YKÜ›İ\Ú\˜Xİ\“˜[Y\ËÙ\ÜÚ[Û‹™Ü›İ\˜[YKÙ\ÜÚ[Û‹š\ÑÜ›İ\\Ù\’Y[]OË›˜[YWJNÂ‚ˆÛÛœİÙ]™YÙ^Xİ]™UYÜÈH\ÙPØ[˜XÚÊ
+\ÓÙ™›[™Nˆ›ÛÛX[ŠHOˆ
+ˆÙ\ÜÚ[Û‹š\ÑÜ›İ\ˆÈÈ™Ü›İ\ØÚ]‹\ÓÙ™›[™HÈ›Ù™›[™Hˆˆ^—BˆˆÈ˜Ú]‹\ÓÙ™›[™HÈ›Ù™›[™Hˆˆ^—Bˆ
+KÜÙ\ÜÚ[Û‹š\ÑÜ›İ\JNÂ‚ˆÛÛœİ™[™\‘\Ü^U^H\ÙPØ[˜XÚÊ
+ˆ^ˆİš[™ËˆXÙ[Y[ˆHˆH‹ˆ\ÓÙ™›[™HH˜[ÙKˆ
+HOˆÂˆYˆ
+]^Xİ]™T™YÙ^\Ë›[™İOOH
+H™]\›ˆ^Âˆ™]\›ˆ\Q\Ü^T™YÙ^
+^Xİ]™T™YÙ^\ËXÙ[Y[ÂˆXXÜ›Ñ[™Ú[™Nˆ\Ü^T™YÙ^XXÜ›Ñ[™Ú[™KˆXİ]™UYÜÎˆÙ]™YÙ^Xİ]™UYÜÊ\ÓÙ™›[™JKˆJNÂˆKØXİ]™T™YÙ^\Ë\Ü^T™YÙ^XXÜ›Ñ[™Ú[™KÙ]™YÙ^Xİ]™UYÜ×JNÂ‚ˆÛÛœİÙ]Y\ÜØYÙQ\Ü^PÛÛ[H\ÙPØ[˜XÚÊ
+Y\ÜØYÙNˆ™[™\Ú]Y\ÜØYÙJNˆİš[™ÈOˆ
+ˆY\ÜØYÙK™\Ü^T›Ú™XİYˆÈY\ÜØYÙK˜ÛÛ[ˆˆ™[™\‘\Ü^U^
+Y\ÜØYÙK˜ÛÛ[Y\ÜØYÙKœ›ÛHOOH\Ù\ˆˆÈHˆ‹˜[ÙJBˆ
+KÜ™[™\‘\Ü^U^JNÂ‚ˆÛÛœİ\QY]^™YÙ^H\ÙPØ[˜XÚÊ
+ˆ^ˆİš[™ËˆXÙ[Y[ˆHˆH‹ˆ\ÓÙ™›[™HH˜[ÙKˆ
+HOˆÂˆYˆ
+]^Xİ]™T™YÙ^\Ë›[™İOOH
+H™]\›ˆ^Âˆ™]\›ˆ\QY]™YÙ^
+^Xİ]™T™YÙ^\ËXÙ[Y[ÂˆXXÜ›Ñ[™Ú[™Nˆ\Ü^T™YÙ^XXÜ›Ñ[™Ú[™KˆXİ]™UYÜÎˆÙ]™YÙ^Xİ]™UYÜÊ\ÓÙ™›[™JKˆJNÂˆKØXİ]™T™YÙ^\Ë\Ü^T™YÙ^XXÜ›Ñ[™Ú[™KÙ]™YÙ^Xİ]™UYÜ×JNÂ‚ˆËÈ8à#9.(¹o ú)äº"lº/¤ùaî¹æ¡9¥è9¥b:(j9 áyc!xà#yo 9alûï&¹®é:fi9d#yéì9.#yg*:)äº"lº(j9 áyc!Kùa¡yïkº(j9 áy.+yæ¡İXÚÙ\ˆ\ˆÛÛœİİš\[˜[YİXÚÙ\”\ÈH\ÙPØ[˜XÚÊ
+\Îˆ\œÙYY\ÜØYÙT\×KÙ[™\Ú\˜Xİ\’YÎˆİš[™ÊNˆ\œÙYY\ÜØYÙT\×HOˆÂˆYˆ
+Ù\ÜÚ[Û‹™\ØØ\™[˜[YİXÚÙ\œÈOOHYJH™]\›ˆ\ÎÂˆÛÛœİÚ\˜Xİ\’YÈHÙ[™\Ú\˜Xİ\’YˆÈÜÙ[™\Ú\˜Xİ\’YBˆˆ
+Ù\ÜÚ[Û‹š\ÑÜ›İ\È
+Ù\ÜÚ[Û‹œ\XÚ\[YÈÏÈ×JHˆÜÙ\ÜÚ[Û‹˜ÛÛXİYJNÂˆ™]\›ˆ\Ë™š[\Š\Oˆ\›YYXU\HOOHœİXÚÙ\ˆ‚ˆ\ÒÛ›İÛ”İXÚÙ\“X™[
+\›YYXQ]OË›X™[ˆ‹Ú\˜Xİ\’YÊJNÂˆKÜÙ\ÜÚ[Û‹™\ØØ\™[˜[YİXÚÙ\œËÙ\ÜÚ[Û‹š\ÑÜ›İ\Ù\ÜÚ[Û‹œ\XÚ\[YËÙ\ÜÚ[Û‹˜ÛÛXİYJNÂ‚ˆÛÛœİ›Ü›X[^™Q\Ü^T\ÈH\ÙPØ[˜XÚÊ
+\Îˆ™]\›•\O\[Ùˆ\œÙPRT™\ÜÛœÙO–Èœ\È—JHOˆÂˆÛÛœİÚ\“ˆHÚ\˜Xİ\Ë›˜[YH¹kîy¥®HÂˆÛÛœİ\Ù\“ˆH\Ù\’Y[]OË›˜[YH¹/hÂˆ™]\›ˆ\Ë™›]X\
+\OˆÂˆYˆ
+ˆ\›YYXU\HOOH›ÚXÙWØØ[ˆˆ\›YYXU\HOOHšY[×ØØ[ˆˆ\›YYXU\HOOH˜XØÙ\Ü™YÜXÚÙ]ˆˆ\›YYXU\HOOH™XÛ[™WÜ™YÜXÚÙ]ˆˆ\›YYXU\HOOH˜XØÙ\İ˜[œÙ™\ˆˆˆ\›YYXU\HOOH™XÛ[™Wİ˜[œÙ™\ˆˆˆ\›YYXU\HOOH˜XØÙ\Ü^[Y[Ü™\]Y\İˆˆ\›YYXU\HOOH™XÛ[™WÜ^[Y[Ü™\]Y\İ‚ˆ
+HÂˆ™]\›ˆ×NÂˆBˆYˆ
+\›YYXU\HOOH›]\ÚXÈŠHÂˆÛÛœİ]HH\›YYXQ]OË›]\ÚXÕ]H\›YYXQ]OË›X™[Âˆ™]\›ˆ]HÈŞÈÛÛ[ˆúgìù.d‰İ]_WXWHˆ×NÂˆBˆYˆ
+\›YYXU\HOOH™Ü›İ\ØYZ[—Û›İXÙHŠHÂˆÛÛœİH\›YYXQ]NÂˆYˆ
+YË˜YZ[Xİ[ÛˆY˜YZ[XİÜ“˜[YJH™]\›ˆ×NÂˆ™]\›ˆŞÂˆÛÛ[ˆZ[Ü›İ\YZ[“›İXÙU^
+˜YZ[Xİ[Û‹˜YZ[XİÜ“˜[YK˜YZ[•\™Ù]˜[YHˆ‹˜YZ[“]]SZ[]\ÊKˆYYXU\Nˆ™Ü›İ\ØYZ[—Û›İXÙHˆ\ÈÛÛœİˆYYXQ]NˆˆWNÂˆBˆYˆ
+\›YYXU\HOOHœÚÙHŠHÂˆÛÛœİÚÙTÙ[™\ˆH
+\›YYXQ]OËœÚÙTÙ[™\ˆOOH¹¢$HˆÈÚ\“ˆˆ\›YYXQ]OËœÚÙTÙ[™\ŠHÚ\“ÂˆÛÛœİÚÙU\™Ù]H\›YYXQ]OËœÚÙU\™Ù]\Ù\“Âˆ™]\›ˆŞÂˆÛÛ[ˆ	ÜÚÙTÙ[™\ŸH9¢ãy.¡¹¢ãH	ÜÚÙU\™Ù]XˆYYXU\NˆœÚÙHˆ\ÈÛÛœİˆYYXQ]NˆÈÚÙTÙ[™\‹ÚÙU\™Ù]KˆWNÂˆBˆ™]\›ˆÜ\NÂˆJK™š[\Š\Oˆ\›YYXU\H\˜ÛÛ[š[J
+JNÂˆKØÚ\˜Xİ\Ë›˜[YK\Ù\’Y[]OË›˜[YWJNÂ‚ˆ\ÙQY™™Xİ
+
+
+HOˆÂˆÛÛœİ™Yœ™\Ú™YÙ^\ÈH
+
+HOˆÙ]™YÙ^™]š\Ú[ÛŠ˜[YHOˆ˜[YH
+ÈJNÂˆÚ[™İË˜Y]™[\İ[™\ŠœÙ][™ÜË\™YÙ^\Ë]\]Y‹™Yœ™\Ú™YÙ^\ÊNÂˆÚ[™İË˜Y]™[\İ[™\ŠœÙ][™ÜËXš[™[™ÜË]\]Y‹™Yœ™\Ú™YÙ^\ÊNÂˆÚ[™İË˜Y]™[\İ[™\ŠœÙ][™ÜË\™\Ù]Ë]\]Y‹™Yœ™\Ú™YÙ^\ÊNÂˆ™]\›ˆ
+
+HOˆÂˆÚ[™İËœ™[[İ™Q]™[\İ[™\ŠœÙ][™ÜË\™YÙ^\Ë]\]Y‹™Yœ™\Ú™YÙ^\ÊNÂˆÚ[™İËœ™[[İ™Q]™[\İ[™\ŠœÙ][™ÜËXš[™[™ÜË]\]Y‹™Yœ™\Ú™YÙ^\ÊNÂˆÚ[™İËœ™[[İ™Q]™[\İ[™\ŠœÙ][™ÜË\™\Ù]Ë]\]Y‹™Yœ™\Ú™YÙ^\ÊNÂˆNÂˆK×JNÂ‚ˆÛÛœİ]˜Z[X›TÚÜ[™ÑÚYÈH\ÙSY[[Êˆ
+
+HOˆØY[]™\™YÚÜ[™ÑÚYÊ
+KˆÛY\ÜØYÙ\×Kˆ
+NÂ‚ˆ\ÙQY™™Xİ
+
+
+HOˆÂˆÙ]\Ù\’Y[]J™\ÛÛ™U\Ù\’Y[]JÙ\ÜÚ[Û‹˜ÛÛXİY˜Ú]ŠJNÂˆÙ]˜[œÚY[Y\ÜØYÙ\Ê×JNÂˆÙ]Ù™›[™S[ÙJİ‘Ù]
+ÒUÓÑ‘“S‘WÓSÑWÔ‘Q’V
+ÈÙ\ÜÚ[Û‹šY
+HOOHŒHŠNÂˆÙ]Ù™›[™Uš\ÚX›PÛİ[
+Ñ‘“S‘WÒS’UPSÓĞQ
+NÂˆÙ™›[™U^[œ]™Y‹˜İ\œ™[Ë˜ÛX\Š
+NÂˆÙ][™[™ÓÙ™›[™U\Ù\•^
+ˆŠNÂˆÙ]\ÓÙ™›[™QÙ[™\˜][™Ê˜[ÙJNÂˆÙ]Xİ]™SÙ™›[™U\™Ù]
+[
+NÂˆÙ]ÛÛ^Y[P[˜ÚÜŠ[
+NÂˆÙ]\Ó][TÙ[Xİ[ÙJ˜[ÙJNÂˆÙ]Ù[XİYY\ÜØYÙRYÊ™]ÈÙ]
+
+JNÂˆÙ]ÚİĞÛÛ™š\›S][Q[]J˜[ÙJNÂˆÙ]Y][™ÓÙ™›[™U\™Ù]
+[
+NÂˆÙ]Y][™ÓÙ™›[™PÛÛ[
+ˆŠNÂˆÙ]Ù™›[™U\›œÊØYÚ]Ù™›[™U\›œÊÙ\ÜÚ[Û‹šY
+JNÂ‚ˆËÈ™]Ø\›HİXÚÙ\ˆØXÚH›Üˆ[™[]˜[Ú\˜Xİ\œË[ˆØYY\ÜØYÙ\ÂˆÛÛœİ[\ÙÜÈHØYÚ]Y\ÜØYÙ\ÊÙ\ÜÚ[Û‹šY
+NÂˆÛÛœİ\ÙÜÈH[\ÙÜË›[™İˆS’UPSÓĞQÈ[\ÙÜËœÛXÙJRS’UPSÓĞQ
+Hˆ[\ÙÜÎÂˆÛÛœİ™^\Ó[Ü™HH[\ÙÜË›[™İˆS’UPSÓĞQÂˆ\Ó[Ü™T™Y‹˜İ\œ™[H™^\Ó[Ü™NÂˆÙ]\Ó[Ü™J™^\Ó[Ü™JNÂˆÛÛœİÚ\’YÈHÙ\ÜÚ[Û‹š\ÑÜ›İ\	‰ˆÙ\ÜÚ[Û‹œ\XÚ\[YÂˆÈÙ\ÜÚ[Û‹œ\XÚ\[YÂˆˆÜÙ\ÜÚ[Û‹˜ÛÛXİYNÂˆ›ÛZ\ÙK˜[
+Ú\’YË›X\
+YOˆ™]Ø\›TİXÚÙ\ØXÚJY
+JJK[Š
+
+HOˆÂˆÙ]İXÚÙ\”™XYJYJNÂˆ™YYÒ[š]X[ØÜ›Û™Y‹˜İ\œ™[HYNÂˆ™]“\ÙĞÛİ[™Y‹˜İ\œ™[HÂˆš\ÚX›SY\ÜØYÙ\Ô™Y‹˜İ\œ™[H\ÙÜÎÂˆÙ]Y\ÜØYÙ\Ê\ÙÜÊNÂˆJNÂ‚ˆËÈYˆH˜XÚÙÜ›İ[™Ù[™\˜][Ûˆ\Èİ[[ˆ›ÙÜ™\ÜËÚİÈØY[™È[™XØ]Ü‹‚ˆËÈÛÜˆ^\™YØÚÜÈ\™HÛX\™YÛÈH›ÛÛHØ[››İİ^Hœ›Ş™[ˆ›Ü™]™\‹‚ˆYˆ
+\ĞXİ]™QÙ[™\˜][Û“ØÚÊÙ\ÜÚ[Û‹šY
+JHÂˆ\ÑÙ[™\˜][™Ô™Y‹˜İ\œ™[HYNÂˆÙ]\ÑÙ[™\˜][™ÊYJNÂˆH[ÙHÂˆ\ÑÙ[™\˜][™Ô™Y‹˜İ\œ™[H˜[ÙNÂˆÙ]\ÑÙ[™\˜][™Ê˜[ÙJNÂˆB‚ˆËÈ]]Ë\™\HÙÚXÈ›Üˆ™]ÛHYYœšY[™ÈÚ]HÜ™Y][™ÂˆÛÛœİœ™\ÚÙ\ÜÚ[ÛˆHØYÚ]Ù\ÜÚ[ÛœÊ
+K™š[™
+ÈOˆËšYOOHÙ\ÜÚ[Û‹šY
+NÂˆÛÛœİ[™XYT™\YYHœ™\ÚÙ\ÜÚ[ÛË˜]]Ô™\YYÂ‚ˆYˆ
+Ù\ÜÚ[Û‹š\ÑÜ›İ\	‰ˆX[™XYT™\YY	‰ˆ\ÙÜË›[™İOOHH	‰ˆ\ÙÜÖÌKœ›ÛHOOHœŞ\İ[HŠHÂˆËÈÜ›İ\Ú][š]X[Ü™Y][™ÎˆÚ[™ÛHTHØ[›Üˆ[Y[X™\œÂˆÛÛœİÙ\ÜÚ[ÛœÌˆHØYÚ]Ù\ÜÚ[ÛœÊ
+NÂˆÛÛœİÙ\ÜÒYˆHÙ\ÜÚ[ÛœÌ‹™š[™[™^
+ÈOˆËšYOOHÙ\ÜÚ[Û‹šY
+NÂˆYˆ
+Ù\ÜÒYˆOOHLJHÂˆÙ\ÜÚ[ÛœÌ–ÜÙ\ÜÒY—K˜]]Ô™\YYHYNÂˆØ]™PÚ]Ù\ÜÚ[ÛœÊÙ\ÜÚ[ÛœÌŠNÂˆB‚ˆ›ÚY[“X[˜YÙYÙ[™\˜][ÛŠÈ\İÜNˆ\ÙÜÈJNÂˆH[ÙHYˆ
+\Ù\ÜÚ[Û‹š\ÑÜ›İ\	‰ˆX[™XYT™\YY	‰‚ˆ\ÙÜË›[™İOOHˆ	‰‚ˆ\ÙÜÖÌKœ›ÛHOOHœŞ\İ[Hˆ	‰ˆ\ÙÜÖÌK˜ÛÛ[š[˜ÛY\Ê¹mì¹­îùb¨9.¡ˆŠH	‰‚ˆ\ÙÜÖÌWKœ›ÛHOOH\Ù\ˆŠHÂ‚ˆÛÛœİÙ\ÜÚ[ÛœÈHØYÚ]Ù\ÜÚ[ÛœÊ
+NÂˆÛÛœİÙ\ÜÒYHÙ\ÜÚ[ÛœË™š[™[™^
+ÈOˆËšYOOHÙ\ÜÚ[Û‹šY
+NÂˆYˆ
+Ù\ÜÒYOOHLJHÂˆÙ\ÜÚ[ÛœÖÜÙ\ÜÒYK˜]]Ô™\YYHYNÂˆØ]™PÚ]Ù\ÜÚ[ÛœÊÙ\ÜÚ[ÛœÊNÂˆB‚ˆ›ÚY[“X[˜YÙYÙ[™\˜][ÛŠÈ\İÜNˆ\ÙÜËÛ‘XÛ[™NˆšYÙÙ\”™\HJNÂˆB‚ˆËÈœšY[™™\]Y\İXØÙ\YˆšYÙÙ\ˆRH™\H
+ØØ[İÜ˜YÙH›YÈÙ]H[™PXØÙ\œšY[™™\]Y\İ
+BˆÛÛœİ[™[™ÒÙ^HHS‘S‘×Ô‘TWÔ‘Q’V
+ÈÙ\ÜÚ[Û‹šYÂˆYˆ
+İ‘Ù]
+[™[™ÒÙ^JJHÂˆİ”™[[İ™J[™[™ÒÙ^JNÂˆ›ÚY[“X[˜YÙYÙ[™\˜][ÛŠÈ\İÜNˆ\ÙÜËÛ‘XÛ[™NˆšYÙÙ\”™\HJNÂˆBˆKÜÙ\ÜÚ[Û‹šYJNÂ‚ˆÛÛœİ™YYÒ[š]X[ØÜ›Û™YˆH\ÙT™YŠYJNÂˆÛÛœİ™]“\ÙĞÛİ[™YˆH\ÙT™YŠ
+NÂˆÛÛœİØY[™Ó[Ü™T™YˆH\ÙT™YŠ˜[ÙJNÂˆÛÛœİØY[Ü™TØÜ›Û™\İÜ™T™YˆH\ÙT™YÈØÜ›ÛZYÚˆ[X™\ÈØÜ›ÛÜˆ[X™\ˆH[Š[
+NÂˆÛÛœİÙ™›[™SØY[Ü™T™\İÜ™T™YˆH\ÙT™YÈØÜ›ÛZYÚˆ[X™\ÈØÜ›ÛÜˆ[X™\ˆH[Š[
+NÂˆÛÛœİØY[Ü™P[˜ÚÜ”™YˆH\ÙT™YØÜ›Û[˜ÚÜ”Û˜\Úİ[Š[
+NÂˆÛÛœİØY[Ü™T™\Ú^™SØœÙ\™\”™YˆH\ÙT™Y™\Ú^™SØœÙ\™\ˆ[Š[
+NÂˆÛÛœİØY[Ü™P[˜ÚÜ•[Y\”™YˆH\ÙT™Y[X™\ˆ[Š[
+NÂˆÛÛœİ[š]X[ØÜ›Û™\œÚ[Û”™YˆH\ÙT™YŠ
+NÂˆÛÛœİ[™[™ÔÙX\˜Ú[\™YˆH\ÙT™Y[™[™ÓY\ÜØYÙR[\[Š[
+NÂˆÛÛœİÙX\˜Ú[\YÚYÚ[Y\”™YˆH\ÙT™Y™]\›•\O\[ÙˆÙ][Y[İ]ˆ[Š[
+NÂ‚ˆÛÛœİİÜØY[Ü™P[˜ÚÜ•˜XÚÚ[™ÈH\ÙPØ[˜XÚÊ
+
+HOˆÂˆØY[Ü™T™\Ú^™SØœÙ\™\”™Y‹˜İ\œ™[Ë™\ØÛÛ›™Xİ
+
+NÂˆØY[Ü™T™\Ú^™SØœÙ\™\”™Y‹˜İ\œ™[H[ÂˆYˆ
+ØY[Ü™P[˜ÚÜ•[Y\”™Y‹˜İ\œ™[OOH[
+HÂˆÚ[™İË˜ÛX\•[Y[İ]
+ØY[Ü™P[˜ÚÜ•[Y\”™Y‹˜İ\œ™[
+NÂˆØY[Ü™P[˜ÚÜ•[Y\”™Y‹˜İ\œ™[H[ÂˆBˆØY[Ü™P[˜ÚÜ”™Y‹˜İ\œ™[H[ÂˆK×JNÂ‚ˆ\ÙQY™™Xİ
+
+
+HOˆİÜØY[Ü™P[˜ÚÜ•˜XÚÚ[™ËÜİÜØY[Ü™P[˜ÚÜ•˜XÚÚ[™×JNÂˆ\ÙQY™™Xİ
+
+
+HOˆ
+
+HOˆÂˆYˆ
+ÙX\˜Ú[\YÚYÚ[Y\”™Y‹˜İ\œ™[
+HÛX\•[Y[İ]
+ÙX\˜Ú[\YÚYÚ[Y\”™Y‹˜İ\œ™[
+NÂˆK×JNÂ‚ˆÛÛœİ›\ÚY\ÜØYÙRYÚYÚH\ÙPØ[˜XÚÊ
+Y\ÜØYÙRYˆİš[™ÊHOˆÂˆÙ]YÚYÚY\ÜØYÙRY
+Y\ÜØYÙRY
+NÂˆYˆ
+ÙX\˜Ú[\YÚYÚ[Y\”™Y‹˜İ\œ™[
+HÂˆÛX\•[Y[İ]
+ÙX\˜Ú[\YÚYÚ[Y\”™Y‹˜İ\œ™[
+NÂˆBˆÙX\˜Ú[\YÚYÚ[Y\”™Y‹˜İ\œ™[HÙ][Y[İ]
+
+
+HOˆÂˆÙ]YÚYÚY\ÜØYÙRY
+İ\œ™[Oˆİ\œ™[OOHY\ÜØYÙRYÈ[ˆİ\œ™[
+NÂˆÙX\˜Ú[\YÚYÚ[Y\”™Y‹˜İ\œ™[H[ÂˆKŒ
+NÂˆK×JNÂ‚ˆÛÛœİØ\\™TØÜ›Û[˜ÚÜˆH\ÙPØ[˜XÚÊ
+
+NˆØÜ›Û[˜ÚÜ”Û˜\Úİ[OˆÂˆÛÛœİ[HØÜ›Û™Y‹˜İ\œ™[ÂˆYˆ
+Y[
+H™]\›ˆ[ÂˆÛÛœİÛÛZ[™\”™XİH[™Ù]›İ[™[™ĞÛY[™Xİ
+
+NÂˆÛÛœİØ[™Y]\ÈH\œ˜^K™œ›ÛJ[œ]Y\TÙ[XİÜ[S[[Y[Š	ÖÚYH›Y\ÜØYÙKH—IÊJNÂˆ›Üˆ
+ÛÛœİØ[™Y]HÙˆØ[™Y]\ÊHÂˆÛÛœİ™XİHØ[™Y]K™Ù]›İ[™[™ĞÛY[™Xİ
+
+NÂˆYˆ
+™Xİ˜›İÛHHÛÛZ[™\”™XİÜ
+HÛÛ[YNÂˆYˆ
+™XİÜHÛÛZ[™\”™Xİ˜›İÛJHÛÛ[YNÂˆ™]\›ˆÂˆY\ÜØYÙRYˆØ[™Y]KšYœ™\XÙJ×›Y\ÜØYÙKKËˆŠKˆÙ™œÙ][NˆØ[™Y]K›Ù™œÙ]ÜH[œØÜ›ÛÜˆNÂˆBˆ™]\›ˆ[ÂˆK×JNÂ‚ˆÛÛœİ™\İÜ™TØÜ›Û[˜ÚÜˆH\ÙPØ[˜Xú×n¼¶‰ËkºwµçY]‚ˆ]‚ˆÛ\ÜÓ˜[YOH˜Ú][Ù™›[™K]^‚ˆÛ”Ú[\‘İÛ^ÊJHOˆÈKœİÜ›ÜYØ][ÛŠ
+NÈ[™SÙ™›[™TÚ[\‘İÛŠKÈ\›’Yˆ\›‹šY›ÛNˆ\Ù\ˆˆJNÈ_BˆÛ”Ú[\•\^ÊJHOˆ[™SY\ÜØYÙTÚ[\•\
+J_BˆÛ”Ú[\Ø[˜Ù[^Ú[™SY\ÜØYÙTÚ[\Ø[˜Ù[BˆÛ”Ú[\“X]™O^Ú[™SY\ÜØYÙTÚ[\Ø[˜Ù[BˆÛ”Ú[\“[İ™O^ÊJHOˆÂˆYˆ
+İ\ÜÔ™Y‹˜İ\œ™[
+HÂˆÛÛœİHX]˜XœÊK˜ÛY[Hİ\ÜÔ™Y‹˜İ\œ™[
+NÂˆÛÛœİHHX]˜XœÊK˜ÛY[HHİ\ÜÔ™Y‹˜İ\œ™[JNÂˆYˆ
+ˆLHˆL
+H[™SY\ÜØYÙTÚ[\Ø[˜Ù[
+
+NÂˆBˆ_BˆÛÛÛ^Y[O^ÊJHOˆÈKœ™]™[Y˜][
+
+NÈÜ[“Ù™›[™PÛÛ^Y[JÈ\›’Yˆ\›‹šY›ÛNˆ\Ù\ˆˆKÙ][[Y[ÛÛ^Y[P[˜ÚÜŠK˜İ\œ™[\™Ù]
+JNÈ_BˆË‹‹ŠXİ]™SÙ™›[™U\™Ù]Ë\›’YOOH\›‹šY	‰ˆXİ]™SÙ™›[™U\™Ù]œ›ÛHOOH\Ù\ˆˆÈÈ™]KXXİ]™HˆˆˆHˆßJ_Bˆ‚ˆØXİ]™SÙ™›[™U\™Ù]Ë\›’YOOH\›‹šY	‰ˆXİ]™SÙ™›[™U\™Ù]œ›ÛHOOH\Ù\ˆˆ	‰ˆ™[™\“Ù™›[™PÛÛ^Y[J\›‹\Ù\ˆŠ_Bˆš[[™İX[^›ØÚÂˆ^^ÛÙ™›[™Q\Ü^K\Ù\ÛÛ[Bˆ[ÙOH›X\šÙİÛˆ‚ˆY˜][^[™Y^ÜÙ\ÜÚ[Û‹˜ÛÛ\ÙPš[[™İX[˜[œÛ][ÛˆOOH˜[ÙHÈ˜[ÙHˆY_BˆÏ‚ˆÙ]‚ˆÙ]‚ˆ]ˆÛ\ÜÓ˜[YOH˜Ú][Ù™›[™KY[Hˆ]K\›ÛOH˜\ÜÚ\İ[‚ˆËÊˆ9i-9`ãùch9/c{ï&ºnæ:+©\Ü^N››Û™{ï":)àHÚ]˜ÜÜûï"{ï#9/¦ú!ê¹k¦¹.bHÔÔÈ9¦/¹é.ˆ
+‹ßBˆ]ˆÛ\ÜÓ˜[YOH˜Ú][Ù™›[™KX]˜]\ˆˆ\šXKZY[HYH‚ˆØÚ\˜Xİ\Ë˜]˜]\ˆÈ[YÈÜ˜Ï^ØÚ\˜Xİ\‹˜]˜]\ŸH[HˆˆÏˆˆÚ]˜[˜XÚĞ]˜]\ˆÏŸBˆÙ]‚ˆ]ˆÛ\ÜÓ˜[YOH˜Ú][Ù™›[™K[X™[\›İÈ‚ˆ]ˆÛ\ÜÓ˜[YOH˜Ú][Ù™›[™K[X™[ÜÙ\ÜÚ[Û‹š\ÑÜ›İ\È
+Ù\ÜÚ[Û‹™Ü›İ\˜[YH¹ï©: bˆŠHˆ
+Ú\˜Xİ\Ë›˜[YH¹kîy¥®HŠ_OÙ]‚ˆØ\ÜÚ\İ[\Ò[™]šY]ÈÈ
+ˆ]Û‚ˆ\OH˜]Ûˆ‚ˆÛ\ÜÓ˜[YOH˜Ú][Ù™›[™K[Y[K]šYÙÙ\ˆ‚ˆ\šXK[X™[H¹î¯ù."ùfç¹i#y¤ãy/g‚ˆ]OH¹î¯ù."ùfç¹i#y¤ãy/g‚ˆÛ”Ú[\‘İÛ^ÊJHOˆÂˆKœİÜ›ÜYØ][ÛŠ
+NÂˆ[™SY\ÜØYÙTÚ[\Ø[˜Ù[
+
+NÂˆ_BˆÛÛXÚÏ^ÊJHOˆÂˆKœ™]™[Y˜][
+
+NÂˆKœİÜ›ÜYØ][ÛŠ
+NÂˆÜ[“Ù™›[™PÛÛ^Y[JˆÈ\›’Yˆ\›‹šY›ÛNˆ˜\ÜÚ\İ[ˆKˆÙ][[Y[ÛÛ^Y[P[˜ÚÜŠK˜İ\œ™[\™Ù]
+Kˆ
+NÂˆ_Bˆ‚ˆ[Ü™RÜš^›Û[Ú^™O^ÌMŸHİ›ÚÙUÚY^ÌŸHÏ‚ˆØ]Û‚ˆ
+Hˆ[BˆÙ]‚ˆËÊˆ9 'yîí:dïº)é¹cäy§h{ï"9î¯ù."ùª(yo#ûï#Û]YH\:hã¹¨/;ï"{ï&¹/&9ab9leyé.ºh¡:+¯¹¨/9o#È[šÚ[™Ïˆ:)èù§¤9îäù§§;ï#9ï.¹ç yfçº` 9ª(yg¢ÈTH9c§ùå'ù 'z  È
+‹ßBˆÊ\›‹[šÚ[™Õ^\›‹œ™X\ÛÛš[™Õ^
+H	‰ˆ
+ˆ]Û‚ˆ\OH˜]Ûˆ‚ˆÛ\ÜÓ˜[YOH˜Ú]\™X\ÛÛš[™Ë]šYÙÙ\ˆ‚ˆÛÛXÚÏ^ÊJHOˆÈKœİÜ›ÜYØ][ÛŠ
+NÈÙ]™X\ÛÛš[™ÔÚY]^
+\›‹[šÚ[™Õ^\›‹œ™X\ÛÛš[™Õ^[
+NÈ_Bˆ\šXK[X™[H¹§éyç"ù 'z  ú/áùê"È‚ˆ‚ˆÛØÚÈÚ^™O^ÌLßHİ›ÚÙUÚY^ÌKHÛ\ÜÓ˜[YOH˜Ú]\™X\ÛÛš[™Ë]šYÙÙ\‹ZXÛÛˆˆÏ‚ˆÜ[ˆÛ\ÜÓ˜[YOH˜Ú]\™X\ÛÛš[™Ë]šYÙÙ\‹]^Ü™X\ÛÛš[™Ô™]šY]Ó[™J\›‹[šÚ[™Õ^\›‹œ™X\ÛÛš[™Õ^ˆŠ_OÜÜ[‚ˆÚ]œ›Û”šYÚÚ^™O^ÌMHİ›ÚÙUÚY^ÌKHÛ\ÜÓ˜[YOH˜Ú]\™X\ÛÛš[™Ë]šYÙÙ\‹ZXÛÛˆˆÏ‚ˆØ]Û‚ˆ
+_Bˆ]‚ˆÛ\ÜÓ˜[YOH˜Ú][Ù™›[™K]^‚ˆÛ”Ú[\‘İÛ^ÊJHOˆÈKœİÜ›ÜYØ][ÛŠ
+NÈ[™SÙ™›[™TÚ[\‘İÛŠKÈ\›’Yˆ\›‹šY›ÛNˆ˜\ÜÚ\İ[ˆJNÈ_BˆÛ”Ú[\•\^ÊJHOˆ[™SY\ÜØYÙTÚ[\•\
+J_BˆÛ”Ú[\Ø[˜Ù[^Ú[™SY\ÜØYÙTÚ[\Ø[˜Ù[BˆÛ”Ú[\“X]™O^Ú[™SY\ÜØYÙTÚ[\Ø[˜Ù[BˆÛ”Ú[\“[İ™O^ÊJHOˆÂˆYˆ
+İ\ÜÔ™Y‹˜İ\œ™[
+HÂˆÛÛœİHX]˜XœÊK˜ÛY[Hİ\ÜÔ™Y‹˜İ\œ™[
+NÂˆÛÛœİHHX]˜XœÊK˜ÛY[HHİ\ÜÔ™Y‹˜İ\œ™[JNÂˆYˆ
+ˆLHˆL
+H[™SY\ÜØYÙTÚ[\Ø[˜Ù[
+
+NÂˆBˆ_BˆÛÛÛ^Y[O^ÊJHOˆÈKœ™]™[Y˜][
+
+NÈÜ[“Ù™›[™PÛÛ^Y[JÈ\›’Yˆ\›‹šY›ÛNˆ˜\ÜÚ\İ[ˆKÙ][[Y[ÛÛ^Y[P[˜ÚÜŠK˜İ\œ™[\™Ù]
+JNÈ_BˆË‹‹ŠXİ]™SÙ™›[™U\™Ù]Ë\›’YOOH\›‹šY	‰ˆXİ]™SÙ™›[™U\™Ù]œ›ÛHOOH˜\ÜÚ\İ[ˆÈÈ™]KXXİ]™HˆˆˆHˆßJ_Bˆ‚ˆØXİ]™SÙ™›[™U\™Ù]Ë\›’YOOH\›‹šY	‰ˆXİ]™SÙ™›[™U\™Ù]œ›ÛHOOH˜\ÜÚ\İ[ˆ	‰ˆ™[™\“Ù™›[™PÛÛ^Y[J\›‹˜\ÜÚ\İ[Š_BˆÙ™›[™P\ÜÚ\İ[^›ØÚÂˆ^^ÛÙ™›[™Q\Ü^K˜\ÜÚ\İ[ÛÛ[BˆY˜][^[™Y^ÜÙ\ÜÚ[Û‹˜ÛÛ\ÙPš[[™İX[˜[œÛ][ÛˆOOH˜[ÙHÈ˜[ÙHˆY_BˆÏ‚ˆÙ]‚ˆİ\›‹œİ[[X\Kš[J
+H	‰ˆ
+ˆ]Z[ÈÛ\ÜÓ˜[YOH˜Ú][Ù™›[™K\İ[[X\KY›Û‚ˆİ[[X\O¹¤f:) {ï"İ\›‹œİ[[X\UYÈœİ[[X\HŸ{ï"OÜİ[[X\O‚ˆ]ˆÛ\ÜÓ˜[YOH˜Ú][Ù™›[™K\İ[[X\KXÛÛ[‚ˆš[[™İX[^›ØÚÂˆ^^ÛÙ™›[™Q\Ü^Kœİ[[X\_Bˆ[ÙOH›X\šÙİÛˆ‚ˆY˜][^[™Y^ÜÙ\ÜÚ[Û‹˜ÛÛ\ÙPš[[™İX[˜[œÛ][ÛˆOOH˜[ÙHÈ˜[ÙHˆY_BˆÏ‚ˆÙ]‚ˆÙ]Z[Ï‚ˆ
+_BˆÙ]‚ˆÙ]‚ˆÑœ˜YÛY[‚ˆ
+NÂˆJ_BˆÊ[™[™ÓÙ™›[™U\Ù\•^\ÓÙ™›[™QÙ[™\˜][™ÊH	‰ˆ
+ˆ]ˆÛ\ÜÓ˜[YOH˜Ú][Ù™›[™K]\›ˆ‚ˆ]ˆÛ\ÜÓ˜[YOH˜Ú][Ù™›[™KY[Hˆ]K\›ÛOH\Ù\ˆˆİ[O^Ü[™[™ÓÙ™›[™U\Ù\•^È[™Yš[™YˆÈ\Ü^Nˆ››Û™Hˆ_O‚ˆËÊˆ9i-9`ãùch9/c{ï&ºnæ:+©\Ü^N››Û™{ï":)àHÚ]˜ÜÜûï"{ï#9/¦ú!ê¹k¦¹.bHÔÔÈ9¦/¹é.ˆ
+‹ßBˆ]ˆÛ\ÜÓ˜[YOH˜Ú][Ù™›[™KX]˜]\ˆˆ\šXKZY[HYH‚ˆİ\Ù\’Y[]OË˜]˜]\•\›È[YÈÜ˜Ï^İ\Ù\’Y[]K˜]˜]\•\›H[HˆˆÏˆˆ\Ù\ˆÚ^™O^ÌNHÛÛÜH˜\ŠKXË]^
+HˆÏŸBˆÙ]‚ˆ]ˆÛ\ÜÓ˜[YOH˜Ú][Ù™›[™K[X™[¹/hÙ]‚ˆ]ˆÛ\ÜÓ˜[YOH˜Ú][Ù™›[™K]^‚ˆš[[™İX[^›ØÚÂˆ^^Ü™[™\‘\Ü^U^
+[™[™ÓÙ™›[™U\Ù\•^KYJ_Bˆ[ÙOH›X\šÙİÛˆ‚ˆY˜][^[™Y^ÜÙ\ÜÚ[Û‹˜ÛÛ\ÙPš[[™İX[˜[œÛ][ÛˆOOH˜[ÙHÈ˜[ÙHˆY_BˆÏ‚ˆÙ]‚ˆÙ]‚ˆÛÙ™›[™Tİ™X[T™]šY]ÏË˜ÛÛ[È
+ˆÊˆ9­`yo#úh¡:)â9c§ùg,:eoùaî»ï&¹.#¹«hùo#ùbiù áy«hù¥¡ùd#9îäù§¡;ï"9i-9`ãËú)äº"l¹d#Kù«hù¥¡ùc.»ï"{ï#ˆ9«hù¥¡ùå*:/núaãÈ™K]Ü˜\9®,¹§äûï":`oùacy«ãùn)ÈX\šÙİÛ‹ùcã:+ëz)èù§¤;ï"{ï#:$/yn¤ù¥í¹c§ùg,9£h¹¢$9«hùo#ù£¤¹âb
+‹Âˆ]ˆÛ\ÜÓ˜[YOH˜Ú][Ù™›[™KY[Hˆ]K\›ÛOH˜\ÜÚ\İ[‚ˆ]ˆÛ\ÜÓ˜[YOH˜Ú][Ù™›[™KX]˜]\ˆˆ\šXKZY[HYH‚ˆØÚ\˜Xİ\Ë˜]˜]\ˆÈ[YÈÜ˜Ï^ØÚ\˜Xİ\‹˜]˜]\ŸH[HˆˆÏˆˆÚ]˜[˜XÚĞ]˜]\ˆÏŸBˆÙ]‚ˆ]ˆÛ\ÜÓ˜[YOH˜Ú][Ù™›[™K[X™[\›İÈ‚ˆ]ˆÛ\ÜÓ˜[YOH˜Ú][Ù™›[™K[X™[ÜÙ\ÜÚ[Û‹š\ÑÜ›İ\È
+Ù\ÜÚ[Û‹™Ü›İ\˜[YH¹ï©: bˆŠHˆ
+Ú\˜Xİ\Ë›˜[YH¹kîy¥®HŠ_OÙ]‚ˆÙ]‚ˆ]ˆÛ\ÜÓ˜[YOH˜Ú][Ù™›[™K]^‚ˆ]ˆÛ\ÜÓ˜[YOH˜Ú]\İ™X[K]^Ú]\ÜXÙK\™K]Ü˜\œ™XZË]ÛÜ™ÈÛÙ™›[™Tİ™X[T™]šY]Ë˜ÛÛ[OÙ]‚ˆÜ[ˆÛ\ÜÓ˜[YOH˜Ú]\İ™X[KXİ\œÛÜˆˆ\šXKZY[HYHˆÏ‚ˆÙ]‚ˆÙ]‚ˆ
+Hˆ
+ˆ]ˆÛ\ÜÓ˜[YOH˜Ú][Ù™›[™KYÙ[™\˜][™È‚ˆÜ[¹î¯ù."ùfç¹i#yå'ù¢$9.+OÜÜ[‚ˆÙ]‚ˆ
+_BˆÙ]‚ˆ
+_BˆÙ]‚ˆ
+_BˆÈ[Ù™›[™S[ÙH	‰ˆ\Ó[Ü™H	‰ˆ
+ˆ]Û‚ˆ\OH˜]Ûˆ‚ˆÛ\ÜÓ˜[YOH˜Ú]\Ş\Ë[\ÙÈÚ][ØY[[Ü™KX]Ûˆ‚ˆÛÛXÚÏ^ÛØY[Ü™_Bˆ‚ˆÜ[¹§éyç"ù¦í9i&¹­¢9 kÏÜÜ[‚ˆİ™ÈÚYHŒLˆˆZYÚHŒLˆˆšY]Ğ›ŞHŒˆš[H››Û™Hˆİ›ÚÙOH˜İ\œ™[ÛÛÜˆˆİ›ÚÙUÚYHŒ‹Hˆİ›ÚÙS[™XØ\Hœ›İ[™ˆİ›ÚÙS[™Z›Ú[Hœ›İ[™‚ˆÛ[[™HÚ[ÏHŒNMHLˆHˆMHˆÏ‚ˆÜİ™Ï‚ˆØ]Û‚ˆ
+_BˆÈ[Ù™›[™S[ÙH	‰ˆ›Ú™XİYY\ÜØYÙ\Ë›X\
+
+\ÙËY
+HOˆÂˆËÈ8¥ 8¥ ›ÚXÙHØ[Ü›İ\ˆÛÛ\ÙYÚYÙ]8¥ 8¥ ˆÛÛœİ˜ÑÜ›İ\H›ÚXÙPØ[Ü›İ\Ë™Ü›İ\Ë™š[™
+ÈOˆËœİ\YOOHY
+NÂˆYˆ
+˜ÑÜ›İ\
+HÂˆÛÛœİ\Ñ^[™YH^[™Y›ÚXÙPØ[YËš\Ê˜ÑÜ›İ\œİ\Y
+NÂˆÛÛœİÜ›İ\Y\ÜØYÙ\ÈH›Ú™XİYY\ÜØYÙ\ËœÛXÙJ˜ÑÜ›İ\œİ\Y˜ÑÜ›İ\™[™Y
+ÈJNÂˆÛÛœİÚ]Ûİ[HÜ›İ\Y\ÜØYÙ\Ë™š[\ŠHOˆZT›ÛJJHOOHœŞ\İ[HŠK›[™İÂˆ™]\›ˆ
+ˆ]ˆÙ^O^Ø˜ËIİ˜ÑÜ›İ\œİ\YXHÛ\ÜÓ˜[YOH™›^›^XÛÛØ\Lˆ‚ˆ]‚ˆÛ”Ú[\‘İÛ^ÊJHOˆÈKœİÜ›ÜYØ][ÛŠ
+NÈ[™SY\ÜØYÙTÚ[\‘İÛŠK˜ËIİ˜ÑÜ›İ\œİ\YX
+NÈ_BˆÛ”Ú[\•\^ÊJHOˆ[™SY\ÜØYÙTÚ[\•\
+J_BˆÛ”Ú[\Ø[˜Ù[^Ú[™SY\ÜØYÙTÚ[\Ø[˜Ù[BˆÛ”Ú[\“X]™O^Ú[™SY\ÜØYÙTÚ[\Ø[˜Ù[BˆÛ”Ú[\“[İ™O^ÊJHOˆÂˆYˆ
+İ\ÜÔ™Y‹˜İ\œ™[
+HÂˆÛÛœİHX]˜XœÊK˜ÛY[Hİ\ÜÔ™Y‹˜İ\œ™[
+NÂˆÛÛœİHHX]˜XœÊK˜ÛY[HHİ\ÜÔ™Y‹˜İ\œ™[JNÂˆYˆ
+ˆLHˆL
+H[™SY\ÜØYÙTÚ[\Ø[˜Ù[
+
+NÂˆBˆ_BˆÛÛÛ^Y[O^ÊJHOˆÈKœ™]™[Y˜][
+
+NÈÜ[“Y\ÜØYÙPÛÛ^Y[J˜ËIİ˜ÑÜ›İ\œİ\YXÙ][[Y[ÛÛ^Y[P[˜ÚÜŠK˜İ\œ™[\™Ù]
+JNÈ_BˆÛÛXÚÏ^Ê
+HOˆÂˆYˆ
+Xİ]™SY\ÜØYÙRYOOH˜ËIİ˜ÑÜ›İ\œİ\YX
+H™]\›ÂˆÙ]^[™Y›ÚXÙPØ[YÊ™]ˆOˆÂˆÛÛœİ™^H™]ÈÙ]
+™]ŠNÂˆYˆ
+™^š\Ê˜ÑÜ›İ\œİ\Y
+JH™^™[]J˜ÑÜ›İ\œİ\Y
+NÂˆ[ÙH™^˜Y
+˜ÑÜ›İ\œİ\Y
+NÂˆ™]\›ˆ™^ÂˆJNÂˆ_BˆÛ\ÜÓ˜[YOH˜Ú]\Ş\Ë[\ÙÈ›^][\ËXÙ[\ˆ\İYKXÙ[\ˆØ\VÍœHKVÍœHVÌMH^X]]È›İ[™YLİ\œÛÜ‹\Ú[\ˆ™[]]™H‚ˆË‹‹ŠXİ]™SY\ÜØYÙRYOOH˜ËIİ˜ÑÜ›İ\œİ\YXÈÈ™]KXXİ]™HˆˆˆHˆßJ_Bˆ‚ˆİ˜ÑÜ›İ\˜Ø[\HOOHšY[ÈˆÈ
+ˆİ™ÈÚYHŒMˆZYÚHŒMˆšY]Ğ›ŞHŒˆš[H››Û™Hˆİ›ÚÙOH˜İ\œ™[ÛÛÜˆˆİ›ÚÙUÚYHŒKHˆİ›ÚÙS[™XØ\Hœ›İ[™ˆİ›ÚÙS[™Z›Ú[Hœ›İ[™‚ˆ]H“LŒÈÛMÈHÈUŞˆˆÏ™XİHŒHˆOHHˆÚYHŒMHˆZYÚHŒMˆHŒˆˆOHŒˆˆÏ‚ˆÜİ™Ï‚ˆ
+Hˆ
+ˆİ™ÈÚYHŒMˆZYÚHŒMˆšY]Ğ›ŞHŒˆš[H››Û™Hˆİ›ÚÙOH˜İ\œ™[ÛÛÜˆˆİ›ÚÙUÚYHŒKHˆİ›ÚÙS[™XØ\Hœ›İ[™ˆİ›ÚÙS[™Z›Ú[Hœ›İ[™‚ˆ]H“LŒˆM‹LŒØLˆˆKL‹ŒNˆNKÎHNKÎHKNŒËLËŒÈNKHNKHKM‹MˆNKÎHNKÎHKLËŒËNĞLˆˆHŒLHšØLˆˆHˆKÌ˜ËŒLËM‹ŒÍŒHKLËÈ‹XLˆˆKKH‹ŒLSŒHKLXLMˆMˆˆ›KŒËLKŒØLˆˆH‹ŒLKKXËLËŒÌÎHKKMÌÈ‹KĞLˆˆHŒˆM‹LˆˆÏ‚ˆÜİ™Ï‚ˆ
+_BˆÜ[İ˜ÑÜ›İ\˜Ø[\HOOHšY[ÈˆÈº)áºh¤z`&º+çHˆˆº+ëzgìú`&º+çHŸ^İ˜ÑÜ›İ\™\˜][ÛˆÈ	İ˜ÑÜ›İ\™\˜][ÛŸXˆˆŸ^ØÚ]Ûİ[ˆÈ0­È	ØÚ]Ûİ[y§hy­¢9 kØˆˆŸOÜÜ[‚ˆİ™ÈÚYHŒLˆˆZYÚHŒLˆˆšY]Ğ›ŞHŒˆš[H››Û™Hˆİ›ÚÙOH˜İ\œ™[ÛÛÜˆˆİ›ÚÙUÚYHŒ‹Hˆİ›ÚÙS[™XØ\Hœ›İ[™ˆİ›ÚÙS[™Z›Ú[Hœ›İ[™‚ˆÛ\ÜÓ˜[YOHZKXÚ]œ›Û‹YİÛ‹Y›\ˆË‹‹Š\Ñ^[™YÈÈ™]K[Ü[ˆˆˆˆHˆßJ_O‚ˆÛ[[™HÚ[ÏHˆHLˆMHNHˆÏ‚ˆÜİ™Ï‚ˆØXİ]™SY\ÜØYÙRYOOH˜ËIİ˜ÑÜ›İ\œİ\YX	‰ˆ™[™\‘[]SÛ›PÛÛ^Y[J
+
+HOˆÂˆÛÛœİÜ›İ\\ÙÒYÈHÜ›İ\Y\ÜØYÙ\Ë›X\
+HOˆKšY
+NÂˆ›ÚY[]UÙZ^[ÛİY™Y›Ü™SØØ[
+Ü›İ\Y\ÜØYÙ\Ë
+
+HOˆÂˆÜ›İ\\ÙÒYË™›Ü‘XXÚ
+YOˆ[]PÚ]Y\ÜØYÙJY
+JNÂˆÙ]Y\ÜØYÙ\Ê™]ˆOˆ™]‹™š[\ŠHOˆYÜ›İ\\ÙÒYËš[˜ÛY\ÊKšY
+JJNÂˆJNÂˆJ_BˆÙ]‚ˆÚ\Ñ^[™Y	‰ˆ
+ˆ]ˆÛ\ÜÓ˜[YOH˜Ú]]˜ËYÜ›İ\X›Ü™\ˆ‚ˆÙÜ›İ\Y\ÜØYÙ\Ë›X\
+
+Ó\ÙÊHOˆ
+ˆZT›ÛJÓ\ÙÊHOOHœŞ\İ[HˆÈ
+ˆ]ˆÙ^O^ÙÓ\ÙËšYHÛ\ÜÓ˜[YOH™›^\İYKXÙ[\ˆ‚ˆ]‚ˆÛ”Ú[\‘İÛ^ÊJHOˆÈKœİÜ›ÜYØ][ÛŠ
+NÈ[™SY\ÜØYÙTÚ[\‘İÛŠKÓ\ÙËšY
+NÈ_BˆÛ”Ú[\•\^ÊJHOˆ[™SY\ÜØYÙTÚ[\•\
+J_BˆÛ”Ú[\Ø[˜Ù[^Ú[™SY\ÜØYÙTÚ[\Ø[˜Ù[BˆÛ”Ú[\“X]™O^Ú[™SY\ÜØYÙTÚ[\Ø[˜Ù[BˆÛ”Ú[\“[İ™O^ÊJHOˆÂˆYˆ
+İ\ÜÔ™Y‹˜İ\œ™[
+HÂˆÛÛœİHX]˜XœÊK˜ÛY[Hİ\ÜÔ™Y‹˜İ\œ™[
+NÂˆÛÛœİHHX]˜XœÊK˜ÛY[HHİ\ÜÔ™Y‹˜İ\œ™[JNÂˆYˆ
+ˆLHˆL
+H[™SY\ÜØYÙTÚ[\Ø[˜Ù[
+
+NÂˆBˆ_BˆÛÛÛ^Y[O^ÊJHOˆÈKœ™]™[Y˜][
+
+NÈÜ[“Y\ÜØYÙPÛÛ^Y[JÓ\ÙËšYÙ][[Y[ÛÛ^Y[P[˜ÚÜŠK˜İ\œ™[\™Ù]
+JNÈ_BˆÛ\ÜÓ˜[YOH˜Ú]\Ş\Ë[\ÙÈ™[]]™Hİ\œÛÜ‹\Ú[\ˆ‚ˆË‹‹ŠXİ]™SY\ÜØYÙRYOOHÓ\ÙËšYÈÈ™]KXXİ]™HˆˆˆHˆßJ_Bˆ‚ˆÙ›Ü›X]Ş\Ó\ÙÑ›Ü•RJÓ\ÙË˜ÛÛ[Ó\ÙÊ_BˆØXİ]™SY\ÜØYÙRYOOHÓ\ÙËšY	‰ˆ™[™\‘[]SÛ›PÛÛ^Y[J
+
+HOˆ[™Q[]SY\ÜØYÙJÙ]İÜ™YXİ[Û“Y\ÜØYÙRY
+Ó\ÙÊJJ_BˆÙ]‚ˆÙ]‚ˆ
+Hˆ
+ˆ]ˆÙ^O^ÙÓ\ÙËšYHÛ\ÜÓ˜[YO^Ø›^	ÙÓ\ÙËœ›ÛHOOH\Ù\ˆˆÈš\İYKY[™ˆˆš\İYK\İ\ŸXO‚ˆ]ˆÛ\ÜÓ˜[YOH™›^›^XÛÛZ[‹]ËLX^]ËVÍÍIWH‚ˆÜÙ\ÜÚ[Û‹š\ÑÜ›İ\	‰ˆÓ\ÙËœ›ÛHOOH\Ù\ˆˆ	‰ˆ
+ˆÜ[ˆÛ\ÜÓ˜[YOH˜Ú]YÜ›İ\\Ù[™\‹[˜[YHÙÓ\ÙËœÙ[™\“˜[YHˆŸ^Ü™[™\‘Ü›İ\›ÛP˜YÙJÓ\ÙËœÙ[™\Ú\˜Xİ\’Y
+_OÜÜ[‚ˆ
+_Bˆ]‚ˆÛ”Ú[\‘İÛ^ÊJHOˆÈKœİÜ›ÜYØ][ÛŠ
+NÈ[™SY\ÜØYÙTÚ[\‘İÛŠKÓ\ÙËšY
+NÈ_BˆÛ”Ú[\•\^ÊJHOˆ[™SY\ÜØYÙTÚ[\•\
+J_BˆÛ”Ú[\Ø[˜Ù[^Ú[™SY\ÜØYÙTÚ[\Ø[˜Ù[BˆÛ”Ú[\“X]™O^Ú[™SY\ÜØYÙTÚ[\Ø[˜Ù[BˆÛ”Ú[\“[İ™O^ÊJHOˆÂˆYˆ
+İ\ÜÔ™Y‹˜İ\œ™[
+HÂˆÛÛœİHX]˜XœÊK˜ÛY[Hİ\ÜÔ™Y‹˜İ\œ™[
+NÂˆÛÛœİHHX]˜XœÊK˜ÛY[HHİ\ÜÔ™Y‹˜İ\œ™[JNÂˆYˆ
+ˆLHˆL
+H[™SY\ÜØYÙTÚ[\Ø[˜Ù[
+
+NÂˆBˆ_BˆÛÛÛ^Y[O^ÊJHOˆÈKœ™]™[Y˜][
+
+NÈÜ[“Y\ÜØYÙPÛÛ^Y[JÓ\ÙËšYÙ][[Y[ÛÛ^Y[P[˜ÚÜŠK˜İ\œ™[\™Ù]
+JNÈ_BˆÛ\ÜÓ˜[YO^ØÚ]XX˜›K\›ÛKIÙÓ\ÙËœ›Û_HKLˆLÈ›İ[™Y[Yœ™XZË]ÛÜ™È™[]]™Hİ\œÛÜ‹\Ú[\˜BˆË‹‹ŠXİ]™SY\ÜØYÙRYOOHÓ\ÙËšYÈÈ™]KXXİ]™HˆˆˆHˆßJ_Bˆ‚ˆš[[™İX[^›ØÚÂˆ^^ÙÓ\ÙË™\Ü^T›Ú™XİYÈÓ\ÙË˜ÛÛ[ˆ™[™\‘\Ü^U^
+Ó\ÙË˜ÛÛ[Ó\ÙËœ›ÛHOOH\Ù\ˆˆÈHˆ‹˜[ÙJ_Bˆ[ÙOH›X\šÙİÛˆ‚ˆY˜][^[™Y^ÜÙ\ÜÚ[Û‹˜ÛÛ\ÙPš[[™İX[˜[œÛ][ÛˆOOH˜[ÙHÈ˜[ÙHˆY_BˆÏ‚ˆØXİ]™SY\ÜØYÙRYOOHÓ\ÙËšY	‰ˆ™[™\X˜›PÛÛ^Y[JÓ\ÙËÈ[İÓ][TÙ[Xİˆ˜[ÙHJ_BˆÙ]‚ˆÙ]‚ˆÙ]‚ˆ
+Bˆ
+J_BˆÙ]‚ˆ
+_BˆÙ]‚ˆ
+NÂˆB‚ˆËÈÚÚ\Y\ÜØYÙ\È]™[Û™ÈÈH›ÚXÙHØ[Ü›İ\
+™[™\™YX›İ™JBˆYˆ
+›ÚXÙPØ[Ü›İ\Ë›Y[X™\”Ù]š\ÊY
+JH™]\›ˆ[Â‚ˆÛÛœİ™[™\“\ÙÈH\ÙÎÂˆÛÛœİ\ÔŞ\İ[R[œİXİ[ÛˆH\ÔŞ\İ[R[œİXİ[Û“Y\ÜØYÙJ™[™\“\ÙÊNÂˆÛÛœİX˜›Q\Ü^PÛÛ[HÙ]Y\ÜØYÙQ\Ü^PÛÛ[
+™[™\“\ÙÊNÂˆ]™]•š\ÚX›S\ÙÎˆ™[™\Ú]Y\ÜØYÙH[H[Âˆ›Üˆ
+]™]’YHYHNÈ™]’YHÈ™]’YOHJHÂˆYˆ
+›ÚXÙPØ[Ü›İ\Ë›Y[X™\”Ù]š\Ê™]’Y
+JHÛÛ[YNÂˆÛÛœİØ[™Y]HH›Ú™XİYY\ÜØYÙ\ÖÜ™]’YNÂˆÛÛœİØ[™Y]Q\Ü^PÛÛ[HÙ]Y\ÜØYÙQ\Ü^PÛÛ[
+Ø[™Y]JNÂˆYˆ
+\ÒY[Ú]›İÓY\ÜØYÙJØ[™Y]KØ[™Y]Q\Ü^PÛÛ[
+JHÛÛ[YNÂˆ™]•š\ÚX›S\ÙÈHØ[™Y]NÂˆœ™XZÎÂˆBˆÛÛœİÚİÕ[YHHÚİ[ÚİÕ[Y\İ[\
+\ÙË˜Ü™X]Y]™]•š\ÚX›S\ÙÏË˜Ü™X]Y]ÏÈ[
+NÂˆÛÛœİ\ĞÛÛœÙXİ]]™HH™]•š\ÚX›S\ÙÈ	‰ˆ\ÚİÕ[YH	‰ˆZT›ÛJ™]•š\ÚX›S\ÙÊHOOHZT›ÛJ\ÙÊH	‰ˆZT›ÛJ\ÙÊHOOHœŞ\İ[H‚ˆ	‰ˆ
+\Ù\ÜÚ[Û‹š\ÑÜ›İ\™]•š\ÚX›S\ÙËœÙ[™\Ú\˜Xİ\’YOOH\ÙËœÙ[™\Ú\˜Xİ\’Y
+NÂˆËÈYHX˜›\ÈÚ]›Èš\ÚX›HÛÛ[
+[\H^İš\Y]\ÚXÈYÜË]ËŠBˆÛÛœİš\ÚX›PÛÛ[HÙ]Ú]›İÕš\ÚX›PÛÛ[
+™[™\“\ÙËX˜›Q\Ü^PÛÛ[
+NÂˆÛÛœİ\Õš\İX[YYXHH\ĞÚ]š\İX[YYXJ™[™\“\ÙÊNÂˆÛÛœİY[‘[\HH\ÒY[Ú]›İÓY\ÜØYÙJ™[™\“\ÙËX˜›Q\Ü^PÛÛ[
+NÂˆÛÛœİ\Ñ›ÛY[™[HHJ™[™\“\ÙËœİ]\Ô[™[™[™\“\ÙËš[›™\“[Û›ÛÙİYJNÂˆËÈ9a¡yoàùchyâaùcê¹leyé.¹§+:/k¹k§ºfaz/¤ùaî¹æ¡9â­¹  y`/;ï&ù¥éù¥l9£k¹¬¨y§"Hœ™\Úİ]U˜[Y\È9¥í¹fçº` 9b,9d"9nm¹oêùáiÂˆÛÛœİØ\™İ]U˜[Y\ÈH\ÙË™œ™\Úİ]U˜[Y\ÈÏÈ\ÙËœİ]U˜[Y\ÎÂˆÛÛœİ\ÔÚ[[İYÚH]š\ÚX›PÛÛ[	‰ˆ\™[™\“\ÙË›YYXU\H	‰ˆ\Ñ›ÛY[™[	‰ˆ\ÙËœ›ÛHOOH\Ù\ˆÂˆÛÛœİ\Ôİ[™[Û™R[™]šY]ÈH\™[™\“\ÙË›YYXU\H	‰ˆ\Ôİ[™[Û™R[™]šY]ĞÛÛ[
+X˜›Q\Ü^PÛÛ[
+NÂˆÛÛœİ\ÓYYXPX˜›HH
+™[™\“\ÙË›YYXU\H	‰ˆÒUÓQQPWĞ•P“WÕTTËš\Ê™[™\“\ÙË›YYXU\JJH\Ôİ[™[Û™R[™]šY]ÎÂˆËÈ[\HX˜›Nˆ›Èš\ÚX›HÛÛ[S‘›Èš\İX[YYXHS‘›È›ÛY[™[‚ˆÛÛœİ\Ñ[\PX˜›HHZ\Õš\İX[YYXH	‰ˆ]š\ÚX›PÛÛ[	‰ˆZT›ÛJ\ÙÊHOOHœŞ\İ[Hˆ	‰ˆZ\Ñ›ÛY[™[ÂˆÛÛœİÙ[XİX›TİÜ™YYHÙ]Ù[XİX›TİÜ™YY\ÜØYÙRY
+\ÙÊNÂˆÛÛœİ\Ó][TÙ[XİX›HH\Ó][TÙ[Xİ[ÙH	‰ˆH\Ù[XİX›TİÜ™YY	‰ˆZY[‘[\NÂˆÛÛœİ\Ó][TÙ[XİYHH\Ù[XİX›TİÜ™YY	‰ˆÙ[XİYY\ÜØYÙRYËš\ÊÙ[XİX›TİÜ™YY
+NÂˆÛÛœİ][TÙ[XİÜ˜\\”›ÜÈH\Ó][TÙ[XİX›HÈÂˆÛÛXÚĞØ\\™Nˆ
+Nˆ™XXİ“[İ\ÙQ]™[
+HOˆÂˆKœ™]™[Y˜][
+
+NÂˆKœİÜ›ÜYØ][ÛŠ
+NÂˆÙÙÛS][TÙ[XİYY\ÜØYÙJÙ[XİX›TİÜ™YYJNÂˆKˆ™]K[][K\Ù[Xİˆˆ‹ˆ‹‹Š\Ó][TÙ[XİYÈÈ™]K\Ù[XİYˆˆˆHˆßJKˆHˆßNÂ‚ˆ™]\›ˆ
+ˆ]ˆÙ^O^Û\ÙËšYHÛ\ÜÓ˜[YOH™›^›^XÛÛØ\MˆË‹‹ŠY[‘[\HÈÈİ[NˆÈ\Ü^Nˆ››Û™HˆHHˆßJ_HË‹‹Š\Ñ[\PX˜›H	‰ˆ™[™\“\ÙËœ™X\ÛÛš[™Õ^	‰ˆ\ÚİÕ[YHÈÈ™]K\™X\ÛÛš[™Ë[Û›HˆˆˆHˆßJ_O‚ˆÜÚİÕ[YH	‰ˆ
+ˆ]ˆÛ\ÜÓ˜[YOH™›^\İYKXÙ[\ˆËY[‚ˆÜ[ˆÛ\ÜÓ˜[YOH˜Ú]\Ş\Ë[\ÙÈKVÌœHLˆ›İ[™YÙ[Xİ[›Û™H‚ˆÙ›Ü›X]Ú]ZU[YJ\ÙË˜Ü™X]Y]
+_BˆÜÜ[‚ˆÙ]‚ˆ
+_BˆËÊˆ9 'yîí:dïº)é¹cäy§h{ï"Û]YH\:hã¹¨/;ï"{ï&¹à®yaîù¢dùo 9n¥z`ê9o.yê¥È
+‹ßBˆÜ™[™\“\ÙËœ™X\ÛÛš[™Õ^	‰ˆ\ÙËœ›ÛHOOH\Ù\ˆˆ	‰ˆZT›ÛJ\ÙÊHOOHœŞ\İ[Hˆ	‰ˆ
+ˆ]ˆÛ\ÜÓ˜[YOH˜Ú][\ÙË]Ü˜\\ˆˆ]K\›ÛO^İZT›ÛJ\ÙÊ_H]K\™X\ÛÛš[™Ë\›İÏHˆˆİ[O^ŞÈX\™Ú[›İÛNˆN_O‚ˆ]ˆÛ\ÜÓ˜[YOHËVÍHÚš[šËLˆÏ‚ˆ]Û‚ˆ\OH˜]Ûˆ‚ˆÛ\ÜÓ˜[YOH˜Ú]\™X\ÛÛš[™Ë]šYÙÙ\ˆ‚ˆÛÛXÚÏ^ÊJHOˆÈKœİÜ›ÜYØ][ÛŠ
+NÈÙ]™X\ÛÛš[™ÔÚY]^
+™[™\“\ÙËœ™X\ÛÛš[™Õ^[
+NÈ_Bˆ\šXK[X™[H¹§éyç"ù 'z  ú/áùê"È‚ˆ‚ˆÛØÚÈÚ^™O^ÌLßHİ›ÚÙUÚY^ÌKHÛ\ÜÓ˜[YOH˜Ú]\™X\ÛÛš[™Ë]šYÙÙ\‹ZXÛÛˆˆÏ‚ˆÜ[ˆÛ\ÜÓ˜[YOH˜Ú]\™X\ÛÛš[™Ë]šYÙÙ\‹]^Ü™X\ÛÛš[™Ô™]šY]Ó[™J™[™\“\ÙËœ™X\ÛÛš[™Õ^
+_OÜÜ[‚ˆÚ]œ›Û”šYÚÚ^™O^ÌMHİ›ÚÙUÚY^ÌKHÛ\ÜÓ˜[YOH˜Ú]\™X\ÛÛš[™Ë]šYÙÙ\‹ZXÛÛˆˆÏ‚ˆØ]Û‚ˆÙ]‚ˆ
+_Bˆ]‚ˆY^ØY\ÜØYÙKIÛ\ÙËšYXBˆÛ\ÜÓ˜[YOH˜Ú][\ÙË]Ü˜\\ˆ‚ˆ]K\›ÛO^İZT›ÛJ\ÙÊ_BˆË‹‹Š\Ñ[\PX˜›H	‰ˆ™[™\“\ÙËœ™X\ÛÛš[™Õ^ÈÈ™]K\™X\ÛÛš[™ËY[\HˆˆˆHˆßJ_BˆË‹‹Š\ĞÛÛœÙXİ]]™HÈÈ™]KXÛÛœÙXİ]]™HˆˆˆHˆßJ_BˆË‹‹ŠXİ]™SY\ÜØYÙRYOOH\ÙËšYÈÈ™]KXXİ]™HˆˆˆHˆßJ_BˆË‹‹ŠYÚYÚY\ÜØYÙRYOOH\ÙËšYÈÈ™]KZYÚYÚˆˆˆHˆßJ_BˆË‹‹›][TÙ[XİÜ˜\\”›ÜßBˆ‚ˆÚ\Ó][TÙ[XİX›H	‰ˆ
+ˆÜ[ˆÛ\ÜÓ˜[YOH˜Ú][][K\Ù[XİXÚXÚÈˆ\šXKZY[HYH‚ˆÚ\Ó][TÙ[XİY	‰ˆÚXÚÈÚ^™O^ÌMHİ›ÚÙUÚY^Ì‹_HÏŸBˆÜÜ[‚ˆ
+_BˆİZT›ÛJ\ÙÊHOOHœŞ\İ[HˆÈ
+ˆ]‚ˆÛ”Ú[\‘İÛ^ÊJHOˆÈKœİÜ›ÜYØ][ÛŠ
+NÈ[™SY\ÜØYÙTÚ[\‘İÛŠK\ÙËšY
+NÈ_BˆÛ”Ú[\•\^ÊJHOˆ[™SY\ÜØYÙTÚ[\•\
+J_BˆÛ”Ú[\Ø[˜Ù[^Ú[™SY\ÜØYÙTÚ[\Ø[˜Ù[BˆÛ”Ú[\“X]™O^Ú[™SY\ÜØYÙTÚ[\Ø[˜Ù[BˆÛ”Ú[\“[İ™O^ÊJHOˆÂˆYˆ
+İ\ÜÔ™Y‹˜İ\œ™[
+HÂˆÛÛœİHX]˜XœÊK˜ÛY[Hİ\ÜÔ™Y‹˜İ\œ™[
+NÂˆÛÛœİHHX]˜XœÊK˜ÛY[HHİ\ÜÔ™Y‹˜İ\œ™[JNÂˆYˆ
+ˆLHˆL
+H[™SY\ÜØYÙTÚ[\Ø[˜Ù[
+
+NÂˆBˆ_BˆÛÛÛ^Y[O^ÊJHOˆÈKœ™]™[Y˜][
+
+NÈÜ[“Y\ÜØYÙPÛÛ^Y[J\ÙËšYÙ][[Y[ÛÛ^Y[P[˜ÚÜŠK˜İ\œ™[\™Ù]
+JNÈ_BˆÛ\ÜÓ˜[YO^Ú\ÔŞ\İ[R[œİXİ[Û‚ˆÈ˜Ú]\Ş\İ[KZ[œİXİ[Û‹XØ\™™[]]™Hİ\œÛÜ‹\Ú[\ˆ‚ˆˆÚ]\Ş\Ë[\ÙÈœ™XZËX[X^]ËVÎL	WH™[]]™Hİ\œÛÜ‹\Ú[\‰ÂˆËÈ:j¬9kd9¥àyæo{ï&¹ëbzj¬9kd:$/yk¦¹a£y­èyai{ï#:`oùacybiú`#ùà®y¥lˆ\ÙË˜ÛÛ[œİ\ÕÚ]
+¼'ã¬ˆ9£­ùaî¹.¡ˆŠH	‰ˆ]K››İÊ
+HH™]È]J\ÙË˜Ü™X]Y]
+K™Ù][YJ
+HŒˆÈˆXÙKX\ÚYK\™]™X[‚ˆˆˆ‚ˆXBˆË‹‹ŠXİ]™SY\ÜØYÙRYOOH\ÙËšYÈÈ™]KXXİ]™HˆˆˆHˆßJ_Bˆ‚ˆÚ\ÔŞ\İ[R[œİXİ[ÛˆÈ
+ˆŞ\İ[R[œİXİ[ÛØ\™ÛÛ[^Û\ÙË˜ÛÛ[HÏ‚ˆ
+Hˆ\ÙË›YYXU\HOOH›Y[[ÜWİÜš]WÜ™\]Y\İˆÈ
+ˆY[[ÜUÜš]T™\]Y\İØ\™ˆ\ÙÏ^Û\ÙßBˆÛ\›İ™O^Ú[™P\›İ™SY[[ÜUÜš]_BˆÛ’YÛ›Ü™O^Ú[™RYÛ›Ü™SY[[ÜUÜš]_BˆÏ‚ˆ
+Hˆ
+ˆ‚ˆÛ\ÙË›YYXU\HOOHœÚÙH‚ˆÈ
+
+
+HOˆÂˆÛÛœİÙ[™\ˆH\ÙË›YYXQ]OËœÚÙTÙ[™\ˆ
+\ÙËœ›ÛHOOH\Ù\ˆˆÈ¹/hˆˆ
+Ú\˜Xİ\Ë›˜[YH¹kîy¥®HŠJNÂˆÛÛœİ\™Ù]H\ÙË›YYXQ]OËœÚÙU\™Ù]
+\ÙËœ›ÛHOOH\Ù\ˆˆÈ
+Ú\˜Xİ\Ë›˜[YH¹kîy¥®HŠHˆ¹/hŠNÂˆÛÛœİ\Ü^TÙ[™\ˆHÙ[™\ˆOOH\Ù\’Y[]OË›˜[YHÈ¹/hˆˆÙ[™\ÂˆÛÛœİ\Ü^U\™Ù]H\™Ù]OOH\Ù\’Y[]OË›˜[YHÈ¹/hˆˆ\™Ù]Âˆ™]\›ˆ	Ù\Ü^TÙ[™\ŸH9¢ãy.¡¹¢ãH	Ù\Ü^U\™Ù]XÂˆJJ
+Bˆˆ›Ü›X]Ş\Ó\ÙÑ›Ü•RJ\ÙË˜ÛÛ[\ÙÊ_BˆÏ‚ˆ
+_BˆØXİ]™SY\ÜØYÙRYOOH\ÙËšY	‰ˆ™[™\”Ş\İ[PÛÛ^Y[J\ÙÊ_BˆÙ]‚ˆ
+Hˆ\ÙËš\Ô™]˜XİYÈ
+ˆ]‚ˆÛ”Ú[\‘İÛ^ÊJHOˆÈKœİÜ›ÜYØ][ÛŠ
+NÈ[™SY\ÜØYÙTÚ[\‘İÛŠK\ÙËšY
+NÈ_BˆÛ”Ú[\•\^ÊJHOˆ[™SY\ÜØYÙTÚ[\•\
+J_BˆÛ”Ú[\Ø[˜Ù[^Ú[™SY\ÜØYÙTÚ[\Ø[˜Ù[BˆÛ”Ú[\“X]™O^Ú[™SY\ÜØYÙTÚ[\Ø[˜Ù[BˆÛ”Ú[\“[İ™O^ÊJHOˆÂˆYˆ
+İ\ÜÔ™Y‹˜İ\œ™[
+HÂˆÛÛœİHX]˜XœÊK˜ÛY[Hİ\ÜÔ™Y‹˜İ\œ™[
+NÂˆÛÛœİHHX]˜XœÊK˜ÛY[HHİ\ÜÔ™Y‹˜İ\œ™[JNÂˆYˆ
+ˆLHˆL
+H[™SY\ÜØYÙTÚ[\Ø[˜Ù[
+
+NÂˆBˆ_BˆÛÛÛ^Y[O^ÊJHOˆÈKœ™]™[Y˜][
+
+NÈÜ[“Y\ÜØYÙPÛÛ^Y[J\ÙËšYÙ][[Y[ÛÛ^Y[P[˜ÚÜŠK˜İ\œ™[\™Ù]
+JNÈ_BˆÛ\ÜÓ˜[YOH˜Ú]\Ş\Ë[\ÙÈ^X]]È™[]]™Hİ\œÛÜ‹\Ú[\ˆ‚ˆË‹‹ŠXİ]™SY\ÜØYÙRYOOH\ÙËšYÈÈ™]KXXİ]™HˆˆˆHˆßJ_Bˆ‚ˆÛ\ÙËœ›ÛHOOH\Ù\ˆˆÈ¹/hˆˆ
+Ú\˜Xİ\Ë›˜[YH¹kîy¥®HŠ_y¤©9fç¹.¡¹. 9§hy­¢9 kÂˆØXİ]™SY\ÜØYÙRYOOH\ÙËšY	‰ˆ™[™\‘[]SÛ›PÛÛ^Y[J
+
+HOˆ[™Q[]SY\ÜØYÙJÙ]İÜ™YXİ[Û“Y\ÜØYÙRY
+\ÙÊJK
+
+HOˆİ\][TÙ[Xİœ›ÛSY\ÜØYÙJ\ÙÊJ_BˆÙ]‚ˆ
+Hˆ
+ˆ‚ˆÛ\ÙËœ›ÛHOOH\Ù\ˆˆ	‰ˆZ\Ñ[\PX˜›H	‰ˆ
+ˆ\ÔÚ[[İYÚÈ
+ˆÊˆÚ[[
+È[›™\ˆ[Û›ÛÙİYNˆ›È]˜]\‹\İX\
+‹Âˆ]‚ˆÛ”Ú[\‘İÛ^ÊJHOˆÈKœİÜ›ÜYØ][ÛŠ
+NÈ[™SY\ÜØYÙTÚ[\‘İÛŠK\ÙËšY
+NÈ_BˆÛ”Ú[\•\^ÊJHOˆ[™SY\ÜØYÙTÚ[\•\
+J_BˆÛ”Ú[\Ø[˜Ù[^Ú[™SY\ÜØYÙTÚ[\Ø[˜Ù[BˆÛ”Ú[\“X]™O^Ú[™SY\ÜØYÙTÚ[\Ø[˜Ù[BˆÛ”Ú[\“[İ™O^ÊJHOˆÂˆYˆ
+İ\ÜÔ™Y‹˜İ\œ™[
+HÂˆÛÛœİHX]˜XœÊK˜ÛY[Hİ\ÜÔ™Y‹˜İ\œ™[
+NÂˆÛÛœİHHX]˜XœÊK˜ÛY[HHİ\ÜÔ™Y‹˜İ\œ™[JNÂˆYˆ
+ˆLHˆL
+H[™SY\ÜØYÙTÚ[\Ø[˜Ù[
+
+NÂˆBˆ_BˆÛÛÛ^Y[O^ÊJHOˆÈKœ™]™[Y˜][
+
+NÈÜ[“Y\ÜØYÙPÛÛ^Y[J\ÙËšYÙ][[Y[ÛÛ^Y[P[˜ÚÜŠK˜İ\œ™[\™Ù]
+JNÈ_BˆÛÛXÚÏ^ÊJHOˆÂˆYˆ
+Xİ]™SY\ÜØYÙRYOOH\ÙËšY
+H™]\›ÂˆKœİÜ›ÜYØ][ÛŠ
+NÂˆÙ]^[™Y[šÚ[™ÒY
+™]ˆOˆ™]ˆOOH\ÙËšYÈ[ˆ\ÙËšY
+NÂˆ_BˆÛ\ÜÓ˜[YOH˜Ú][[Û›ÛÙİYKZX\›^][\ËXÙ[\ˆ\İYKXÙ[\ˆÚš[šËLËVÍHVÌH™[]]™Hİ\œÛÜ‹\Ú[\ˆ‚ˆ]O^ÜÙ\ÜÚ[Û‹š\ÑÜ›İ\È	Û\ÙËœÙ[™\“˜[YH¹ï©9¢$9dfŸyæ¡9¢¦9cè9â­¹  Xˆ¹§éyç"ù¢¦9cè9â­¹  HŸBˆ\šXK[X™[^ÜÙ\ÜÚ[Û‹š\ÑÜ›İ\È	Û\ÙËœÙ[™\“˜[YH¹ï©9¢$9dfŸyæ¡9¢¦9cè9â­¹  Xˆ¹§éyç"ù¢¦9cè9â­¹  HŸBˆË‹‹ŠXİ]™SY\ÜØYÙRYOOH\ÙËšYÈÈ™]KXXİ]™HˆˆˆHˆßJ_Bˆ‚ˆÜ[ˆÛ\ÜÓ˜[YOH˜Ú][[Û›ÛÙİYKZX\ËLNXY[™Ë[›Û™H[›[™KX›ØÚÈˆË‹‹Š^[™Y[Û›ÛÙİYRYOOH\ÙËšYÈÈ™]KXXİ]™HˆˆˆHˆßJ_Oİ™ÈšY]Ğ›ŞHŒMˆMˆˆÚYHŒNˆZYÚHŒNˆİ[O^ŞÙ\Ü^Nˆ˜›ØÚÈŸ_O]H“NMËM‹MM‹NÌL‹HKKMËKMHˆH‹HKPÎH‹HKHˆLHˆL‹HˆMËHM˜ÌMˆMˆˆˆš[H˜İ\œ™[ÛÛÜˆ‹ÏÜİ™ÏÜÜ[‚ˆØXİ]™SY\ÜØYÙRYOOH\ÙËšY	‰ˆ™[™\‘[]SÛ›PÛÛ^Y[J
+
+HOˆ[™Q[]SY\ÜØYÙJÙ]İÜ™YXİ[Û“Y\ÜØYÙRY
+\ÙÊJK
+
+HOˆİ\][TÙ[Xİœ›ÛSY\ÜØYÙJ\ÙÊJ_BˆÙ]‚ˆ
+Hˆ
+ˆ]ˆÛ\ÜÓ˜[YOH˜Ú][\ÙËX]˜]\ˆ›^›^XÛÛ][\ËXÙ[\ˆØ\LHÚš[šËL‚ˆÊ
+
+HOˆÂˆÛÛœİÙ[™\Ú\ˆHÙ\ÜÚ[Û‹š\ÑÜ›İ\	‰ˆ\ÙËœÙ[™\Ú\˜Xİ\’YˆÈÜ›İ\Ú\“X\™Ù]
+\ÙËœÙ[™\Ú\˜Xİ\’Y
+HÚ\˜Xİ\‚ˆˆÚ\˜Xİ\Âˆ™]\›ˆ
+ˆ‚ˆ]ˆÛ‘İX›PÛXÚÏ^Ê
+HOˆÂˆÛÛœİ\™Ù]Ú\ˆHÙ\ÜÚ[Û‹š\ÑÜ›İ\	‰ˆ\ÙËœÙ[™\Ú\˜Xİ\’YˆÈÜ›İ\Ú\“X\™Ù]
+\ÙËœÙ[™\Ú\˜Xİ\’Y
+HÚ\˜Xİ\‚ˆˆÚ\˜Xİ\ÂˆYˆ
+\™Ù]Ú\ŠHÙ[™šXÚY\ÜØYÙJœÚÙH‹ÈÚÙU\™Ù]ˆ\™Ù]Ú\‹›˜[YHJNÂˆ_HÛ\ÜÓ˜[YOHËVÍHVÍH›İ[™YVÌŒH™ËVİ˜\ŠKXËZ[œ]
+WHİ™\™›İËZY[ˆİ\œÛÜ‹\Ú[\ˆ‚ˆÜÙ[™\Ú\Ë˜]˜]\ˆÈ
+ˆ[YÈÜ˜Ï^ÜÙ[™\Ú\‹˜]˜]\ŸHÛ\ÜÓ˜[YOHËY[Y[Øš™XİXÛİ™\ˆˆ[HˆˆÏ‚ˆ
+Hˆ
+ˆÚ]˜[˜XÚĞ]˜]\ˆÏ‚ˆ
+_BˆÙ]‚ˆÏ‚ˆ
+NÂˆJJ
+_BˆÙ]‚ˆ
+Bˆ
+_BˆÈZ\ÔÚ[[İYÚ	‰ˆZ\Ñ[\PX˜›H	‰ˆ]‚ˆÛ\ÜÓ˜[YO^ØÚ][\ÙËXÛÛ[]Ü˜\›^›^XÛÛZ[‹]ËLX^]ËVÍÌ	WH	Ú\Ôİ[™[Û™R[™]šY]ÈÈ˜Ú][\ÙËXÛÛ[]Ü˜\Z[ˆˆˆŸXBˆË‹‹Š\Ôİ[™[Û™R[™]šY]ÈÈÈ™]KZ[ˆYHˆHˆßJ_Bˆ‚ˆÜÙ\ÜÚ[Û‹š\ÑÜ›İ\	‰ˆ\ÙËœ›ÛHOOH\Ù\ˆˆ	‰ˆ
+ˆÜ[ˆÛ\ÜÓ˜[YOH˜Ú]YÜ›İ\\Ù[™\‹[˜[YHÛ\ÙËœÙ[™\“˜[YHˆŸ^Ü™[™\‘Ü›İ\›ÛP˜YÙJ\ÙËœÙ[™\Ú\˜Xİ\’Y
+_OÜÜ[‚ˆ
+_Bˆ]‚ˆË‹‹ŠY][™ÓY\ÜØYÙRYOOH\ÙËšYÈÂˆÛ”Ú[\‘İÛˆ
+Nˆ™XXİ”Ú[\‘]™[
+HOˆÈKœİÜ›ÜYØ][ÛŠ
+NÈ[™SY\ÜØYÙTÚ[\‘İÛŠK\ÙËšY
+NÈKˆÛ”Ú[\•\ˆ
+Nˆ™XXİ”Ú[\‘]™[
+HOˆ[™SY\ÜØYÙTÚ[\•\
+JKˆÛ”Ú[\Ø[˜Ù[ˆ[™SY\ÜØYÙTÚ[\Ø[˜Ù[ˆÛ”Ú[\“X]™Nˆ[™SY\ÜØYÙTÚ[\Ø[˜Ù[ˆÛ”Ú[\“[İ™Nˆ
+Nˆ™XXİ”Ú[\‘]™[
+HOˆÂˆYˆ
+İ\ÜÔ™Y‹˜İ\œ™[
+HÂˆÛÛœİHX]˜XœÊK˜ÛY[Hİ\ÜÔ™Y‹˜İ\œ™[
+NÂˆÛÛœİHHX]˜XœÊK˜ÛY[HHİ\ÜÔ™Y‹˜İ\œ™[JNÂˆYˆ
+ˆLHˆL
+H[™SY\ÜØYÙTÚ[\Ø[˜Ù[
+
+NÂˆBˆKˆÛÛÛ^Y[Nˆ
+Nˆ™XXİ“[İ\ÙQ]™[
+HOˆÈKœ™]™[Y˜][
+
+NÈÜ[“Y\ÜØYÙPÛÛ^Y[J\ÙËšYÙ][[Y[ÛÛ^Y[P[˜ÚÜŠK˜İ\œ™[\™Ù]
+JNÈKˆHˆßJ_BˆÛ\ÜÓ˜[YO^ØÚ]XX˜›K\›ÛKIÛ\ÙËœ›Û_H	Ú\ÓYYXPX˜›HÈ˜Ú]XX˜›K[YYXHˆˆˆŸH	Ú\Ôİ[™[Û™R[™]šY]ÈÈ˜Ú]XX˜›KZ[\™]šY]ÈˆˆˆŸH	Ü™[™\“\ÙË›YYXU\HOOH›]\ÚX×ÜÚ\™HˆÈ˜Ú]XX˜›K[]\ÚXË\Ú\™HˆˆˆŸH	Ü™[™\“\ÙË›YYXU\HOOH™ÚYˆ™[™\“\ÙË›YYXU\HOOHš[XYÙHˆ\Ôİ[™[Û™R[™]šY]ÈÈœ›İ[™Y[›Û™Hˆˆœ›İ[™Y[YŸHœ™XZË]ÛÜ™È™[]]™Hİ\œÛÜ‹\Ú[\ˆÙ[Xİ[›Û™XBˆİ[O^Ú\Ôİ[™[Û™R[™]šY]ÈÈÕS‘SÓ‘WĞĞT‘Ğ•P“WÔÕSHˆ[™Yš[™YBˆ]K]ZO^Û\ÙËœ›ÛHOOH\Ù\ˆˆÈ˜X˜›K]\Ù\ˆˆˆ˜X˜›KX›İŸBˆ]K[\ÙËZY^Û\ÙËšYBˆË‹‹ŠXİ]™SY\ÜØYÙRYOOH\ÙËšYÈÈ™]KXXİ]™HˆˆˆHˆßJ_Bˆ‚ˆËÊˆY\ÜØYÙHXİ[ÛœÈÜ\
+‹ßBˆØXİ]™SY\ÜØYÙRYOOH\ÙËšY	‰ˆ™[™\X˜›PÛÛ^Y[J\ÙÊ_B‚ˆY\ÜØYÙPX˜›Bˆ\ÙÏ^Ü™[™\“\ÙßBˆ\Ü^PÛÛ[^Û\ÙË™\Ü^T›Ú™XİYÈ[™Yš[™YˆX˜›Q\Ü^PÛÛ[BˆÚ\“˜[YO^ØÚ\˜Xİ\Ë›˜[Y_Bˆ\Ù\“˜[YO^İ\Ù\’Y[]OË›˜[YH¹/hŸBˆÜ›İ\Ú^™O^ÜÙ\ÜÚ[Û‹š\ÑÜ›İ\È
+Ù\ÜÚ[Û‹œ\XÚ\[YÏË›[™İ
+H
+È
+Ù\ÜÚ[Û‹š\ÔÜXİ]ÜˆÈˆJHˆ[™Yš[™YBˆÛ”ÚİÑ]Z[^ÜÙ]YYXQ]Z[\ÙßBˆÚ\˜Xİ\’Y^Û\ÙËœÙ[™\Ú\˜Xİ\’YÙ\ÜÚ[Û‹˜ÛÛXİYBˆÛ•\]O^Ê\]Y
+HOˆÙ]Y\ÜØYÙ\Ê™]ˆOˆ™]‹›X\
+HOˆKšYOOH\]YšYÈ\]YˆJJ_BˆÛ”Ş\İ[SY\ÜØYÙO^Ê^
+HOˆÂˆÛÛœİŞ\Ó\ÙÈH\ÚÚ]Y\ÜØYÙJÂˆÙ\ÜÚ[Û’YˆÙ\ÜÚ[Û‹šYˆ›ÛNˆœŞ\İ[H‹ˆÛÛ[ˆ^ˆJNÂˆÙ]Y\ÜØYÙ\Ê™]ˆOˆË‹‹œ™]‹Ş\Ó\Ù×JNÂˆ_BˆÛ“]\ÚXÔ^O^Ú[™S]\ÚXĞØ\™^_BˆÛXİ[Û”Ù[Xİ^Ê^
+HOˆÚ]^[œ]™Y‹˜İ\œ™[Ë˜\[™^
+^
+_BˆY˜][˜[œÛ][Û‘^[™Y^ÜÙ\ÜÚ[Û‹˜ÛÛ\ÙPš[[™İX[˜[œÛ][ÛˆOOH˜[ÙHÈ˜[ÙHˆY_BˆÏ‚ˆÙ]‚ˆÙ]ŸBˆÛ\ÙËœ›ÛHOOH\Ù\ˆˆ	‰ˆZ\ÔÚ[[İYÚ	‰ˆZ\Ñ[\PX˜›H	‰ˆ\Ñ›ÛY[™[	‰ˆ
+ˆ]Û‚ˆÛÛXÚÏ^ÊJHOˆÈKœİÜ›ÜYØ][ÛŠ
+NÈÙ]^[™Y[šÚ[™ÒY
+™]ˆOˆ™]ˆOOH\ÙËšYÈ[ˆ\ÙËšY
+NÈ_BˆÛ\ÜÓ˜[YOH˜Ú][[Û›ÛÙİYKZX\™Ë[›Û™H›Ü™\‹[›Û™Hİ\œÛÜ‹\Ú[\ˆLHËLMXY[™Ë[›Û™HÙ[‹Y[™Úš[šËL[[Lˆ‚ˆË‹‹Š^[™Y[Û›ÛÙİYRYOOH\ÙËšYÈÈ™]KXXİ]™HˆˆˆHˆßJ_Bˆ]OH¹§éyç"ù¢¦9cè9â­¹  H‚ˆ\šXK[X™[H¹§éyç"ù¢¦9cè9â­¹  H‚ˆ‚ˆİ™ÈšY]Ğ›ŞHŒMˆMˆˆÚYHŒMˆZYÚHŒMˆİ[O^ŞÙ\Ü^Nˆ˜›ØÚÈŸ_O‚ˆ]H“NMËM‹MM‹NÌL‹HKKMËKMHˆH‹HKPÎH‹HKHˆLHˆL‹HˆMËHM˜ÌMˆMˆˆˆš[H˜İ\œ™[ÛÛÜˆ‹Ï‚ˆÜİ™Ï‚ˆØ]Û‚ˆ
+_BˆÛ\ÙËœ›ÛHOOH\Ù\ˆˆ	‰ˆZ\Ñ[\PX˜›H	‰ˆ
+ˆ]ˆÛ\ÜÓ˜[YOH˜Ú][\ÙËX]˜]\ˆËVÍHVÍH›İ[™YVÌŒH™ËVİ˜\ŠKXË\YÙKX›ÙKX™ÊWHÚš[šËL›^][\ËXÙ[\ˆ\İYKXÙ[\ˆİ™\™›İËZY[ˆ‚ˆİ\Ù\’Y[]OË˜]˜]\•\›È
+ˆ[YÈÜ˜Ï^İ\Ù\’Y[]K˜]˜]\•\›H[H“YHˆÛ\ÜÓ˜[YOHËY[Y[Øš™XİXÛİ™\ˆ›İ[™YVÌŒHˆÏ‚ˆ
+Hˆ
+ˆ\Ù\ˆÚ^™O^ÌŒHÛÛÜH˜\ŠKXË]^
+HˆÏ‚ˆ
+_BˆÙ]‚ˆ
+_BˆÏ‚ˆ
+_BˆÙ]‚ˆËÊˆ›ÚXÙHY\ÜØYÙNˆ^˜[œØÜš\[ÛˆX˜›H
+‹ßBˆÜ™[™\“\ÙË›YYXU\HOOH˜]Y[Èˆ	‰ˆ›ÚXÙU^YËš\Ê\ÙËšY
+H	‰ˆ™[™\“\ÙË›YYXQ]OË›X™[	‰ˆ
+ˆ]ˆÛ\ÜÓ˜[YO^ØÚ][\ÙË]Ü˜\\˜H]K\›ÛO^İZT›ÛJ\ÙÊ_Hİ[O^ŞÈX\™Ú[•ÜˆLLˆ_O‚ˆÛ\ÙËœ›ÛHOOH\Ù\ˆˆ	‰ˆ]ˆÛ\ÜÓ˜[YOHËVÍHÚš[šËLˆÏŸBˆ]ˆÛ\ÜÓ˜[YOH›ÚXÙK[\ÙË]^XX˜›H‚ˆš[[™İX[^›ØÚÂˆ^^Û\ÙË™\Ü^T›Ú™XİYÈ
+™[™\“\ÙË›YYXQ]OË›X™[ˆŠHˆ™[™\‘\Ü^U^
+™[™\“\ÙË›YYXQ]OË›X™[ˆ‹\ÙËœ›ÛHOOH\Ù\ˆˆÈHˆ‹˜[ÙJ_Bˆ[ÙOH›X\šÙİÛˆ‚ˆY˜][^[™Y^ÜÙ\ÜÚ[Û‹˜ÛÛ\ÙPš[[™İX[˜[œÛ][ÛˆOOH˜[ÙHÈ˜[ÙHˆY_BˆÏ‚ˆÙ]‚ˆÛ\ÙËœ›ÛHOOH\Ù\ˆˆ	‰ˆ]ˆÛ\ÜÓ˜[YOHËVÍHÚš[šËLˆÏŸBˆÙ]‚ˆ
+_BˆËÊˆ9â­¹  y¨#ûï&¹. 9o¢ú(î9®,¹§äûï#9.#yieù/¯ùb*z--9i%¹¨a»ï":!ê¹k¦¹.byª(yo#ù."ù.©9îæyå*9¢-ùæ¡9®,¹§äù.èùè {ï#ˆ9d)¹b&Hùâ­¹  y¨#×H9c§ù¥¡ùæí9£©z-lX\šÙİÛ‹ùa¡z eS;ï#:+ªHRH9æí9aî¹æ¡9chyâaú!ê¹mìyodùi%¹¨a»ï"xà ‚ˆ9â­¹  y`/:-çùa¡yoàùâë9æoz-l;ï"9åfyg*9/¯ùb*z--:aã;ï"{ï&ú/æz/k¹¬¨y§"ya¡yoàùâë9æoy¥í¹/¯ùb*z--9.#yaî¹ã¬;ï#ˆ9¥l9`/:(î9¥/¹g*9â­¹  y¨#ù."¹¥®xà ˆ
+‹ßBˆÚ\Ñ›ÛY[™[	‰ˆ^[™Y[Û›ÛÙİYRYOOH\ÙËšYˆ	‰ˆ
+™[™\“\ÙËœİ]\Ô[™[
+\™[™\“\ÙËš[›™\“[Û›ÛÙİYH	‰ˆØ\™İ]U˜[Y\È	‰ˆØ\™İ]U˜[Y\Ë›[™İˆ
+JH	‰ˆ
+ˆ]ˆÛ\ÜÓ˜[YOH˜Ú]\İ]\ËX˜\™H‚ˆÈ\™[™\“\ÙËš[›™\“[Û›ÛÙİYH	‰ˆØ\™İ]U˜[Y\È	‰ˆØ\™İ]U˜[Y\Ë›[™İˆ	‰ˆ
+ˆİ]U˜[Y\Ô[™[İ]U˜[Y\Ï^ØØ\™İ]U˜[Y\ßHÏ‚ˆ
+_BˆÜ™[™\“\ÙËœİ]\Ô[™[	‰ˆ
+ˆ\ÙËœİ]\Ô™YÚ[Û“[ÙHOOH˜İ\İÛHˆ	‰ˆİ]\Ô™YÚ[ÛÙ™Ëœ™[™\’[š[J
+HÈ
+ˆİ\İÛTİ]\Ñœ˜[YH[^Üİ]\Ô™YÚ[ÛÙ™Ëœ™[™\’[H˜]Ï^Ü™[™\“\ÙËœİ]\Ô[™[HÏ‚ˆ
+Hˆ
+ˆš[[™İX[^›ØÚÈ^^Û\ÙË™\Ü^T›Ú™XİYÈ™[™\“\ÙËœİ]\Ô[™[ˆ™[™\‘\Ü^U^
+™[™\“\ÙËœİ]\Ô[™[‹˜[ÙJ_H[ÙOH›X\šÙİÛˆˆY˜][^[™Y^ÜÙ\ÜÚ[Û‹˜ÛÛ\ÙPš[[™İX[˜[œÛ][ÛˆOOH˜[ÙHÈ˜[ÙHˆY_HÏ‚ˆ
+Bˆ
+_BˆÙ]‚ˆ
+_BˆËÊˆ[›™\ˆ[Û›ÛÙİYHØ\™
+İXÚŞH›İHÈ›İ\›˜[İ[JH
+‹ßBˆÚ\Ñ›ÛY[™[	‰ˆ^[™Y[Û›ÛÙİYRYOOH\ÙËšY	‰ˆ™[™\“\ÙËš[›™\“[Û›ÛÙİYH	‰ˆ
+ˆ]ˆÛ\ÜÓ˜[YOH˜Ú]]İYÚXØ\™‚ˆËÊˆXÛÜ˜]]™HØ\ÚH\H
+‹ßBˆ]ˆÛ\ÜÓ˜[YOH˜Ú]]İYÚ]\K[YˆÏ‚ˆ]ˆÛ\ÜÓ˜[YOH˜Ú]]İYÚ]\K\šYÚˆÏ‚ˆËÊˆ]H
+‹ßBˆ]ˆÛ\ÜÓ˜[YOH˜Ú]]İYÚ]]H‚ˆ<'ä«H9a¡yoàùâë9æoBˆÙ]‚ˆËÊˆİ]H˜[Y\È[™[
+‹ßBˆØØ\™İ]U˜[Y\È	‰ˆØ\™İ]U˜[Y\Ë›[™İˆ	‰ˆ
+ˆİ]U˜[Y\Ô[™[İ]U˜[Y\Ï^ØØ\™İ]U˜[Y\ßHÏ‚ˆ
+_Bˆ]ˆÛ\ÜÓ˜[YOH˜Ú]]İYÚX›ÙH‚ˆš[[™İX[^›ØÚÈ^^Û\ÙË™\Ü^T›Ú™XİYÈ™[™\“\ÙËš[›™\“[Û›ÛÙİYHˆ™[™\‘\Ü^U^
+™[™\“\ÙËš[›™\“[Û›ÛÙİYK‹˜[ÙJ_H[ÙOH›X\šÙİÛˆˆY˜][^[™Y^ÜÙ\ÜÚ[Û‹˜ÛÛ\ÙPš[[™İX[˜[œÛ][ÛˆOOH˜[ÙHÈ˜[ÙHˆY_HÏ‚ˆÙ]‚ˆËÊˆÚYÛ˜]\™H
+‹ßBˆ]ˆÛ\ÜÓ˜[YOH˜Ú]]İYÚ\ÚYÈ‚ˆ8 %ÜÙ\ÜÚ[Û‹š\ÑÜ›İ\È
+\ÙËœÙ[™\“˜[YH¹ï©9¢$9dfŠHˆ
+Ú\˜Xİ\Ë›˜[YH•HŠ_BˆÙ]‚ˆÙ]‚ˆ
+_BˆÙ]‚ˆ
+NÂˆJ_BˆËÊˆ9­`yo#ùå'ù¢$:h¡:)â;ï&¹å'ù¢$9.+yk§¹¥í¹¦/¹é.¹c§ù¥¡ùh§ºaãûï#9îäù§gùd#¹å,y«hùo#ù­¢9 kù¦ïù£hˆ
+‹ßBˆÈ[Ù™›[™S[ÙH	‰ˆİ™X[T™]šY]È	‰ˆ
+ˆ]ˆÛ\ÜÓ˜[YOH˜Ú]\İ™X[K\™]šY]Èˆ]K]ZOHœİ™X[K\™]šY]È‚ˆÜÙ\ÜÚ[Û‹š\ÑÜ›İ\	‰ˆİ™X[T™]šY]Ëœ\È	‰ˆİ™X[T™]šY]Ëœ\Ë›[™İˆÈ
+ˆÊˆ9£"yênº(c9k¦¹g¢ûï&¹a¦yk£9æ¡9«­z$/yêâùclù¢$9..¹âë9êâù¬%9¬è{ï"9.#¹§ 9îâ9¢á¹§hyd#:)á9b&{ï"{ï#9cê¹§"y§ 9d#¹. 9«­yn)¹aby¨!ù¢dùkeÈ
+‹Âˆİ™X[T™]šY]Ëœ\Ë›X\
+
+\JHOˆÂˆÛÛœİÙ[™\Ú\ˆHÜ›İ\Ú\“X\™Ù]
+\˜Ú\˜Xİ\’Y
+HÚ\˜Xİ\ÂˆÛÛœİ\Ó\İ\HHOOH
+İ™X[T™]šY]Ëœ\ÏË›[™İÏÈ
+HHNÂˆ™]\›ˆ\^Ë›X\
+
+ÙYÕ^ŠHOˆÂˆÛÛœİ\Õ\[™ÈH\Ó\İ\	‰ˆˆOOH\^Ë›[™İHNÂˆ™]\›ˆ
+ˆ]ˆÙ^O^Øİ™X[KIÜ\˜Ú\˜Xİ\’YKIÚ_KIÚŸXHÛ\ÜÓ˜[YOH˜Ú][\ÙË]Ü˜\\ˆˆ]K\›ÛOH˜\ÜÚ\İ[‚ˆ]ˆÛ\ÜÓ˜[YOH˜Ú][\ÙËX]˜]\ˆ›^›^XÛÛ][\ËXÙ[\ˆØ\LHÚš[šËL‚ˆ]ˆÛ\ÜÓ˜[YOHËVÍHVÍH›İ[™YVÌŒH™ËVİ˜\ŠKXËZ[œ]
+WHİ™\™›İËZY[ˆ‚ˆÜÙ[™\Ú\Ë˜]˜]\ˆÈ[YÈÜ˜Ï^ÜÙ[™\Ú\‹˜]˜]\ŸHÛ\ÜÓ˜[YOHËY[Y[Øš™XİXÛİ™\ˆˆ[HˆˆÏˆˆÚ]˜[˜XÚĞ]˜]\ˆÏŸBˆÙ]‚ˆÙ]‚ˆ]ˆÛ\ÜÓ˜[YOH˜Ú][\ÙËXÛÛ[]Ü˜\›^›^XÛÛZ[‹]ËLX^]ËVÍÌ	WH‚ˆÜ[ˆÛ\ÜÓ˜[YOH˜Ú]YÜ›İ\\Ù[™\‹[˜[YHÜ\˜Ú\˜Xİ\“˜[Y_OÜÜ[‚ˆ]ˆÛ\ÜÓ˜[YOH˜Ú]XX˜›K\›ÛKX\ÜÚ\İ[Ú]\İ™X[KXX˜›Hœ™XZË]ÛÜ™È›İ[™Y[YLÈKLˆ‚ˆËÊˆ9­`yo#úh¡:)â9å*:/núaãÈ™K]Ü˜\9®,¹§äûï&º`oùacy«ãùn)ú-äHX\šÙİÛ‹ùcã:+ëz)èù§¤9kï:!í:eê¹ààychzhoÈ
+‹ßBˆ]ˆÛ\ÜÓ˜[YOH˜Ú]\İ™X[K]^Ú]\ÜXÙK\™K]Ü˜\œ™XZË]ÛÜ™ÈÜÙYÕ^OÙ]‚ˆÚ\Õ\[™È	‰ˆÜ[ˆÛ\ÜÓ˜[YOH˜Ú]\İ™X[KXİ\œÛÜˆˆ\šXKZY[HYHˆÏŸBˆÙ]‚ˆÙ]‚ˆÙ]‚ˆ
+NÂˆJNÂˆJBˆ
+Hˆİ™X[T™]šY]Ë^È	‰ˆİ™X[T™]šY]Ë^Ë›[™İˆÈ
+ˆİ™X[T™]šY]Ë^Ë›X\
+
+ÙYÕ^ŠHOˆÂˆÛÛœİ\Õ\[™ÈHˆOOH
+İ™X[T™]šY]Ë^ÏË›[™İÏÈ
+HHNÂˆ™]\›ˆ
+ˆ]ˆÙ^O^Øİ™X[K\ÙYËIÚŸXHÛ\ÜÓ˜[YOH˜Ú][\ÙË]Ü˜\\ˆˆ]K\›ÛOH˜\ÜÚ\İ[‚ˆ]ˆÛ\ÜÓ˜[YOH˜Ú][\ÙËX]˜]\ˆ›^›^XÛÛ][\ËXÙ[\ˆØ\LHÚš[šËL‚ˆ]ˆÛ\ÜÓ˜[YOHËVÍHVÍH›İ[™YVÌŒH™ËVİ˜\ŠKXËZ[œ]
+WHİ™\™›İËZY[ˆ‚ˆØÚ\˜Xİ\Ë˜]˜]\ˆÈ[YÈÜ˜Ï^ØÚ\˜Xİ\‹˜]˜]\ŸHÛ\ÜÓ˜[YOHËY[Y[Øš™XİXÛİ™\ˆˆ[HˆˆÏˆˆÚ]˜[˜XÚĞ]˜]\ˆÏŸBˆÙ]‚ˆÙ]‚ˆ]ˆÛ\ÜÓ˜[YOH˜Ú][\ÙËXÛÛ[]Ü˜\›^›^XÛÛZ[‹]ËLX^]ËVÍÌ	WH‚ˆ]ˆÛ\ÜÓ˜[YOH˜Ú]XX˜›K\›ÛKX\ÜÚ\İ[Ú]\İ™X[KXX˜›Hœ™XZË]ÛÜ™È›İ[™Y[YLÈKLˆ‚ˆËÊˆ9­`yo#úh¡:)â9å*:/núaãÈ™K]Ü˜\9®,¹§äûï&º`oùacy«ãùn)ú-äHX\šÙİÛ‹ùcã:+ëz)èù§¤9kï:!í:eê¹ààychzhoÈ
+‹ßBˆ]ˆÛ\ÜÓ˜[YOH˜Ú]\İ™X[K]^Ú]\ÜXÙK\™K]Ü˜\œ™XZË]ÛÜ™ÈÜÙYÕ^OÙ]‚ˆÚ\Õ\[™È	‰ˆÜ[ˆÛ\ÜÓ˜[YOH˜Ú]\İ™X[KXİ\œÛÜˆˆ\šXKZY[HYHˆÏŸBˆÙ]‚ˆÙ]‚ˆÙ]‚ˆ
+NÂˆJBˆ
+Hˆ[BˆÙ]‚ˆ
+_BˆËÊˆØÜ›Û[˜ÚÜˆœ›İÜÙ\ˆÙY\È\È[ˆšY]ÈÚ[ˆÛÛ[X›İ™HÚ[™Ù\ÈZYÚ
+‹ßBˆ]ˆİ[O^ŞÈİ™\™›İĞ[˜ÚÜˆ	Ø]]ÉËZYÚˆH_HÏ‚ˆÙ]‚‚ˆËÊˆ[œ]˜\ˆ8 %XœÛÛ]H]›İÛKØ[YH^Y\ˆ\ÈXY\ˆ
+‹ßBˆÚ\Ó][TÙ[Xİ[ÙH	‰ˆ[Ù™›[™S[ÙH	‰ˆ
+ˆ]ˆÛ\ÜÓ˜[YOH˜Ú][][K\Ù[XİX˜\ˆÚ]\›ÛÛK[XZ[‹\[™Hˆ]K]ZOH›][K\Ù[Xİ‚ˆ]Û‚ˆ\OH˜]Ûˆ‚ˆÛ\ÜÓ˜[YOH˜Ú][][K\Ù[XİZXÛÛ‹Xˆ‚ˆÛÛXÚÏ^ØØ[˜Ù[][TÙ[XİBˆ\šXK[X™[Hº` 9aî¹i&º`"H‚ˆ]OHº` 9aî¹i&º`"H‚ˆ‚ˆÚ^™O^ÌŒHİ›ÚÙUÚY^ÌKHÏ‚ˆØ]Û‚ˆ]ˆÛ\ÜÓ˜[YOH˜Ú][][K\Ù[Xİ\İ[[X\H‚ˆİ›Û™Ï¹mìº`"HÜÙ[XİYY\ÜØYÙRYËœÚ^™_H9§hOÜİ›Û™Ï‚ˆÜ[‚ˆÛ][Q[]U\™Ù]YË›[™İˆÙ[XİYY\ÜØYÙRYËœÚ^™BˆÈ9k§ºfayb(:fi	Û][Q[]U\™Ù]YË›[™İH9§h{ï#9d*úf¤:%ãùc¡¹cì˜ˆˆ9k§ºfayb(:fi	Û][Q[]U\™Ù]YË›[™İH9§hXBˆÜÜ[‚ˆÙ]‚ˆ]Û‚ˆ\OH˜]Ûˆ‚ˆÛ\ÜÓ˜[YOH˜Ú][][K\Ù[XİY[]KXˆ‚ˆ\ØX›Y^ÜÙ[XİYY\ÜØYÙRYËœÚ^™HOOH][Q[]U\™Ù]YË›[™İOOHBˆÛÛXÚÏ^ØÛÛ™š\›S][Q[]_Bˆ‚ˆ˜\ÚˆÚ^™O^ÌNHİ›ÚÙUÚY^ÌKHÏ‚ˆ9b(:fiˆØ]Û‚ˆÙ]‚ˆ
+_BˆÈZ\Ó][TÙ[Xİ[ÙH	‰ˆ
+Ù™›[™S[ÙHÈ
+ˆÙ™›[™U^[œ]˜\‚ˆÙ^O^ÜÙ\ÜÚ[Û‹šYBˆ™Y^ÛÙ™›[™U^[œ]™YŸBˆ\ÓÙ™›[™QÙ[™\˜][™Ï^Ú\ÓÙ™›[™QÙ[™\˜][™ßBˆ\ÔÜXİ]Ü^ÈH\Ù\ÜÚ[Û‹š\ÑÜ›İ\	‰ˆH\Ù\ÜÚ[Û‹š\ÔÜXİ]ÜŸBˆÚİÑ[[ÚšT[™[^ÜÚİÑ[[ÚšT[™[Bˆ[\•ÔÙ[™[˜X›Y^Ù[\•ÔÙ[™[˜X›YBˆÛ•ÙÙÛSÙ™›[™S[ÙO^İÙÙÛSÙ™›[™S[Ù_BˆÛÛÜÙQ[[ÚšT[™[^Ê
+HOˆÙ]ÚİÑ[[ÚšT[™[
+˜[ÙJ_BˆÛ•ÙÙÛQ[[ÚšT[™[^Ê
+HOˆÈÙ]ÚİÑ[[ÚšT[™[
+\ÚİÑ[[ÚšT[™[
+NÈÙ]ÚİÔİXÚÙ\”[™[
+˜[ÙJNÈÙ]ÚİÔ\ÓY[J˜[ÙJNÈ_BˆÛ”Ù[™^^Ú[™SÙ™›[™TÙ[™BˆÛ”İÜÙ[™\˜][Û^ØÛX\“Ù™›[™QÙ[™\˜][ÛŸBˆÏ‚ˆ
+Hˆ
+ˆÚ]^[œ]˜\‚ˆ™Y^ØÚ]^[œ]™YŸBˆÚ\˜Xİ\“˜[YO^ØÚ\˜Xİ\Ë›˜[YH¹kîy¥®HŸBˆÚ\˜Xİ\’Y^ÜÙ\ÜÚ[Û‹˜ÛÛXİYB‚HİXÚÙ\Ú\˜Xİ\’YÏ^ÜÙ\ÜÚ[Û‹š\ÑÜ›İ\ÈÙ\ÜÚ[Û‹œ\XÚ\[YÈˆ[™Yš[™YB‚H\ÑÜ›İ\^ÈH\Ù\ÜÚ[Û‹š\ÑÜ›İ\B‚H\ÔÜXİ]Ü^ÈH\Ù\ÜÚ[Û‹š\ÑÜ›İ\	‰ˆH\Ù\ÜÚ[Û‹š\ÔÜXİ]ÜŸB‚H]]U[[\Ï^ÜÙ\ÜÚ[Û‹š\ÑÜ›İ\	‰ˆÙ\ÜÚ[Û‹™Ü›İ\]]\ÏË–ÑÔ“ÕTÔÑS—ÒÑVWHÈ™]È]JÙ\ÜÚ[Û‹™Ü›İ\]]\ÖÑÔ“ÕTÔÑS—ÒÑVWJK™Ù][YJ
+HˆB‚H\ÑÙ[™\˜][™Ï^Ú\ÑÙ[™\˜][™ßB‚HX]\“[ÙO^İX]\“[Ù_B‚H[\•ÔÙ[™[˜X›Y^Ù[\•ÔÙ[™[˜X›YB‚H][İ[™ÓY\ÜØYÙO^Ü][İ[™ÓY\ÜØYÙ_BˆÚİÑ[[ÚšT[™[^ÜÚİÑ[[ÚšT[™[BˆÚİÔİXÚÙ\”[™[^ÜÚİÔİXÚÙ\”[™[BˆÚİÔ\ÓY[O^ÜÚİÔ\ÓY[_Bˆİ\İÛT\ĞXİ[ÛœÏ^Øİ\İÛT\ĞXİ[ÛœßBˆÛÛX\”][İO^Ê
+HOˆÙ]][İ[™ÓY\ÜØYÙJ[
+_BˆÛ•ÙÙÛSÙ™›[™S[ÙO^İÙÙÛSÙ™›[™S[Ù_BˆÛÛÜÙT[™[Ï^Ê
+HOˆÈÙ]ÚİÑ[[ÚšT[™[
+˜[ÙJNÈÙ]ÚİÔİXÚÙ\”[™[
+˜[ÙJNÈÙ]ÚİÔ\ÓY[J˜[ÙJNÈ_B‚HÛ•ÙÙÛQ[[ÚšT[™[^Ê
+HOˆÈÙ]ÚİÑ[[ÚšT[™[
+\ÚİÑ[[ÚšT[™[
+NÈÙ]ÚİÔİXÚÙ\”[™[
+˜[ÙJNÈÙ]ÚİÔ\ÓY[J˜[ÙJNÈ_B‚HÛ•ÙÙÛTİXÚÙ\”[™[^Ê
+HOˆÈÙ]ÚİÔİXÚÙ\”[™[
+\ÚİÔİXÚÙ\”[™[
+NÈÙ]ÚİÑ[[ÚšT[™[
+˜[ÙJNÈÙ]ÚİÔ\ÓY[J˜[ÙJNÈ_B‚HÛ•ÙÙÛT\ÓY[O^Ê
+HOˆÈÙ]ÚİÔ\ÓY[J\ÚİÔ\ÓY[JNÈÙ]ÚİÑ[[ÚšT[™[
+˜[ÙJNÈÙ]ÚİÔİXÚÙ\”[™[
+˜[ÙJNÈ_B‚HÛ•ÙÙÛUX]\“[ÙO^İÙÙÛUX]\“[Ù_B‚HÛÛÜÙUX]\“[ÙO^ØÛÜÙUX]\“[Ù_B‚HÛ“Ü[”šXÚ[Ù[^Ê[Ù[
+HOˆÈÙ]ÚİÔ\ÓY[J˜[ÙJNÈÙ]šXÚ[Ù[
+[Ù[
+NÈ_BˆÛ“Ü[İ\İÛT\ĞXİ[Û^Ú[™SÜ[İ\İÛT\ĞXİ[ÛŸBˆÛ”İ\šY[ĞØ[^Ê
+HOˆÈØ[˜Ù[›ÛİÕ\
+Ù\ÜÚ[Û‹šY
+NÈÙ]ÚİÔ\ÓY[J˜[ÙJNÈÙ]Ø[[š]X]ÜŠ\Ù\ˆŠNÈÙ]ÚİÕšY[ĞØ[
+YJNÈ_BˆÛ”İ\›ÚXÙPØ[^Ê
+HOˆÈØ[˜Ù[›ÛİÕ\
+Ù\ÜÚ[Û‹šY
+NÈÙ]ÚİÔ\ÓY[J˜[ÙJNÈÙ]Ø[[š]X]ÜŠ\Ù\ˆŠNÈÙ]ÚİÕ›ÚXÙPØ[
+YJNÈ_BˆÛ”Ù[™^^Ú[™TÙ[™^BˆÛ”İÜÙ[™\˜][Û^ØÛX\”İXÚÑÙ[™\˜][ÛŸBˆÛ•šYÙÙ\RT™\ÜÛœÙO^İšYÙÙ\RT™\ÜÛœÙ_BˆÛ”Ù[™İXÚÙ\^Ê˜[YK\›
+HOˆÈÙ]ÚİÔİXÚÙ\”[™[
+˜[ÙJNÈÙ[™šXÚY\ÜØYÙJœİXÚÙ\ˆ‹ÈX™[ˆ˜[YKİXÚÙ\•\›ˆ\›JNÈ_BˆÏ‚ˆ
+J_B‚ˆÜÚİĞÛÛ™š\›S][Q[]H	‰ˆ
+ˆÛÛ™š\›QX[ÙÂˆ]OH¹b(:fi:`"y.+y­¢9 kûï'È‚ˆY\ÜØYÙO^Âˆ][Q[]U\™Ù]YË›[™İˆÙ[XİYY\ÜØYÙRYËœÚ^™BˆÈ9l!¹b(:fi9mìº`"y­¢9 kûï#9nm¹. 9nm¹b(:fi9æî:`®ùmìº`"y­¢9 kù.búeí9æ¡:f¤:%ãùc¡¹cì¸à ¹k§ºfayb(:fi	Û][Q[]U\™Ù]YË›[™İH9§h{ï#9b(:fi9d#¹¥è9¬åy h¹i#xà ˜ˆˆ9l!¹b(:fi9mìº`"yæ¡	Û][Q[]U\™Ù]YË›[™İH9§hy­¢9 kûï#9b(:fi9d#¹¥è9¬åy h¹i#xà ˜ˆBˆXÛÛ^Ğ[\Ú\˜Û_Bˆ˜\šX[H™[™Ù\ˆ‚ˆÛÛ™š\›SX™[H¹b(:fi‚ˆØ[˜Ù[X™[H¹cå¹­¢‚ˆÛÛÛ™š\›O^Ú[™S][Q[]PÛÛ™š\›YYBˆÛØ[˜Ù[^Ê
+HOˆÙ]ÚİĞÛÛ™š\›S][Q[]J˜[ÙJ_BˆÏ‚ˆ
+_B‚ˆËÊˆÙ][™ÜÈ[™[8 %Ü[Yİ]ÚYHÙ\ÜÚ[Û‹\ØÛÜYÔÔË™\Ù\™\ÈÚ]›ÛÛH[İ[
+‹ßBˆÜÚİÔÙ][™ÜÈ	‰ˆÜ˜\\”™Y‹˜İ\œ™[Ëœ\™[[[Y[	‰ˆÜ™X]TÜ[
+ˆ]ˆÛ\ÜÓ˜[YOH˜Ú]\Ù][™ÜË[^Y\ˆXœÛÛ]H[œÙ]L‹ML‚ˆÚ]Ù][™ÜÔ[™[ˆÙ\ÜÚ[Û^ÜÙ\ÜÚ[ÛŸBˆÛÛÜÙO^Ê
+HOˆÂˆÙ]ÚİÔÙ][™ÜÊ˜[ÙJNÂˆËÈ™[ØYY\ÜØYÙ\È[ˆØ\ÙH\İÜHØ\ÈÛX\™YˆŞ[˜ÓY\ÜØYÙ\Ñœ›ÛTİÜ˜YÙJ
+NÂˆ_BˆÛ’[\ÓY\ÜØYÙO^ÊY\ÜØYÙRY
+HOˆÂˆÙ]ÚİÔÙ][™ÜÊ˜[ÙJNÂˆ[\ÔİÜ™YY\ÜØYÙJY\ÜØYÙRY
+NÂˆ_BˆÛ•ÛÛ\İÜPÛX\™Y^ÜŞ[˜ÓY\ÜØYÙ\Ñœ›ÛTİÜ˜YÙ_BˆÙ™›[™R\İÜP\ŞO^Ú\ÓÙ™›[™QÙ[™\˜][™ßBˆÛ“Ù™›[™R\İÜPÛX\™Y^Ê
+HOˆÂˆÙ]Ù™›[™U\›œÊ×JNÂˆÙ]Ù™›[™Uš\ÚX›PÛİ[
+Ñ‘“S‘WÒS’UPSÓĞQ
+NÂˆÙ][™[™ÓÙ™›[™U\Ù\•^
+ˆŠNÂˆÙ™›[™QÙ[™\˜][Û’[œ]™Y‹˜İ\œ™[HˆÂˆÙ]Xİ]™SÙ™›[™U\™Ù]
+[
+NÂˆÙ]ÛÛ^Y[P[˜ÚÜŠ[
+NÂˆÙ]Y][™ÓÙ™›[™U\™Ù]
+[
+NÂˆÙ]Y][™ÓÙ™›[™PÛÛ[
+ˆŠNÂˆÚİĞÚ]Ø\İ
+¹mì¹®!yên¹î¯ù."ú b¹i*z+¬9oeHŠNÂˆ_BˆÛ‘[]QœšY[™^Ê
+HOˆÛ˜XÚÊ
+_BˆÛ”Ù\ÜÚ[Û‘[]Y^Ê
+HOˆÂˆÙ]ÚİÔÙ][™ÜÊ˜[ÙJNÂˆ
+Û‘[]YÏÈÛ˜XÚÊJ
+NÂˆ_BˆÏ‚ˆÙ]‹ˆÜ˜\\”™Y‹˜İ\œ™[œ\™[[[Y[ˆ
+_B‚ˆØXİ]™Pİ\İÛPÚ]\È	‰ˆXİ]™Pİ\İÛPÚ]\Ëœ™\Ù[][ÛˆOOH››Û™Hˆ	‰ˆ
+ˆ]ˆÛ\ÜÓ˜[YOH˜Ú]Xİ\İÛKX\ZXY\ÜÈˆ\šXKZY[HYH‚ˆİ\İÛP\[›™\‚ˆ\^ØXİ]™Pİ\İÛPÚ]\Ë˜\Bˆ][˜ÚÛÛ^^ØXİ]™Pİ\İÛPÚ]\Ë›][˜ÚÛÛ^Bˆ[X™YYˆÛÛÜÙO^Ê
+HOˆÙ]Xİ]™Pİ\İÛPÚ]\Ê[
+_BˆÛ“›İXÙO^ÜÚİĞÚ]Ø\İBˆÏ‚ˆÙ]‚ˆ
+_B‚ˆØXİ]™Pİ\İÛPÚ]\È	‰ˆXİ]™Pİ\İÛPÚ]\Ëœ™\Ù[][ÛˆOOH››Û™Hˆ	‰ˆ
+ˆ]‚ˆÛ\ÜÓ˜[YO^ØÚ]Xİ\İÛKX\[^Y\ˆ\ËIØXİ]™Pİ\İÛPÚ]\Ëœ™\Ù[][ÛŸXBˆ›ÛOHœ™\Ù[][Ûˆ‚ˆÛÛXÚÏ^Ê
+HOˆÙ]Xİ]™Pİ\İÛPÚ]\Ê[
+_Bˆ‚ˆ]‚ˆÛ\ÜÓ˜[YOH˜Ú]Xİ\İÛKX\\Ú[‚ˆ›ÛOH™X[ÙÈ‚ˆ\šXK[[Ù[HYH‚ˆ\šXK[X™[^ØXİ]™Pİ\İÛPÚ]\Ë˜Xİ[Û‹›X™[Bˆİ[O^ŞÂˆ‹KXÚ]Xİ\İÛKX\\[™[ZZYÚˆ›Ü›X[^™Pİ\İÛT[™[ZYÚ
+Xİ]™Pİ\İÛPÚ]\Ë˜Xİ[Û‹œ[™[ZYÚ
+HÏÈ[™Yš[™YˆH\È™XXİÔÔÔ›Ü\Y\ßBˆÛÛXÚÏ^Ù]™[Oˆ]™[œİÜ›ÜYØ][ÛŠ
+_Bˆ‚ˆ]ˆÛ\ÜÓ˜[YOH˜Ú]Xİ\İÛKX\ZXY‚ˆ]ˆÛ\ÜÓ˜[YOH˜Ú]Xİ\İÛKX\]]H‚ˆÜ[ˆÛ\ÜÓ˜[YOH˜Ú]Xİ\İÛKX\ZXÛÛˆˆ\šXKZY[HYH‚ˆØXİ]™Pİ\İÛPÚ]\Ë˜\šXÛÛ‘]U\›È[YÈÜ˜Ï^ØXİ]™Pİ\İÛPÚ]\Ë˜\šXÛÛ‘]U\›H[HˆˆÏˆˆ›ØÚÜÈÚ^™O^ÌNHÏŸBˆÜÜ[‚ˆÜ[ØXİ]™Pİ\İÛPÚ]\Ë˜Xİ[Û‹›X™[OÜÜ[‚ˆÙ]‚ˆ]Û‚ˆ\OH˜]Ûˆ‚ˆÛ\ÜÓ˜[YOH˜Ú]Xİ\İÛKX\XÛÜÙH‚ˆÛÛXÚÏ^Ê
+HOˆÙ]Xİ]™Pİ\İÛPÚ]\Ê[
+_Bˆ\šXK[X™[H¹alúeëH‚ˆ‚ˆÚ^™O^ÌNHİ›ÚÙUÚY^ÌŸHÏ‚ˆØ]Û‚ˆÙ]‚ˆ]ˆÛ\ÜÓ˜[YOH˜Ú]Xİ\İÛKX\X›ÙH‚ˆİ\İÛP\›Ü™YÜ›İ[™›İ[™\BˆÙ^O^ØXİ]™Pİ\İÛPÚ]\Ë˜\šYBˆ\˜[YO^ØXİ]™Pİ\İÛPÚ]\Ë˜\›˜[Y_Bˆ\Y^ØXİ]™Pİ\İÛPÚ]\Ë˜\šYBˆ\™\œÚ[Û^ØXİ]™Pİ\İÛPÚ]\Ë˜\™\œÚ[ÛŸBˆX[šY™\İY^ØXİ]™Pİ\İÛPÚ]\Ë˜\›X[šY™\İËšYBˆÛÜÙSX™[Hº/å9fçº b¹i*H‚ˆÛÛÜÙO^Ê
+HOˆÙ]Xİ]™Pİ\İÛPÚ]\Ê[
+_Bˆ‚ˆİ\İÛP\[›™\‚ˆ\^ØXİ]™Pİ\İÛPÚ]\Ë˜\Bˆ][˜ÚÛÛ^^ØXİ]™Pİ\İÛPÚ]\Ë›][˜ÚÛÛ^Bˆ[X™YYˆÛÛÜÙO^Ê
+HOˆÙ]Xİ]™Pİ\İÛPÚ]\Ê[
+_BˆÛ“›İXÙO^ÜÚİĞÚ]Ø\İBˆÏ‚ˆĞİ\İÛP\›Ü™YÜ›İ[™›İ[™\O‚ˆÙ]‚ˆÙ]‚ˆÙ]‚ˆ
+_B‚ˆËÊˆšXÚYYXH[œ][Ù[È
+‹ßBˆÜšXÚ[Ù[OOH›ÚXÙWÛ\ÙÈˆ	‰ˆ
+ˆ›ÚXÙT™XÛÜ™[Ù[ˆÚ\˜Xİ\’Y^ÜÙ\ÜÚ[Û‹˜ÛÛXİYBˆÛ”Ù[™^Ê^]Y[Ñ]U\›
+HOˆÂˆÙ]šXÚ[Ù[
+[
+NÂˆÙ[™šXÚY\ÜØYÙJ˜]Y[È‹ÈX™[ˆ^Kˆ‹]Y[Ñ]U\›
+NÂˆ_BˆÛÛÜÙO^Ê
+HOˆÙ]šXÚ[Ù[
+[
+_BˆÏ‚ˆ
+_BˆÜšXÚ[Ù[OOH^ÜİÈˆ	‰ˆ
+ˆ^İÓ[Ù[ˆÛ”Ù[™^Ê^
+HOˆÈÙ]šXÚ[Ù[
+[
+NÈÙ[™šXÚY\ÜØYÙJš[XYÙH‹ÈX™[ˆ^JNÈ_BˆÛÛÜÙO^Ê
+HOˆÙ]šXÚ[Ù[
+[
+_BˆÏ‚ˆ
+_BˆÜšXÚ[Ù[OOHœİÈˆ	‰ˆ
+ˆİÒ[œ][Ù[ˆÛ”Ù[™^Ê\ØË[XYÙQ]U\›
+HOˆÈÙ]šXÚ[Ù[
+[
+NÈÙ[™šXÚY\ÜØYÙJš[XYÙH‹ÈX™[ˆ\ØÈKˆ‹[XYÙQ]U\›
+NÈ_BˆÛÛÜÙO^Ê
+HOˆÙ]šXÚ[Ù[
+[
+_BˆÏ‚ˆ
+_BˆÜšXÚ[Ù[OOH™ÚYˆ	‰ˆ
+ˆÚYXÚÙ\“[Ù[ˆÚYÏ^Ø]˜Z[X›TÚÜ[™ÑÚYßBˆ\ÑÜ›İ\^ÜÙ\ÜÚ[Û‹š\ÑÜ›İ\Bˆ™XÚ\Y[Ï^ÙÜ›İ\Ú\˜Xİ\œßBˆÛ”Ù[™^ÊÚY™XÚ\Y[
+HOˆÂˆÛÛœİÙ[HÙ[™ÚÜ[™ÑÚYY\ÜØYÙJÚY™XÚ\Y[
+NÂˆYˆ
+Ù[
+HÙ]šXÚ[Ù[
+[
+NÂˆ_BˆÛÛÜÙO^Ê
+HOˆÙ]šXÚ[Ù[
+[
+_BˆÏ‚ˆ
+_BˆÜšXÚ[Ù[OOHœ™YÜXÚÙ]ˆ	‰ˆ
+ˆ™YXÚÙ][Ù[ˆ[ÙOHœ™YÜXÚÙ]‚ˆ\ÑÜ›İ\^ÜÙ\ÜÚ[Û‹š\ÑÜ›İ\BˆÛ”Ù[™^Ê[[İ[X™[Ûİ[
+HOˆÂˆÛÛœİÙ[HÙ[™šXÚY\ÜØYÙJœ™YÜXÚÙ]‹È[[İ[X™[İ]\Îˆœ[™[™È‹Ûİ[ˆÛİ[HJNÂˆYˆ
+Ù[
+HÙ]šXÚ[Ù[
+[
+NÂˆ_BˆÛÛÜÙO^Ê
+HOˆÙ]šXÚ[Ù[
+[
+_BˆÏ‚ˆ
+_BˆÜšXÚ[Ù[OOH˜[œÙ™\—İ\™Ù]ˆ	‰ˆÙ\ÜÚ[Û‹š\ÑÜ›İ\	‰ˆ
+ˆ˜[œÙ™\•\™Ù][Ù[ˆ\XÚ\[Ï^ÙÜ›İ\Ú\˜Xİ\œßBˆÛ”Ù[Xİ^ÊÚ\ŠHOˆÂˆÙ]˜[œÙ™\•\™Ù]
+Ú\ŠNÂˆÙ]šXÚ[Ù[
+˜[œÙ™\ˆŠNÂˆ_BˆÛÛÜÙO^Ê
+HOˆÙ]šXÚ[Ù[
+[
+_BˆÏ‚ˆ
+_BˆÜšXÚ[Ù[OOH˜[œÙ™\ˆˆ	‰ˆ
+ˆ™YXÚÙ][Ù[ˆ[ÙOH˜[œÙ™\ˆ‚ˆÛ”Ù[™^Ê[[İ[X™[
+HOˆÂˆYˆ
+Ù\ÜÚ[Û‹š\ÑÜ›İ\	‰ˆ˜[œÙ™\•\™Ù]
+HÂˆÛÛœİÙ[HÙ[™šXÚY\ÜØYÙJ˜[œÙ™\ˆ‹Âˆ[[İ[X™[İ]\Îˆœ[™[™È‹ˆÙ[™\“˜[YNˆ\Ù\’Y[]OË›˜[YH¹/h‹ˆ™XÚ\Y[Yˆ˜[œÙ™\•\™Ù]šYˆ™XÚ\Y[˜[YNˆ˜[œÙ™\•\™Ù]›˜[YKˆJNÂˆYˆ
+Ù[
+HÂˆÙ]šXÚ[Ù[
+[
+NÂˆÙ]˜[œÙ™\•\™Ù]
+[
+NÂˆBˆH[ÙHÂˆÛÛœİÙ[HÙ[™šXÚY\ÜØYÙJ˜[œÙ™\ˆ‹È[[İ[X™[İ]\Îˆœ[™[™ÈˆJNÂˆYˆ
+Ù[
+HÙ]šXÚ[Ù[
+[
+NÂˆBˆ_BˆÛÛÜÙO^Ê
+HOˆÈÙ]šXÚ[Ù[
+[
+NÈÙ]˜[œÙ™\•\™Ù]
+[
+NÈ_BˆÏ‚ˆ
+_BˆÜšXÚ[Ù[OOH›ØØ][Ûˆˆ	‰ˆ
+ˆØØ][Û’[œ][Ù[ˆÛ”Ù[™^ÊØÊHOˆÈÙ]šXÚ[Ù[
+[
+NÈÙ[™šXÚY\ÜØYÙJ›ØØ][Ûˆ‹ÈX™[ˆØÈJNÈ_BˆÛÛÜÙO^Ê
+HOˆÙ]šXÚ[Ù[
+[
+_BˆÏ‚ˆ
+_BˆÜšXÚ[Ù[OOHœŞ\İ[WÚ[œİXİ[Ûˆˆ	‰ˆ
+ˆŞ\İ[R[œİXİ[Û“[Ù[ˆÛ”Ù[™^Ê^
+HOˆÂˆÛÛœİÙ[HÙ[™Ş\İ[R[œİXİ[ÛŠ^
+NÂˆYˆ
+Ù[
+HÙ]šXÚ[Ù[
+[
+NÂˆ_BˆÛÛÜÙO^Ê
+HOˆÙ]šXÚ[Ù[
+[
+_BˆÏ‚ˆ
+_B‚ˆËÊˆ9 'yîí:dï¹n¥z`ê9o.yê¥ûï"Û]YH\:hã¹¨/;ï"H
+‹ßBˆÜ™X\ÛÛš[™ÔÚY]^OOH[	‰ˆ
+ˆ]‚ˆÛ\ÜÓ˜[YOH›[Ù[[İ™\›^H[Ù[[İ™\›^KX›İÛH‚ˆ]K]ZOH›[Ù[‚ˆ›ÛOH™X[ÙÈ‚ˆ\šXK[[Ù[HYH‚ˆ\šXK[X™[H¹ 'z  ú/áùê"È‚ˆÛÛXÚÏ^Ê
+HOˆÙ]™X\ÛÛš[™ÔÚY]^
+[
+_Bˆ‚ˆ]ˆÛ\ÜÓ˜[YOH›[Ù[\ÚY]Ú]\™X\ÛÛš[™Ë\ÚY]ˆÛÛXÚÏ^ÊJHOˆKœİÜ›ÜYØ][ÛŠ
+_O‚ˆ]ˆÛ\ÜÓ˜[YOH˜Ú]\™X\ÛÛš[™Ë\ÚY]Z[™HˆÏ‚ˆ]ˆÛ\ÜÓ˜[YOH˜Ú]\™X\ÛÛš[™Ë\ÚY]ZXY\ˆ‚ˆ]Û‚ˆ\OH˜]Ûˆ‚ˆÛ\ÜÓ˜[YOH˜Ú]\™X\ÛÛš[™Ë\ÚY]XÛÜÙH‚ˆÛÛXÚÏ^Ú[™U˜[œÛ]T™X\ÛÛš[™ßBˆ\šXK[X™[^Ü™X\ÛÛš[™Õ˜[œÛ][ÛˆÈºf¤:%ãú+äy¥¡Èˆˆ¹ïîú+äy 'z  ú/áùê"ÈŸBˆ]O^Ü™X\ÛÛš[™Õ˜[œÛ][ÛˆÈºf¤:%ãú+äy¥¡Èˆˆ¹ïîú+äy 'z  ú/áùê"ÈŸBˆ‚ˆÜ™X\ÛÛš[™Õ˜[œÛ][™ÂˆÈØY\ŒˆÚ^™O^ÌNHİ›ÚÙUÚY^ÌŸHÛ\ÜÓ˜[YOH˜[š[X]K\Ü[ˆˆÏ‚ˆˆ[™İXYÙ\ÈÚ^™O^ÌNHİ›ÚÙUÚY^ÌŸHË‹‹Š™X\ÛÛš[™Õ˜[œÛ][ÛˆÈÈÛÛÜˆ˜\ŠKXËZXÛÛ‹XXİ]™JHˆHˆßJ_HÏŸBˆØ]Û‚ˆÜ[ˆÛ\ÜÓ˜[YOH˜Ú]\™X\ÛÛš[™Ë\ÚY]]]H¹ 'z  ú/áùê"ÏÜÜ[‚ˆ]Û‚ˆ\OH˜]Ûˆ‚ˆÛ\ÜÓ˜[YOH˜Ú]\™X\ÛÛš[™Ë\ÚY]XÛÜÙH‚ˆÛÛXÚÏ^Ê
+HOˆÙ]™X\ÛÛš[™ÔÚY]^
+[
+_Bˆ\šXK[X™[H¹alúeëH‚ˆ‚ˆÚ^™O^ÌNHİ›ÚÙUÚY^ÌŸHÏ‚ˆØ]Û‚ˆÙ]‚ˆ]ˆÛ\ÜÓ˜[YOH˜Ú]\™X\ÛÛš[™Ë\ÚY]X›ÙH‚ˆÜ™X\ÛÛš[™Õ˜[œÛ]Q\œ›Üˆ	‰ˆ
+ˆ]ˆÛ\ÜÓ˜[YOH˜Ú]\™X\ÛÛš[™Ë]˜[œÛ]KY\œ›ÜˆÜ™X\ÛÛš[™Õ˜[œÛ]Q\œ›ÜŸOÙ]‚ˆ
+_BˆÜ™X\ÛÛš[™Õ˜[œÛ][Ûˆ	‰ˆ
+ˆ]ˆÛ\ÜÓ˜[YOH˜Ú]\™X\ÛÛš[™Ë]šY]Ë\İÚ]Ú‚ˆÊÖÈš‹¹.+y¥¡È—KÈ›ÜšYÈ‹¹c§ù¥¡È—KÈ˜›İ‹¹kîyáiÈ—WH\ÈÛÛœİ
+K›X\
+
+Û[ÙK^JHOˆ
+ˆ]Û‚ˆÙ^O^Û[Ù_Bˆ\OH˜]Ûˆ‚ˆÛ\ÜÓ˜[YOH˜Ú]\™X\ÛÛš[™Ë]šY]ËXˆ‚ˆË‹‹Š™X\ÛÛš[™ÕšY]Ó[ÙHOOH[ÙHÈÈ™]KXXİ]™HˆˆˆHˆßJ_BˆÛÛXÚÏ^Ê
+HOˆÙ]™X\ÛÛš[™ÕšY]Ó[ÙJ[ÙJ_Bˆİ^OØ]Û‚ˆ
+J_BˆÙ]‚ˆ
+_BˆÜ™X\ÛÛš[™Õ˜[œÛ][Ûˆ	‰ˆ™X\ÛÛš[™ÕšY]Ó[ÙHOOH›ÜšYÈˆ	‰ˆ
+ˆ]ˆÛ\ÜÓ˜[YO^Ü™X\ÛÛš[™ÕšY]Ó[ÙHOOH˜›İˆÈ˜Ú]\™X\ÛÛš[™Ë]˜[œÛ][Ûˆˆˆ[™Yš[™YO‚ˆš[[™İX[^›ØÚÈ^^Ü™X\ÛÛš[™Õ˜[œÛ][ÛŸH[ÙOH›X\šÙİÛˆˆY˜][^[™YÏ‚ˆÙ]‚ˆ
+_BˆÊ™X\ÛÛš[™ÕšY]Ó[ÙHOOHšˆ\™X\ÛÛš[™Õ˜[œÛ][ÛŠH	‰ˆ
+ˆš[[™İX[^›ØÚÈ^^Ü™X\ÛÛš[™ÔÚY]^H[ÙOH›X\šÙİÛˆˆY˜][^[™YÏ‚ˆ
+_BˆÙ]‚ˆÙ]‚ˆÙ]‚ˆ
+_B‚ˆËÊˆ™YXÚÙ]È˜[œÙ™\ˆ]Z[[Ù[
+‹ßBˆÛYYXQ]Z[\ÙÈ	‰ˆ
+ˆYYXQ]Z[[Ù[ˆ\ÙÏ^ÛYYXQ]Z[\ÙßBˆ\Ù\“˜[YO^İ\Ù\’Y[]OË›˜[YH¹/hŸBˆÜ›İ\Ú^™O^ÜÙ\ÜÚ[Û‹š\ÑÜ›İ\È
+Ù\ÜÚ[Û‹œ\XÚ\[YÏË›[™İ
+H
+È
+Ù\ÜÚ[Û‹š\ÔÜXİ]ÜˆÈˆJHˆ[™Yš[™YBˆÛXØÙ\^Ê\]Y\ÙËŞ\Õ^Xİ[Û•\JHOˆÂˆÛÛœİØ[]\]Y\ÙÈH\]Y\ÙËœ›ÛHOOH˜\ÜÚ\İ[‚ˆÈÜ™Y][˜ÛÛZ[™Ó[Û™^SY\ÜØYÙJ\]Y\ÙËXİ[Û•\JBˆˆ\]Y\ÙÎÂˆÙ]Y\ÜØYÙ\Ê™]ˆOˆ™]‹›X\
+HOˆKšYOOHØ[]\]Y\ÙËšYÈØ[]\]Y\ÙÈˆJJNÂˆÙ]YYXQ]Z[\ÙÊ[
+NÂˆÛÛœİÛZ[Y\“ˆH\Ù\’Y[]OË›˜[YH¹/hÂˆÛÛœİİÛ™\“ˆHØ[]\]Y\ÙËœÙ[™\“˜[YH
+Ø[]\]Y\ÙËœ›ÛHOOH˜\ÜÚ\İ[ˆÈ
+Ú\˜Xİ\Ë›˜[YH¹kîy¥®HŠHˆÛZ[Y\“ŠNÂˆÛÛœİŞ\Ó\ÙÈH\ÚÚ]Y\ÜØYÙJÂˆÙ\ÜÚ[Û’YˆÙ\ÜÚ[Û‹šY›ÛNˆ\Ù\ˆ‹ÛÛ[ˆŞ\Õ^ˆYYXU\NˆXİ[Û•\H\ÈÚ]Y\ÜØYÙVÈ›YYXU\H—Kˆ‹‹ŠÙ\ÜÚ[Û‹š\ÑÜ›İ\ÈÈYYXQ]NˆÈÛZ[Y\ˆÛZ[Y\“‹İÛ™\ˆİÛ™\“ˆKÙ[™\“˜[YNˆÛZ[Y\“ˆHˆßJKˆJNÂˆÙ]Y\ÜØYÙ\Ê™]ˆOˆË‹‹œ™]‹Ş\Ó\Ù×JNÂˆ_BˆÛÛÜÙO^Ê
+HOˆÙ]YYXQ]Z[\ÙÊ[
+_BˆÏ‚ˆ
+_B‚ˆÙY][™ÓÙ™›[™U\™Ù]	‰ˆ
+ˆ]ˆÛ\ÜÓ˜[YOH˜Ú]Z[[İ™\›^HˆÛÛXÚÏ^Ê
+HOˆÈÙ]Y][™ÓÙ™›[™U\™Ù]
+[
+NÈÙ]Y][™ÓÙ™›[™PÛÛ[
+ˆŠNÈ_O‚ˆ]‚ˆÛ\ÜÓ˜[YOH™ËXØ\™ËVÛZ[ŠËŒ
+WHX^ZVÍÎšHM›^›^XÛÛØ\LÈ‚ˆÛÛXÚÏ^ÊJHOˆKœİÜ›ÜYØ][ÛŠ
+_Bˆ‚ˆ]ˆÛ\ÜÓ˜[YOH™›^][\ËXÙ[\ˆ\İYKX™]ÙY[ˆØ\LÈ‚ˆ]ˆÛ\ÜÓ˜[YOH™›^›^XÛÛØ\LH‚ˆÜ[ˆÛ\ÜÓ˜[YOH›Y[K[X™[‚ˆÙY][™ÓÙ™›[™U\™Ù]œ›ÛHOOH\Ù\ˆˆÈ¹ï%º/¤yî¯ù."ú/¤ùaiHˆˆ¹ï%º/¤yî¯ù."ùfç¹i#HŸBˆÜÜ[‚ˆÜ[ˆÛ\ÜÓ˜[YOH›Y[KY\ØÈ[]L‚ˆÙY][™ÓÙ™›[™U\™Ù]œ›ÛHOOH\Ù\ˆ‚ˆÈ¹/çykf9d#¹/&¹¦í9¥¬:/æy. :/k¹î¯ù."ùc¡¹cìˆ‚ˆˆ¹/çykf9d#¹/&ºaãy¥¬:)èù§¤ÛÛ[9d£9¤f:) {ï#9nm¹¦í9¥¬9çëy§'ú+¬9oá¹.¢ù.í¹­`HŸBˆÜÜ[‚ˆÙ]‚ˆ]Û‚ˆÛÛXÚÏ^Ê
+HOˆÈÙ]Y][™ÓÙ™›[™U\™Ù]
+[
+NÈÙ]Y][™ÓÙ™›[™PÛÛ[
+ˆŠNÈ_BˆÛ\ÜÓ˜[YOHZKX˜\™KXˆ^Vİ˜\ŠKXËZXÛÛŠWHËLNXY[™Ë[›Û™H‚ˆ\OH˜]Ûˆ‚ˆ¸§%OØ]Û‚ˆÙ]‚ˆ^\™XBˆ]]Ñ›Øİ\Âˆ˜[YO^ÙY][™ÓÙ™›[™PÛÛ[BˆÛÚ[™ÙO^ÊJHOˆÙ]Y][™ÓÙ™›[™PÛÛ[
+K\™Ù]˜[YJ_BˆÛ\ÜÓ˜[YOHËY[Z[‹ZVÌŒŒHX^ZVÍLšH™\Ú^™K[›Û™H›İ[™YL›Ü™\ˆ›Ü™\‹Vİ˜\ŠKXËX›Ü™\ŠWH™ËVİ˜\ŠKXËZ[œ]
+WHMKLÈËLM^Vİ˜\ŠKXË]^
+WHİ][™K[›Û™H‚ˆÏ‚ˆ]ˆÛ\ÜÓ˜[YOH™›^\İYKY[™Ø\Lˆ‚ˆ]Û‚ˆÛÛXÚÏ^Ê
+HOˆÈÙ]Y][™ÓÙ™›[™U\™Ù]
+[
+NÈÙ]Y][™ÓÙ™›[™PÛÛ[
+ˆŠNÈ_BˆÛ\ÜÓ˜[YOHZKXˆZKX‹[İ][™H‚ˆ\OH˜]Ûˆ‚ˆ¹cå¹­¢Ø]Û‚ˆ]Û‚ˆÛÛXÚÏ^Ú[™SÙ™›[™QY]Ø]™_Bˆ\ØX›Y^ÈYY][™ÓÙ™›[™PÛÛ[š[J
+_BˆÛ\ÜÓ˜[YOHZKXˆZKX‹\š[X\H‚ˆ\OH˜]Ûˆ‚ˆ¹/çykfØ]Û‚ˆÙ]‚ˆÙ]‚ˆÙ]‚ˆ
+_B‚ˆÙY][™ÓY\ÜØYÙRY	‰ˆ
+ˆ]ˆÛ\ÜÓ˜[YOH˜Ú]Z[[İ™\›^HˆÛÛXÚÏ^Ê
+HOˆÈÙ]Y][™ÓY\ÜØYÙRY
+[
+NÈÙ]Y][™ĞÛÛ[
+ˆŠNÈ_O‚ˆ]‚ˆÛ\ÜÓ˜[YOH™ËXØ\™ËVÛZ[ŠËŒ
+WHX^ZVÍÎšHM›^›^XÛÛØ\LÈ‚ˆÛÛXÚÏ^ÊJHOˆKœİÜ›ÜYØ][ÛŠ
+_Bˆ‚ˆ]ˆÛ\ÜÓ˜[YOH™›^][\ËXÙ[\ˆ\İYKX™]ÙY[ˆØ\LÈ‚ˆ]ˆÛ\ÜÓ˜[YOH™›^›^XÛÛØ\LH‚ˆÜ[ˆÛ\ÜÓ˜[YOH›Y[K[X™[ÙY][™ÔŞ\İ[R[œİXİ[ÛˆÈ¹ï%º/¤yìîùîçù£!ù.éˆˆ¹ï%º/¤y­¢9 kÈŸOÜÜ[‚ˆÜ[ˆÛ\ÜÓ˜[YOH›Y[KY\ØÈ[]LÙY][™ÔŞ\İ[R[œİXİ[ÛˆÈ¹/çykf9d#¹/&¹£"yodùbcy/cyïk¹¦í9¥¬9d#¹îëy."¹."ù¥¡Èˆˆ¹/çykf9d#¹/&¹d#9«iy¦í9¥¬: b¹i*z+¬9oeyd£9d#¹îëy."¹."ù¥¡ÈŸOÜÜ[‚ˆÙ]‚ˆ]Û‚ˆÛÛXÚÏ^Ê
+HOˆÈÙ]Y][™ÓY\ÜØYÙRY
+[
+NÈÙ]Y][™ĞÛÛ[
+ˆŠNÈ_BˆÛ\ÜÓ˜[YOHZKX˜\™KXˆ^Vİ˜\ŠKXËZXÛÛŠWHËLNXY[™Ë[›Û™H‚ˆ\OH˜]Ûˆ‚ˆ¸§%OØ]Û‚ˆÙ]‚ˆ^\™XBˆ]]Ñ›Øİ\Âˆ˜[YO^ÙY][™ĞÛÛ[BˆÛÚ[™ÙO^ÊJHOˆÙ]Y][™ĞÛÛ[
+K\™Ù]˜[YJ_BˆÛ\ÜÓ˜[YOHËY[Z[‹ZVÌNHX^ZVÍLšH™\Ú^™K[›Û™H›İ[™YL›Ü™\ˆ›Ü™\‹Vİ˜\ŠKXËX›Ü™\ŠWH™ËVİ˜\ŠKXËZ[œ]
+WHMKLÈËLM^Vİ˜\ŠKXË]^
+WHİ][™K[›Û™H‚ˆÏ‚ˆ]ˆÛ\ÜÓ˜[YOH™›^\İYKY[™Ø\Lˆ‚ˆ]Û‚ˆÛÛXÚÏ^Ê
+HOˆÈÙ]Y][™ÓY\ÜØYÙRY
+[
+NÈÙ]Y][™ĞÛÛ[
+ˆŠNÈ_BˆÛ\ÜÓ˜[YOHZKXˆZKX‹[İ][™H‚ˆ\OH˜]Ûˆ‚ˆ¹cå¹­¢Ø]Û‚ˆ]Û‚ˆÛÛXÚÏ^Ú[™QY]Y\ÜØYÙTØ]™_Bˆ\ØX›Y^ÈYY][™ĞÛÛ[š[J
+_BˆÛ\ÜÓ˜[YOHZKXˆZKX‹\š[X\H‚ˆ\OH˜]Ûˆ‚ˆ¹/çykfØ]Û‚ˆÙ]‚ˆÙ]‚ˆÙ]‚ˆ
+_B‚ˆÊY][™Ô™\ÜÛœÙP˜]ÚYY][™Ô™\ÜÛœÙT›İ[™Y
+H	‰ˆ
+ˆ]ˆÛ\ÜÓ˜[YOH˜Ú]Z[[İ™\›^HˆÛÛXÚÏ^Ê
+HOˆÈÙ]Y][™Ô™\ÜÛœÙP˜]ÚY
+[
+NÈÙ]Y][™Ô™\ÜÛœÙT›İ[™Y
+[
+NÈÙ]Y][™Ô™\ÜÛœÙPÛÛ[
+ˆŠNÈ_O‚ˆ]‚ˆÛ\ÜÓ˜[YOH™ËXØ\™ËVÛZ[ŠËŒ
+WHX^ZVÍÎšHM›^›^XÛÛØ\LÈ‚ˆÛÛXÚÏ^ÊJHOˆKœİÜ›ÜYØ][ÛŠ
+_Bˆ‚ˆ]ˆÛ\ÜÓ˜[YOH™›^][\ËXÙ[\ˆ\İYKX™]ÙY[ˆØ\LÈ‚ˆ]ˆÛ\ÜÓ˜[YOH™›^›^XÛÛØ\LH‚ˆÜ[ˆÛ\ÜÓ˜[YOH›Y[K[X™[¹ï%º/¤y§+9«(yfç¹i#OÜÜ[‚ˆÜ[ˆÛ\ÜÓ˜[YOH›Y[KY\ØÈ[]L¹/çykf9d#¹/&¹£"y¥¬9æ¡9ï%º/¤y¥¡ù§+:aãy¥¬9¢á¹b!º/æy«(HRH9fç¹i#OÜÜ[‚ˆÙ]‚ˆ]Û‚ˆÛÛXÚÏ^Ê
+HOˆÈÙ]Y][™Ô™\ÜÛœÙP˜]ÚY
+[
+NÈÙ]Y][™Ô™\ÜÛœÙT›İ[™Y
+[
+NÈÙ]Y][™Ô™\ÜÛœÙPÛÛ[
+ˆŠNÈ_BˆÛ\ÜÓ˜[YOHZKX˜\™KXˆ^Vİ˜\ŠKXËZXÛÛŠWHËLNXY[™Ë[›Û™H‚ˆ\OH˜]Ûˆ‚ˆ¸§%OØ]Û‚ˆÙ]‚ˆ^\™XBˆ]]Ñ›Øİ\Âˆ˜[YO^ÙY][™Ô™\ÜÛœÙPÛÛ[BˆÛÚ[™ÙO^ÊJHOˆÙ]Y][™Ô™\ÜÛœÙPÛÛ[
+K\™Ù]˜[YJ_BˆÛ\ÜÓ˜[YOHËY[Z[‹ZVÌŒŒHX^ZVÍLšH™\Ú^™K[›Û™H›İ[™YL›Ü™\ˆ›Ü™\‹Vİ˜\ŠKXËX›Ü™\ŠWH™ËVİ˜\ŠKXËZ[œ]
+WHMKLÈËLM^Vİ˜\ŠKXË]^
+WHİ][™K[›Û™H‚ˆÏ‚ˆ]ˆÛ\ÜÓ˜[YOH™›^\İYKY[™Ø\Lˆ‚ˆ]Û‚ˆÛÛXÚÏ^Ê
+HOˆÈÙ]Y][™Ô™\ÜÛœÙP˜]ÚY
+[
+NÈÙ]Y][™Ô™\ÜÛœÙT›İ[™Y
+[
+NÈÙ]Y][™Ô™\ÜÛœÙPÛÛ[
+ˆŠNÈ_BˆÛ\ÜÓ˜[YOHZKXˆZKX‹[İ][™H‚ˆ\OH˜]Ûˆ‚ˆ¹cå¹­¢Ø]Û‚ˆ]Û‚ˆÛÛXÚÏ^Ú[™QY]™\ÜÛœÙTØ]™_Bˆ\ØX›Y^ÈYY][™Ô™\ÜÛœÙPÛÛ[š[J
+_BˆÛ\ÜÓ˜[YOHZKXˆZKX‹\š[X\H‚ˆ\OH˜]Ûˆ‚ˆ¹/çykfØ]Û‚ˆÙ]‚ˆÙ]‚ˆÙ]‚ˆ
+_B‚ˆØÛİY[]T[™[™È	‰ˆ
+ˆ]ˆÛ\ÜÓ˜[YOH›[Ù[[İ™\›^Hˆ]K]ZOH›[Ù[ˆ›ÛOH˜[\X[ÙÈˆ\šXK[[Ù[HYHˆ\šXK[X™[H¹«hùg*9b(:fi9.¤yêëú+¬9oeH‚ˆ]ˆÛ\ÜÓ˜[YOH›[Ù[YX[ÙÈˆ]K]ZOH›[Ù[YX[ÙÈˆÛÛXÚÏ^ÊJHOˆKœİÜ›ÜYØ][ÛŠ
+_O‚ˆØY\ŒˆÚ^™O^ÌÌHÛ\ÜÓ˜[YOH˜[š[X]K\Ü[ˆ^Vİ˜\ŠKXËXXØÙ[
+WHˆÏ‚ˆ]ˆÛ\ÜÓ˜[YOH™›^›^XÛÛ][\ËXÙ[\ˆØ\Lˆ^XÙ[\ˆ‚ˆÈÛ\ÜÓ˜[YOH›[Ù[]]H¹«hùg*9b(:fi9.¤yêëú+¬9oeOÚÏ‚ˆÛ\ÜÓ˜[YOH›Y[KY\ØÈ[]L‚ˆ9«hùg*9b(:fiØÛİY[]T[™[™Ë˜Ûİ[H9§hyo«¹/èy.¤yêëú+¬9oe{ï#:+íù.#z) yalúeëzhmzgh¸à ‚ˆÜ‚ˆÛ\ÜÓ˜[YOH›Y[KY\ØÈ[]L‚ˆ:-¡z/áÈÓX]œ›İ[™
+ÑRVS—ĞÓÕQÑSUWÕSQSÕUÓTÈÈL
+_H9éä¹§*¹k£9¢$9/&º!ê¹bª9b)9k¦¹i,z-)xà ‚ˆÜ‚ˆÙ]‚ˆÙ]‚ˆÙ]‚ˆ
+_B‚ˆÚ[XYÙQÙ[™\˜][Û‘˜Z[\™H	‰ˆ
+ˆÙ[™\˜]Y[XYÙQ\œ›Ü‘X[ÙÂˆY\ÜØYÙO^Ú[XYÙQÙ[™\˜][Û‘˜Z[\™_BˆÛÛÜÙO^Ê
+HOˆÙ][XYÙQÙ[™\˜][Û‘˜Z[\™J[
+_BˆÏ‚ˆ
+_B‚ˆËÊˆÚ]Ø\İ›İYšXØ][Ûˆ
+İ™\›^KÙ\È›İY™™Xİ^[İ]
+H
+‹ßBˆØÚ]Ø\İ	‰ˆ
+ˆ]ˆÛ\ÜÓ˜[YOH˜Ú]]Ø\İ[İ™\›^H‚ˆ]ˆÛ\ÜÓ˜[YOHÜ]Ø\İÚ]]Ø\İY›Ø][™È‚ˆØÚ]Ø\İOOH¹b¨:/ozgìù.d9.+K‹‹ˆˆÈ
+ˆÜ[ˆÛ\ÜÓ˜[YOHZK[ØY[™Ë]Ø\İXÛÛ[‚ˆÜ[ˆÛ\ÜÓ˜[YOHZK[ØY[™Ë\Ü[›™\ˆˆÏ‚ˆÜ[ØÚ]Ø\İOÜÜ[‚ˆÜÜ[‚ˆ
+HˆÚ]Ø\İBˆÙ]‚ˆÙ]‚ˆ
+_B‚ˆËÊˆ9cez bº+ëzgìËú)áºh¤z`&º+ç{ï&¹a¡z e9£ º/o{ï": #:gg¹£ä9bcH™]\›»ï"{ï#9/oùï*yl#ù..¹ «9­k¹ê¥ù¥íº`&º+çyîá9.í‚ˆ9.#z(ªùcn:/o{ï#:+¨y¥í‹ùkeùneyëbyâ­¹  yo¥ù.éy/çyåf{ï&ùîá9.í¹a¡z`ê9/§y£kˆZ[š[Z^™Y9a¬ùk¦¹®,¹§äÂˆ9aj9lcùåc:ghº/æ9¦+ùmé¹/©ù «9­k¹ê¥È
+‹ßBˆÜÚİÕ›ÚXÙPØ[	‰ˆÚ\˜Xİ\ˆ	‰ˆ
+ˆ›ÚXÙPØ[ØÜ™Y[‚ˆÙ\ÜÚ[Û^ÜÙ\ÜÚ[ÛŸBˆÚ\˜Xİ\^ØÚ\˜Xİ\ŸBˆ[š]X]Ü^ØØ[[š]X]ÜŸBˆZ[š[Z^™Y^ØØ[Z[š[Z^™YBˆÛ“Z[š[Z^™O^Ê
+HOˆÙ]Ø[Z[š[Z^™Y
+YJ_BˆÛ”™\İÜ™O^Ê
+HOˆÙ]Ø[Z[š[Z^™Y
+˜[ÙJ_BˆÛ‘[™^Ê
+HOˆ™]\›‘œ›ÛPØ[
+
+
+HOˆÙ]ÚİÕ›ÚXÙPØ[
+˜[ÙJJ_BˆÏ‚ˆ
+_BˆÜÚİÕšY[ĞØ[	‰ˆÚ\˜Xİ\ˆ	‰ˆ
+ˆšY[ĞØ[ØÜ™Y[‚ˆÙ\ÜÚ[Û^ÜÙ\ÜÚ[ÛŸBˆÚ\˜Xİ\^ØÚ\˜Xİ\ŸBˆ[š]X]Ü^ØØ[[š]X]ÜŸBˆZ[š[Z^™Y^ØØ[Z[š[Z^™YBˆÛ“Z[š[Z^™O^Ê
+HOˆÙ]Ø[Z[š[Z^™Y
+YJ_BˆÛ”™\İÜ™O^Ê
+HOˆÙ]Ø[Z[š[Z^™Y
+˜[ÙJ_BˆÛ‘[™^Ê
+HOˆ™]\›‘œ›ÛPØ[
+
+
+HOˆÙ]ÚİÕšY[ĞØ[
+˜[ÙJJ_BˆÏ‚ˆ
+_B‚ˆÙ]ˆ‚ˆ
+NÂŸB
