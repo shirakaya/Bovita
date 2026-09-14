@@ -289,6 +289,37 @@ type JobPayload = {
   merge?: Record<string, unknown> & { sessionId?: string };
 };
 
+const IDLE_REPEAT_CONTEXT_INSTRUCTION = [
+  "系统记录：你刚刚已经主动发送了上一条消息，但对方仍未回复。",
+  "如果再次联系，优先自然地更换话题，不要重复、改写或继续延伸上一条已经说过的内容；也不要重新提起聊天记录中已经结束、已得到回应或暂时没有新进展的事件。",
+  "只有事件仍在持续、出现新变化或确有必要确认时，才可以再次提及。你也可以选择静默。",
+].join("\n");
+
+/** 给服务端续排的冷场请求补入上一条真实回复，避免离线期间反复重放同一份历史快照。 */
+function appendIdleRepeatContext(
+  request: JobPayload["request"],
+  previousReply: string,
+): boolean {
+  const reply = previousReply.trim();
+  if (!reply) return false;
+
+  if (request.providerKind === "gemini") {
+    if (!Array.isArray(request.body.contents)) return false;
+    request.body.contents.push(
+      { role: "model", parts: [{ text: reply }] },
+      { role: "user", parts: [{ text: IDLE_REPEAT_CONTEXT_INSTRUCTION }] },
+    );
+    return true;
+  }
+
+  if (!Array.isArray(request.body.messages)) return false;
+  request.body.messages.push(
+    { role: "assistant", content: reply },
+    { role: "user", content: IDLE_REPEAT_CONTEXT_INSTRUCTION },
+  );
+  return true;
+}
+
 type ShortcutCommandRow = {
   id: string;
   status: "pending" | "claimed" | "succeeded" | "failed" | "expired" | "cancelled";
@@ -1184,7 +1215,9 @@ Deno.serve(async (req: Request) => {
           ? { ...idleRepeat, remaining: Number(idleRepeat.remaining) - 1 }
           : undefined,
       };
-      const nextPayload = { ...payload, merge: nextMerge };
+      const nextRequest = JSON.parse(JSON.stringify(payload.request)) as JobPayload["request"];
+      appendIdleRepeatContext(nextRequest, rawText);
+      const nextPayload = { ...payload, request: nextRequest, merge: nextMerge };
       await rest("push_jobs", {
         method: "POST",
         body: JSON.stringify([{

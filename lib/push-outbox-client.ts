@@ -230,13 +230,21 @@ export async function consumeServerOutbox(options?: { silent?: boolean; force?: 
                             name: rawMarker.name,
                         }
                         : undefined;
+                    const outboxCreatedAtMs = Date.parse(entry.created_at);
+                    const outboxCreatedAt = Number.isFinite(outboxCreatedAtMs)
+                        ? new Date(outboxCreatedAtMs).toISOString()
+                        : undefined;
                     const { hasVisible, newCount, stateValues } = await parseAndSaveResponse(
                         text,
                         sessionId,
                         meta.prevCount ?? 0,
                         followUpIndex,
                         existingMessages,
-                        { silent: options?.silent !== false, ...(shortcutMarker ? { shortcutMarker } : {}) },
+                        {
+                            silent: options?.silent !== false,
+                            createdAt: outboxCreatedAt,
+                            ...(shortcutMarker ? { shortcutMarker } : {}),
+                        },
                     );
                     if (hasVisible && newCount < 10) scheduleFollowUp(sessionId, newCount, stateValues);
                     clearTimedWakeIfHandled(entry.trigger_key);

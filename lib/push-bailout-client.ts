@@ -83,6 +83,13 @@ export const REPLY_BAILOUT_LEASE_MS = 90_000;
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
 
+const IDLE_RECONNECT_TOPIC_INSTRUCTION = [
+    "<idle_reconnect_topic_instruction>",
+    "主动联系时优先寻找自然的新话题，而不是重新提起聊天记录中已经结束、已得到回应或暂时没有新进展的事件；只有事件仍在持续、出现新变化或确有必要确认时，才再次提及。",
+    "如果此前已经主动联系过但还未收到回复，不要重复、改写或继续延伸上一条内容；应更换切入点，或选择静默。",
+    "</idle_reconnect_topic_instruction>",
+].join("\n");
+
 export type BailoutArmResult =
     | { ok: true }
     | { ok: false; reason: string };
@@ -445,6 +452,8 @@ export async function armIdleReconnectBailout(rule: IdleReconnectRule): Promise<
         maybeAppendCallInvite(llmMessages, rule.characterId);
         maybeAppendShortcutCapability(llmMessages, { continuationAvailable: true });
         const weixinBotId = maybeAppendWeixinChannel(llmMessages, rule.characterId);
+        // 只约束 Supabase 冷场任务；放在能力说明之后作为最终指令，且不改写或重置用户预设。
+        llmMessages.push({ role: "user", content: IDLE_RECONNECT_TOPIC_INSTRUCTION });
         const request = buildProviderRequest(config, preset, toLlmRequestMessages(llmMessages));
         const shortcutContinuation = buildOfflineShortcutContinuation(llmMessages, messages => {
             const req = buildProviderRequest(config, preset, toLlmRequestMessages(messages));
