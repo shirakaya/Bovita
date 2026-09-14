@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type CSSProperties } from "react";
+import { createPortal } from "react-dom";
 import { BookOpen, Check, ChevronDown, Code2, SlidersHorizontal, UserRound, X } from "lucide-react";
 import { CHAT_APP_SETTINGS_UPDATED_EVENT, loadChatAppSettings } from "@/lib/chat-storage";
 import {
@@ -53,6 +54,13 @@ function getStatusSafeTop(element: HTMLElement): number {
     const raw = window.getComputedStyle(element).getPropertyValue("--safe-area-top");
     const safeAreaTop = Number.parseFloat(raw);
     return Math.max(72, (Number.isFinite(safeAreaTop) ? safeAreaTop : 48) + 18);
+}
+
+function getFloatingViewport() {
+    return {
+        width: window.visualViewport?.width || document.documentElement.clientWidth || window.innerWidth,
+        height: window.visualViewport?.height || document.documentElement.clientHeight || window.innerHeight,
+    };
 }
 
 export function QuickActionFloat() {
@@ -152,18 +160,21 @@ export function QuickActionFloat() {
         };
     }, [floatingDockEnabled, dockState.isExpanded, open]);
 
-    // 贴边坐标是按像素持久化的，换了视口尺寸要先夹回屏幕内，否则球可能落在屏幕外碰不到
+    // 与插件快捷导入球保持一致：悬浮层 portal 到 body 后按 visualViewport 定位，
+    // 避免受到 .phone-shell 的 zoom/transform 和 overflow 裁切影响。
     useLayoutEffect(() => {
         if (!floatingDockEnabled) return;
-        const layer = layerRef.current;
-        if (!layer) return;
         const apply = () => {
-            const rect = layer.getBoundingClientRect();
-            clampFloatingDockAnchor(rect.width, rect.height);
+            const viewport = getFloatingViewport();
+            clampFloatingDockAnchor(viewport.width, viewport.height);
         };
         apply();
         window.addEventListener("resize", apply);
-        return () => window.removeEventListener("resize", apply);
+        window.visualViewport?.addEventListener("resize", apply);
+        return () => {
+            window.removeEventListener("resize", apply);
+            window.visualViewport?.removeEventListener("resize", apply);
+        };
     }, [floatingDockEnabled, enabled]);
 
     useLayoutEffect(() => {
@@ -173,27 +184,29 @@ export function QuickActionFloat() {
             setPopoverPosition(null);
             return;
         }
-        const rect = layer.getBoundingClientRect();
+        const viewport = getFloatingViewport();
+        const layerWidth = viewport.width;
+        const layerHeight = viewport.height;
         const buttonRect = button.getBoundingClientRect();
         const posAnchor = (draggingFloatingButton && floatingPosition)
             ? floatingPosition
-            : (dockState.anchorPosition)
+            : (floatingDockEnabled && dockState.anchorPosition)
                 ? dockState.anchorPosition
                 : (floatingPosition ?? {
-                    left: buttonRect.left - rect.left,
-                    top: buttonRect.top - rect.top,
+                    left: buttonRect.left,
+                    top: buttonRect.top,
                 });
-        const width = Math.min(344, rect.width - 32);
+        const width = Math.min(344, layerWidth - 32);
         const statusSafeTop = getStatusSafeTop(layer);
-        const estimatedHeight = Math.min(520, Math.max(240, rect.height - statusSafeTop - 12));
+        const estimatedHeight = Math.min(520, Math.max(240, layerHeight - statusSafeTop - 12));
         const left = posAnchor.left - width - 8;
         const top = posAnchor.top - estimatedHeight - 8;
-        const maxTop = Math.max(statusSafeTop, rect.height - estimatedHeight - 12);
+        const maxTop = Math.max(statusSafeTop, layerHeight - estimatedHeight - 12);
         setPopoverPosition({
-            left: Math.min(Math.max(12, left), Math.max(12, rect.width - width - 12)),
+            left: Math.min(Math.max(12, left), Math.max(12, layerWidth - width - 12)),
             top: Math.min(Math.max(statusSafeTop, top), maxTop),
         });
-    }, [open, floatingPosition, dockState.anchorPosition, draggingFloatingButton]);
+    }, [open, floatingPosition, floatingDockEnabled, dockState.anchorPosition, draggingFloatingButton]);
 
     const currentSlot: BindingSlot = useMemo(() => {
         if (scope === "global") return config.globalDefaults || {};
@@ -252,23 +265,17 @@ export function QuickActionFloat() {
     }, [selectedWorldBookIds, updateWorldBooks]);
 
     function getFloatingButtonBounds(button: HTMLButtonElement, currentPos: FloatingPosition | null) {
-        const parent = button.offsetParent instanceof HTMLElement ? button.offsetParent : null;
-        const parentRect = parent?.getBoundingClientRect() ?? {
-            left: 0,
-            top: 0,
-            width: window.innerWidth,
-            height: window.innerHeight,
-        };
-        // 始终使用未变换的纯净布局坐标：优先使用 state 中的位置，若初始未拖拽则取 offsetLeft / offsetTop（不受 CSS transform 影响）
-        const left = currentPos ? currentPos.left : button.offsetLeft;
-        const top = currentPos ? currentPos.top : button.offsetTop;
+        const viewport = getFloatingViewport();
+        const buttonRect = button.getBoundingClientRect();
+        const left = currentPos ? currentPos.left : buttonRect.left;
+        const top = currentPos ? currentPos.top : buttonRect.top;
         return {
             left,
             top,
-            maxLeft: Math.max(12, parentRect.width - 56 - 12),
-            maxTop: Math.max(12, parentRect.height - 56 - 12),
-            parentWidth: parentRect.width,
-            parentHeight: parentRect.height,
+            maxLeft: Math.max(12, viewport.width - 56 - 12),
+            maxTop: Math.max(12, viewport.height - 56 - 12),
+            parentWidth: viewport.width,
+            parentHeight: viewport.height,
         };
     }
 
@@ -281,8 +288,8 @@ export function QuickActionFloat() {
         }
         event.stopPropagation();
         const button = event.currentTarget;
-        const anchor = isDual ? dockState.anchorPosition : null;
-        const bounds = getFloatingButtonBounds(button, (isDual && anchor) ? anchor : floatingPosition);
+        const anchor = floatingDockEnabled ? dockState.anchorPosition : null;
+        const bounds = getFloatingButtonBounds(button, anchor ?? floatingPosition);
         floatingDragRef.current = {
             pointerId: event.pointerId,
             startClientX: event.clientX,
@@ -325,15 +332,12 @@ export function QuickActionFloat() {
         if (drag.moved) {
             suppressFloatingClickRef.current = true;
             if (floatingDockEnabled) {
-                // Auto-snap to closest edge (left or right)
                 const bounds = getFloatingButtonBounds(event.currentTarget, floatingPosition);
+                const currentX = clampFloatingPosition(drag.left + event.clientX - drag.startClientX, bounds.maxLeft);
+                const currentTop = clampFloatingPosition(drag.top + event.clientY - drag.startClientY, bounds.maxTop);
                 const midX = bounds.parentWidth / 2;
-                const currentX = drag.left + (event.clientX - drag.startClientX);
-                const currentTop = drag.top + (event.clientY - drag.startClientY);
                 const isLeft = currentX < midX;
-                const snappedLeft = isLeft ? 18 : Math.max(18, bounds.parentWidth - 56 - 18);
-                const snappedTop = clampFloatingPosition(currentTop, bounds.maxTop);
-                const newPos = { left: snappedLeft, top: snappedTop };
+                const newPos = { left: currentX, top: currentTop };
                 setFloatingPosition(newPos);
                 setFloatingDockAnchor({ ...newPos, dockSide: isLeft ? "left" : "right" });
                 if (!open) {
@@ -406,7 +410,7 @@ export function QuickActionFloat() {
     const isExpanded = floatingDockEnabled && !open && dockState.isExpanded;
     const isPaired = isDual && !isQuickPrimary && !open && dockState.isExpanded;
     const dockSide = dockState.dockSide;
-    const anchor = isDual ? dockState.anchorPosition : null;
+    const anchor = floatingDockEnabled ? dockState.anchorPosition : null;
 
     const buttonClass = [
         "prompt-viewer-float-button",
@@ -421,7 +425,7 @@ export function QuickActionFloat() {
     let buttonStyle: CSSProperties | undefined;
     if (draggingFloatingButton && floatingPosition) {
         buttonStyle = { left: floatingPosition.left, top: floatingPosition.top };
-    } else if (isDual && anchor) {
+    } else if (floatingDockEnabled && anchor) {
         buttonStyle = { left: anchor.left, top: anchor.top };
     } else if (floatingPosition) {
         buttonStyle = { left: floatingPosition.left, top: floatingPosition.top };
@@ -432,14 +436,16 @@ export function QuickActionFloat() {
         buttonStyle = { ...buttonStyle, display: "none" };
     }
 
-    return (
+    if (typeof document === "undefined") return null;
+
+    return createPortal(
         <div className="quick-action-layer" ref={layerRef}>
             <button
                 ref={floatingButtonRef}
                 type="button"
                 className={buttonClass}
                 aria-label="打开快捷操作"
-                data-positioned={(isDual ? !!anchor : !!floatingPosition) ? "" : undefined}
+        data-positioned={(floatingDockEnabled ? !!anchor : !!floatingPosition) ? "" : undefined}
                 data-dragging={draggingFloatingButton ? "" : undefined}
                 data-dock-side={floatingDockEnabled ? dockSide : undefined}
                 onPointerDown={handleFloatingPointerDown}
@@ -594,6 +600,7 @@ export function QuickActionFloat() {
                     </div>
                 </div>
             ) : null}
-        </div>
+        </div>,
+        document.body
     );
 }

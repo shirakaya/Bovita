@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useRef, useSyncExternalStore, useMemo, useCallback, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type CSSProperties } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, useSyncExternalStore, useMemo, useCallback, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type CSSProperties } from "react";
+import { createPortal } from "react-dom";
 import { getDebugChatState, getDebugPromptSnapshot, subscribeDebugChatState, subscribeDebugPromptSnapshot, type DebugPromptSnapshot } from "@/lib/debug-store";
 import { previewPromptRequestSnapshot, ChatEngineError } from "@/lib/chat-engine";
 import { previewGroupPromptRequestSnapshot } from "@/lib/group-chat-engine";
@@ -12,6 +13,7 @@ import {
     collapseFloatingDock,
     setFloatingDockAnchor,
     setActiveFloatingTool,
+    clampFloatingDockAnchor,
 } from "@/lib/floating-dock-store";
 import {
     previewMomentsPostPrompt,
@@ -88,6 +90,13 @@ type FloatingDragState = FloatingPosition & {
     moved: boolean;
 };
 
+function getFloatingViewport() {
+    return {
+        width: window.visualViewport?.width || document.documentElement.clientWidth || window.innerWidth,
+        height: window.visualViewport?.height || document.documentElement.clientHeight || window.innerHeight,
+    };
+}
+
 function stringifyContent(content: UnifiedMessage["content"]): string {
     if (typeof content === "string") return content;
     return content.map(p => p.type === "text" ? p.text : "[图片]").join("\n");
@@ -113,12 +122,28 @@ export function DebugPromptPanel() {
     const [floatingDockEnabled, setFloatingDockEnabled] = useState(false);
     const [quickActionEnabled, setQuickActionEnabled] = useState(false);
     const dockState = useSyncExternalStore(subscribeFloatingDockState, getFloatingDockState, getFloatingDockState);
+    const floatingButtonRef = useRef<HTMLButtonElement | null>(null);
     const floatingDragRef = useRef<FloatingDragState | null>(null);
     const suppressFloatingClickRef = useRef(false);
     const [selectedChatSessionId, setSelectedChatSessionId] = useState("");
     const [followUpMode, setFollowUpMode] = useState(false);
     const [offlinePreviewMode, setOfflinePreviewMode] = useState(false);
     const [offlinePendingText, setOfflinePendingText] = useState("");
+
+    useLayoutEffect(() => {
+        if (!floatingDockEnabled || !enabled) return;
+        const apply = () => {
+            const viewport = getFloatingViewport();
+            clampFloatingDockAnchor(viewport.width, viewport.height);
+        };
+        apply();
+        window.addEventListener("resize", apply);
+        window.visualViewport?.addEventListener("resize", apply);
+        return () => {
+            window.removeEventListener("resize", apply);
+            window.visualViewport?.removeEventListener("resize", apply);
+        };
+    }, [floatingDockEnabled, enabled]);
 
     // Moments state
     const [momentsResult, setMomentsResult] = useState<MomentsPreviewResult | null>(null);
@@ -622,23 +647,17 @@ export function DebugPromptPanel() {
     }
 
     function getFloatingButtonBounds(button: HTMLButtonElement, currentPos: FloatingPosition | null) {
-        const parent = button.offsetParent instanceof HTMLElement ? button.offsetParent : null;
-        const parentRect = parent?.getBoundingClientRect() ?? {
-            left: 0,
-            top: 0,
-            width: window.innerWidth,
-            height: window.innerHeight,
-        };
-        // 始终使用未变换的纯净布局坐标：优先使用 state 中的位置，若初始未拖拽则取 offsetLeft / offsetTop（不受 CSS transform 影响）
-        const left = currentPos ? currentPos.left : button.offsetLeft;
-        const top = currentPos ? currentPos.top : button.offsetTop;
+        const viewport = getFloatingViewport();
+        const buttonRect = button.getBoundingClientRect();
+        const left = currentPos ? currentPos.left : buttonRect.left;
+        const top = currentPos ? currentPos.top : buttonRect.top;
         return {
             left,
             top,
-            maxLeft: Math.max(12, parentRect.width - 56 - 12),
-            maxTop: Math.max(12, parentRect.height - 56 - 12),
-            parentWidth: parentRect.width,
-            parentHeight: parentRect.height,
+            maxLeft: Math.max(12, viewport.width - 56 - 12),
+            maxTop: Math.max(12, viewport.height - 56 - 12),
+            parentWidth: viewport.width,
+            parentHeight: viewport.height,
         };
     }
 
@@ -651,8 +670,8 @@ export function DebugPromptPanel() {
         }
         event.stopPropagation();
         const button = event.currentTarget;
-        const anchor = isDual ? dockState.anchorPosition : null;
-        const bounds = getFloatingButtonBounds(button, (isDual && anchor) ? anchor : floatingPosition);
+        const anchor = floatingDockEnabled ? dockState.anchorPosition : null;
+        const bounds = getFloatingButtonBounds(button, anchor ?? floatingPosition);
         floatingDragRef.current = {
             pointerId: event.pointerId,
             startClientX: event.clientX,
@@ -696,13 +715,11 @@ export function DebugPromptPanel() {
             suppressFloatingClickRef.current = true;
             if (floatingDockEnabled) {
                 const bounds = getFloatingButtonBounds(event.currentTarget, floatingPosition);
+                const currentX = clampFloatingPosition(drag.left + event.clientX - drag.startClientX, bounds.maxLeft);
+                const currentTop = clampFloatingPosition(drag.top + event.clientY - drag.startClientY, bounds.maxTop);
                 const midX = bounds.parentWidth / 2;
-                const currentX = drag.left + (event.clientX - drag.startClientX);
-                const currentTop = drag.top + (event.clientY - drag.startClientY);
                 const isLeft = currentX < midX;
-                const snappedLeft = isLeft ? 18 : Math.max(18, bounds.parentWidth - 56 - 18);
-                const snappedTop = clampFloatingPosition(currentTop, bounds.maxTop);
-                const newPos = { left: snappedLeft, top: snappedTop };
+                const newPos = { left: currentX, top: currentTop };
                 setFloatingPosition(newPos);
                 setFloatingDockAnchor({ ...newPos, dockSide: isLeft ? "left" : "right" });
                 if (collapsed) {
@@ -873,7 +890,7 @@ export function DebugPromptPanel() {
     );
     const isExpanded = floatingDockEnabled && !isPanelOpen && dockState.isExpanded;
     const isPaired = isDual && !isPromptPrimary && !isPanelOpen && dockState.isExpanded;
-    const anchor = isDual ? dockState.anchorPosition : null;
+    const anchor = floatingDockEnabled ? dockState.anchorPosition : null;
     const dockSide = dockState.dockSide;
 
     const buttonClass = [
@@ -888,7 +905,7 @@ export function DebugPromptPanel() {
     let buttonStyle: CSSProperties | undefined;
     if (draggingFloatingButton && floatingPosition) {
         buttonStyle = { left: floatingPosition.left, top: floatingPosition.top };
-    } else if (isDual && anchor) {
+    } else if (floatingDockEnabled && anchor) {
         buttonStyle = { left: anchor.left, top: anchor.top };
     } else if (floatingPosition) {
         buttonStyle = { left: floatingPosition.left, top: floatingPosition.top };
@@ -899,12 +916,13 @@ export function DebugPromptPanel() {
         buttonStyle = { ...buttonStyle, zIndex: 100001 };
     }
 
-    const floatingButton = showFloatingButton ? (
+    const floatingButton = showFloatingButton && typeof document !== "undefined" ? createPortal(
         <button
+            ref={floatingButtonRef}
             type="button"
             className={buttonClass}
             aria-label={isPanelOpen ? "关闭提示词查看器" : "打开提示词查看器"}
-            data-positioned={(isDual ? !!anchor : !!floatingPosition) ? "" : undefined}
+            data-positioned={(floatingDockEnabled ? !!anchor : !!floatingPosition) ? "" : undefined}
             data-dragging={draggingFloatingButton ? "" : undefined}
             data-dock-side={floatingDockEnabled ? dockSide : undefined}
             onPointerDown={handleFloatingPointerDown}
@@ -915,7 +933,8 @@ export function DebugPromptPanel() {
             style={buttonStyle}
         >
             <FileText size={24} strokeWidth={1.9} />
-        </button>
+        </button>,
+        document.body
     ) : null;
 
     if (collapsed) {

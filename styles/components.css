@@ -1581,7 +1581,7 @@
 }
 
 .prompt-viewer-float-button {
-  position: absolute;
+  position: fixed;
   right: 18px;
   bottom: 84px;
   z-index: 99999;
@@ -1654,7 +1654,7 @@
 }
 
 .quick-action-layer {
-  position: absolute;
+  position: fixed;
   inset: 0;
   z-index: 100000;
   pointer-events: none;
@@ -1689,25 +1689,17 @@
     0 6px 18px rgba(70, 154, 195, 0.18);
 }
 
-/* 悬浮球贴边停靠状态（半隐藏、低透明度、平滑阻尼动效） */
+/* 收拢状态仍保持完整可见；位置由用户自由拖动，不再平移到 Float 屏幕之外。 */
 .prompt-viewer-float-button.is-docked {
-  transform: translateX(36px) scale(0.75);
+  transform: scale(0.75);
   opacity: 0.55;
   animation: none !important;
   transition: transform 320ms cubic-bezier(0.25, 0.8, 0.25, 1), opacity 240ms ease, box-shadow 200ms ease;
 }
 
-.prompt-viewer-float-button.is-docked[data-dock-side="left"] {
-  transform: translateX(-36px) scale(0.75);
-}
-
 .prompt-viewer-float-button.is-docked:hover {
   opacity: 0.9;
-  transform: translateX(24px) scale(0.78);
-}
-
-.prompt-viewer-float-button.is-docked[data-dock-side="left"]:hover {
-  transform: translateX(-24px) scale(0.78);
+  transform: scale(0.78);
 }
 
 /* 弹窗打开态与展开挑选状态：恢复完全可见，停止原浮动动画保证贴边过渡丝滑无跳帧 */
