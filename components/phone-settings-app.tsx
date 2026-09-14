@@ -29,6 +29,7 @@ import { Toggle } from "./ui/form";
 import { loadChatAppSettings, saveChatAppSettings } from "@/lib/chat-storage";
 import { loadKeepAlive, saveKeepAlive } from "@/lib/weixin-storage";
 import { BINDING_ACCENTS, CONTENT_APP_ACCENTS } from "@/lib/ui-accent-colors";
+import { ChatPluginSlot } from "./chat/chat-plugin-slot";
 
 export const SettingsContext = createContext<{
     setSubpageTitle: (title: string | null) => void;
@@ -510,6 +511,7 @@ export function PhoneSettingsApp({ onClose, onNotice }: SettingsPageProps) {
                                         <Toggle checked={quickActionEnabled} onChange={handleQuickActionChange} className="settings-toggle-control" />
                                     </span>
                                 </div>
+                                <ChatPluginSlot name="settings.tools" className="settings-tools-plugin-slot" />
                             </div>
                         </div>
                         <CardGrid

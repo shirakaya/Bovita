@@ -67,5 +67,10 @@ export const ChatPluginSlot = memo(function ChatPluginSlot({ name, slotProps, cl
     }, [name, slotVersion, hasPlugins, sessionId]);
 
     if (!hasPlugins) return null;
-    return <div ref={containerRef} className={className} data-chat-plugin-slot={name} />;
+    return <div
+        ref={containerRef}
+        className={className}
+        data-chat-plugin-slot={name}
+        style={name === "settings.tools" ? { display: "contents" } : undefined}
+    />;
 });

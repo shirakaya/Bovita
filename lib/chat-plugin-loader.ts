@@ -4,6 +4,16 @@
 
 import type { ChatPluginModule } from "./chat-plugin-types";
 import { loadChatPlugins, persistChatPlugin, validateChatPluginManifest } from "./chat-plugin-storage";
+import JSZip from "jszip";
+
+const MAX_PLUGIN_ARCHIVE_BYTES = 10 * 1024 * 1024;
+
+function isUsablePluginEntry(name: string): boolean {
+    const parts = name.split("/").filter(Boolean);
+    if (parts.length === 0) return false;
+    if (parts.some(part => part === "__MACOSX" || part.startsWith("."))) return false;
+    return name.toLowerCase().endsWith(".js");
+}
 
 /**
  * 执行插件源码并校验模块形状。
@@ -63,4 +73,49 @@ export async function installChatPluginFromCode(code: string, opts?: {
         fromVersion: existing?.manifest.version,
         toVersion: module.manifest.version,
     };
+}
+
+/** 从用户选择的 .js / .zip 文件安装插件。ZIP 内有多个 JS 时先返回候选路径。 */
+export async function installChatPluginFromFile(file: File, opts?: {
+    expectedId?: string;
+    entryName?: string;
+}): Promise<{
+    ok: boolean; error?: string; name?: string;
+    upgraded?: boolean; fromVersion?: string; toVersion?: string;
+    entries?: string[];
+}> {
+    const lowerName = file.name.toLowerCase();
+    if (lowerName.endsWith(".js")) {
+        return installChatPluginFromCode(await file.text(), { expectedId: opts?.expectedId });
+    }
+    if (!lowerName.endsWith(".zip")) {
+        return { ok: false, error: "请选择 .js 或 .zip 插件文件" };
+    }
+    if (file.size > MAX_PLUGIN_ARCHIVE_BYTES) {
+        return { ok: false, error: `ZIP 文件过大（上限 ${MAX_PLUGIN_ARCHIVE_BYTES / 1024 / 1024}MB）` };
+    }
+
+    try {
+        const zip = await JSZip.loadAsync(file);
+        const entries = Object.values(zip.files)
+            .filter(entry => !entry.dir && isUsablePluginEntry(entry.name))
+            .map(entry => entry.name)
+            .sort((a, b) => a.localeCompare(b));
+        if (entries.length === 0) return { ok: false, error: "ZIP 中没有找到插件 .js 文件" };
+
+        const entryName = opts?.entryName;
+        if (!entryName && entries.length > 1) {
+            return { ok: false, error: "ZIP 中包含多个插件，请选择要安装的文件", entries };
+        }
+        const selectedName = entryName || entries[0];
+        if (!entries.includes(selectedName)) {
+            return { ok: false, error: "选择的插件文件不在 ZIP 中", entries };
+        }
+        const selected = zip.file(selectedName);
+        if (!selected) return { ok: false, error: "无法读取 ZIP 中的插件文件" };
+        const code = await selected.async("string");
+        return installChatPluginFromCode(code, { expectedId: opts?.expectedId });
+    } catch (error) {
+        return { ok: false, error: `ZIP 解析失败：${error instanceof Error ? error.message : String(error)}` };
+    }
 }

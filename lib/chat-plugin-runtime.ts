@@ -16,7 +16,7 @@ import { loadCharacters } from "./character-storage";
 import { loadApiConfigs, loadBindingConfig } from "./settings-storage";
 import { simpleLLMCall } from "./api-helpers";
 import { getChatPluginHookBus } from "./chat-plugin-hooks";
-import { loadChatPluginModule } from "./chat-plugin-loader";
+import { installChatPluginFromCode, installChatPluginFromFile, loadChatPluginModule } from "./chat-plugin-loader";
 import {
     CHAT_PLUGINS_CHANGED_EVENT,
     getChatPluginVar,
@@ -471,6 +471,10 @@ class ChatPluginRuntime {
             },
 
             system: {
+                plugins: {
+                    installFromCode: (code, opts) => installChatPluginFromCode(code, opts),
+                    installFromFile: (file, opts) => installChatPluginFromFile(file, opts),
+                },
                 storage: {
                     get: <T,>(key: string): T | null => {
                         const data = readChatPluginData(pluginId);

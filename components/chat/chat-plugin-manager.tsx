@@ -19,7 +19,7 @@ import {
     uninstallChatPlugin,
     updateChatPluginSettings,
 } from "@/lib/chat-plugin-storage";
-import { installChatPluginFromCode } from "@/lib/chat-plugin-loader";
+import { installChatPluginFromCode, installChatPluginFromFile } from "@/lib/chat-plugin-loader";
 import { getChatPluginRuntime, isChatPluginSafeMode, setChatPluginSafeMode } from "@/lib/chat-plugin-runtime";
 import { ChatPluginSlot } from "@/components/chat/chat-plugin-slot";
 import { CHAT_PLUGIN_FULL_DOC } from "@/lib/chat-plugin-docs";
@@ -109,6 +109,26 @@ export function ChatPluginManager({ onBack }: { onBack: () => void }) {
 
     const handleFileChosen = async (file: File | undefined) => {
         if (!file) return;
+        if (fileTargetRef.current === "import" && file.name.toLowerCase().endsWith(".zip")) {
+            if (!window.confirm(INSTALL_WARNING)) {
+                if (fileInputRef.current) fileInputRef.current.value = "";
+                return;
+            }
+            setInstalling(true);
+            try {
+                const result = await installChatPluginFromFile(file);
+                setHint({
+                    ok: result.ok,
+                    text: result.ok
+                        ? (result.upgraded ? `已升级「${result.name}」，配置与数据已保留` : `已安装「${result.name}」`)
+                        : (result.entries?.length ? "ZIP 中包含多个插件，请安装快捷导入插件后从悬浮球选择" : result.error || "安装失败"),
+                });
+            } finally {
+                setInstalling(false);
+                if (fileInputRef.current) fileInputRef.current.value = "";
+            }
+            return;
+        }
         const text = await file.text();
         if (fileTargetRef.current === "import") await handleInstall(text);
         else await handleUpdate(fileTargetRef.current, text);
@@ -316,7 +336,7 @@ export function ChatPluginManager({ onBack }: { onBack: () => void }) {
                                 <span className="menu-desc" style={{ color: hint.ok ? "var(--c-success)" : "var(--c-danger)" }}>{hint.text}</span>
                             </div>
                         )}
-                        <input ref={fileInputRef} type="file" accept=".js,.mjs,text/javascript" className="hidden" onChange={e => { void handleFileChosen(e.target.files?.[0]); }} />
+                        <input ref={fileInputRef} type="file" accept=".js,.mjs,.zip,text/javascript,application/zip" className="hidden" onChange={e => { void handleFileChosen(e.target.files?.[0]); }} />
                     </div>
                 </div>
 

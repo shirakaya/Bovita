@@ -140,6 +140,7 @@ opts.timeoutMs 覆盖该 transform 的超时（默认 8000ms）。在 transform 
   - "chat.inputToolbar"：输入栏"+"面板下方（props: { isGroup }）
   - "message.footer"：每条文本气泡下方（props: { sessionId, message }）——注意会被多条消息各调用一次
   - "settings.section"：插件管理页的自定义设置区
+  - "settings.tools"：设置首页 Tools 区，可渲染独立工具开关
 - \`ctx.ui.messageAction({ id, label, filter?, onSelect })\` —— 消息长按菜单加一项；onSelect(msg, { updateMessage, toast })
 - \`ctx.ui.messageKind(kind, (el, msg) => {})\` —— 注册自定义消息类型；配合 \`ctx.data.messages.push({ ..., mediaType: "plugin:" + kind, mediaData: {...} })\` 发出由你渲染的卡片消息
 - \`ctx.ui.injectCSS(css)\` —— 注入全局样式（禁用自动移除）
@@ -147,6 +148,7 @@ opts.timeoutMs 覆盖该 transform 的超时（默认 8000ms）。在 transform 
 
 ## ctx.system —— 系统
 
+- \`ctx.system.plugins.installFromCode(code)\` / \`.installFromFile(file, { entryName? })\` —— 安装或升级插件；文件支持 .js 与 .zip，ZIP 多脚本时先返回 entries 再指定 entryName
 - \`ctx.system.storage.get/set/remove/keys\` —— 插件私有 KV（卸载时清除）
 - \`ctx.system.timers.setTimeout/setInterval(fn, ms)\` —— 定时器（禁用自动清除；interval 最小 200ms）
 - \`ctx.system.bus.emit(topic, data)\` / \`.on(topic, fn)\` —— 插件间通信

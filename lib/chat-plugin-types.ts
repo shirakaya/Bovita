@@ -160,12 +160,14 @@ export type ChatPluginEventPayloadMap = {
  *   chat.inputToolbar  输入栏"+"扩展面板内（插件工具按钮区）
  *   message.footer     每条文本消息气泡下方
  *   settings.section   插件管理页内该插件的自定义设置区
+ *   settings.tools     设置首页 Tools 区（适合渲染独立工具开关）
  */
 export type ChatPluginSlotName =
     | "chat.header"
     | "chat.inputToolbar"
     | "message.footer"
-    | "settings.section";
+    | "settings.section"
+    | "settings.tools";
 
 export type ChatPluginSlotProps = {
     sessionId?: string;
@@ -304,6 +306,11 @@ export type ChatPluginContext = {
     };
 
     system: {
+        /** 安装/升级聊天插件。文件入口同时支持 .js 与 ZIP。 */
+        plugins: {
+            installFromCode(code: string, opts?: { expectedId?: string }): Promise<ChatPluginInstallResult>;
+            installFromFile(file: File, opts?: { expectedId?: string; entryName?: string }): Promise<ChatPluginInstallResult>;
+        };
         /** 插件私有 KV 存储（按插件 id 分桶，卸载时随插件清除） */
         storage: {
             get<T = unknown>(key: string): T | null;
@@ -334,6 +341,17 @@ export type ChatPluginContext = {
         /** 带插件 id 前缀的日志（也进管理页错误日志的 info 级） */
         log(...args: unknown[]): void;
     };
+};
+
+export type ChatPluginInstallResult = {
+    ok: boolean;
+    error?: string;
+    name?: string;
+    upgraded?: boolean;
+    fromVersion?: string;
+    toVersion?: string;
+    /** ZIP 内有多个插件脚本时返回候选路径；指定 entryName 后可继续安装。 */
+    entries?: string[];
 };
 
 // ── 安装态 ────────────────────────────────────────────────
