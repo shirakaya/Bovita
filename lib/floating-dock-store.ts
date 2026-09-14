@@ -44,11 +44,11 @@ function getInitialAnchor(): FloatingDockPosition | null {
 }
 
 export type FloatingDockState = {
-    /** Whether the floating dock is currently collapsed to its primary tool */
+    /** Whether the floating dock is currently docked/snapped to the edge */
     isDocked: boolean;
     /** Whether the dock is expanded horizontally showing both tools for selection */
     isExpanded: boolean;
-    /** Which horizontal side has more suitable space for expanding paired tools */
+    /** Which side of the viewport the dock is attached to ("left" | "right") */
     dockSide: DockSide;
     /** Position anchor of the primary floating ball */
     anchorPosition: FloatingDockPosition | null;
@@ -86,7 +86,7 @@ export function subscribeFloatingDockState(fn: () => void): () => void {
     };
 }
 
-/** Set position anchor of the primary dock button (syncs position and expansion side to paired buttons) */
+/** Set position anchor of the primary dock button (syncs position and dockSide to paired buttons) */
 export function setFloatingDockAnchor(pos: FloatingDockPosition | null): void {
     const nextDockSide = pos?.dockSide || _dockState.dockSide;
     if (
@@ -112,18 +112,18 @@ export function setFloatingDockAnchor(pos: FloatingDockPosition | null): void {
 }
 
 /**
- * 把持久化的悬浮坐标夹回当前 Float 屏幕。这里只修正越界，不再把用户拖好的位置
- * 强制吸附到左右边缘；dockSide 仅用于决定双球展开方向。
+ * 把持久化的停靠坐标夹回当前 visual viewport。悬浮层已脱离缩放后的 phone-shell，
+ * 因此这里可以安全地按左右边缘重新吸附，不会再把球推到实际屏幕之外。
  */
 export function clampFloatingDockAnchor(parentWidth: number, parentHeight: number): void {
     const pos = _dockState.anchorPosition;
     if (!pos || !(parentWidth > 0) || !(parentHeight > 0)) return;
     const size = 56;
+    const edge = 18;
     const margin = 12;
-    const maxLeft = Math.max(margin, parentWidth - size - margin);
-    const left = Math.min(Math.max(pos.left, margin), maxLeft);
+    const side: DockSide = pos.dockSide ?? (pos.left + size / 2 < parentWidth / 2 ? "left" : "right");
+    const left = side === "left" ? edge : Math.max(edge, parentWidth - size - edge);
     const top = Math.min(Math.max(pos.top, margin), Math.max(margin, parentHeight - size - margin));
-    const side: DockSide = left + size / 2 < parentWidth / 2 ? "left" : "right";
     if (left === pos.left && top === pos.top && side === _dockState.dockSide) return;
     setFloatingDockAnchor({ left, top, dockSide: side });
 }

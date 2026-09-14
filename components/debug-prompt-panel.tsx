@@ -719,7 +719,8 @@ export function DebugPromptPanel() {
                 const currentTop = clampFloatingPosition(drag.top + event.clientY - drag.startClientY, bounds.maxTop);
                 const midX = bounds.parentWidth / 2;
                 const isLeft = currentX < midX;
-                const newPos = { left: currentX, top: currentTop };
+                const snappedLeft = isLeft ? 18 : Math.max(18, bounds.parentWidth - 56 - 18);
+                const newPos = { left: snappedLeft, top: currentTop };
                 setFloatingPosition(newPos);
                 setFloatingDockAnchor({ ...newPos, dockSide: isLeft ? "left" : "right" });
                 if (collapsed) {
