@@ -122,32 +122,22 @@ function useChatVisualViewport(appRef: RefObject<HTMLDivElement | null>, enabled
             });
         };
 
-        const stageIpadKeyboardBeforeFocus = (event: Event) => {
+        const stageIpadKeyboardAfterFocus = (event: FocusEvent) => {
             if (!fixedIpadLayout) return;
             const target = event.target;
-            if (!(target instanceof Element) || !app.contains(target)) return;
-            const editor = target.closest<HTMLElement>(
+            if (!(target instanceof HTMLElement) || !app.contains(target)) return;
+            if (!target.matches(
                 ".chat-input-bar input, .chat-input-bar textarea, .chat-input-bar [contenteditable='true']",
-            );
-            if (!editor) return;
+            )) return;
 
             const portrait = window.matchMedia("(orientation: portrait)").matches;
             const fallbackRatio = portrait ? 0.55 : 0.5;
             const predictedViewportHeight = readSavedIpadViewportHeight()
                 ?? Math.max(280, Math.round(baselineHeight * fallbackRatio));
-            const needsManualFocus = document.activeElement !== editor;
 
-            // The composer moves before pointerup. Cancel WebKit's default tap handling so
-            // the old screen coordinate cannot land on the page underneath and blur it.
-            if (needsManualFocus && event.cancelable) {
-                event.preventDefault();
-            }
+            // Native focus is already established, while keyboard presentation has not
+            // started yet. Stage the saved layout now without moving the tap target.
             applyKeyboardViewport(predictedViewportHeight / getScale(), 0, true);
-
-            // Focus while the original tap still counts as a user gesture on iOS.
-            if (needsManualFocus) {
-                editor.focus({ preventScroll: true });
-            }
         };
 
         const updateViewport = () => {
@@ -179,21 +169,19 @@ function useChatVisualViewport(appRef: RefObject<HTMLDivElement | null>, enabled
         const requestUpdate = () => {
             updateViewport();
         };
+        const handleFocusIn = (event: FocusEvent) => {
+            stageIpadKeyboardAfterFocus(event);
+            updateViewport();
+        };
 
-        if (fixedIpadLayout) {
-            document.addEventListener("pointerdown", stageIpadKeyboardBeforeFocus, true);
-        }
-        document.addEventListener("focusin", requestUpdate, true);
+        document.addEventListener("focusin", handleFocusIn, true);
         document.addEventListener("focusout", requestUpdate, true);
         viewport.addEventListener("resize", requestUpdate);
         viewport.addEventListener("scroll", requestUpdate);
         requestUpdate();
 
         return () => {
-            if (fixedIpadLayout) {
-                document.removeEventListener("pointerdown", stageIpadKeyboardBeforeFocus, true);
-            }
-            document.removeEventListener("focusin", requestUpdate, true);
+            document.removeEventListener("focusin", handleFocusIn, true);
             document.removeEventListener("focusout", requestUpdate, true);
             viewport.removeEventListener("resize", requestUpdate);
             viewport.removeEventListener("scroll", requestUpdate);
