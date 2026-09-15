@@ -17,6 +17,7 @@ import { formatXiaohongshuShareForPrompt, type ChatSharePayload } from "@/lib/ch
 import { CHAT_OPEN_SESSION_EVENT, CHAT_OPEN_ADD_CONTACT_EVENT } from "@/lib/chat-notification-events";
 import { CHAT_SESSIONS_MERGED_EVENT, type ChatSessionsMergedDetail } from "@/lib/chat-session-merge";
 import { getMascotSettingsSnapshot } from "@/lib/mascot-settings";
+import { isMobileShell } from "@/lib/mobile-shell";
 
 type TabKey = "messages" | "contacts" | "feeds" | "me";
 
@@ -34,8 +35,10 @@ function useChatVisualViewport(appRef: RefObject<HTMLDivElement | null>, enabled
 
         const app = appRef.current;
         const viewport = window.visualViewport;
-        if (!app || !viewport || !app.parentElement?.classList.contains("phone-app-pane")) return;
+        if (!app || !viewport || !app.parentElement?.classList.contains("phone-app-pane") || !isMobileShell()) return;
 
+        const root = document.documentElement;
+        root.setAttribute("data-chat-viewport-lock", "");
         app.setAttribute("data-chat-keyboard-managed", "");
         let baselineHeight = Math.max(window.innerHeight, viewport.height);
 
@@ -64,8 +67,7 @@ function useChatVisualViewport(appRef: RefObject<HTMLDivElement | null>, enabled
         const clearViewport = () => {
             preserveMessageFlow(() => {
                 app.removeAttribute("data-keyboard-viewport");
-                app.style.removeProperty("--chat-visual-viewport-top");
-                app.style.removeProperty("--chat-visual-viewport-height");
+                app.style.removeProperty("--chat-visual-viewport-bottom");
             });
         };
 
@@ -94,8 +96,8 @@ function useChatVisualViewport(appRef: RefObject<HTMLDivElement | null>, enabled
             const scale = Number.isFinite(measuredScale) && measuredScale > 0 ? measuredScale : 1;
 
             preserveMessageFlow(() => {
-                app.style.setProperty("--chat-visual-viewport-top", `${Math.max(0, viewport.offsetTop) / scale}px`);
-                app.style.setProperty("--chat-visual-viewport-height", `${viewport.height / scale}px`);
+                const visibleBottom = Math.max(0, viewport.offsetTop + viewport.height) / scale;
+                app.style.setProperty("--chat-visual-viewport-bottom", `${visibleBottom}px`);
                 app.setAttribute("data-keyboard-viewport", "");
             });
         };
@@ -116,6 +118,7 @@ function useChatVisualViewport(appRef: RefObject<HTMLDivElement | null>, enabled
             viewport.removeEventListener("resize", requestUpdate);
             viewport.removeEventListener("scroll", requestUpdate);
             app.removeAttribute("data-chat-keyboard-managed");
+            root.removeAttribute("data-chat-viewport-lock");
             clearViewport();
         };
     }, [appRef, enabled]);

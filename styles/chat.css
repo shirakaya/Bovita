@@ -11,21 +11,23 @@
   --chat-tabbar-height: calc(var(--chat-tabbar-content-height) + var(--chat-tabbar-safe-bottom));
 }
 
-/* Soft keyboards shrink the visual viewport without changing the 100lvh phone shell.
-   Keep the active chat room inside that visible area instead of letting the browser
-   pan the whole phone shell and push the header off-screen. */
-.chat-app[data-keyboard-viewport] {
-  top: var(--chat-visual-viewport-top, 0px) !important;
-  bottom: auto !important;
-  height: 100% !important;
+/* Lock the document while the full-screen mobile chat is mounted. The header and
+   background stay in the stable phone canvas; only the message pane and composer
+   respond to the soft keyboard's visual viewport. */
+html[data-chat-viewport-lock] {
+  overflow: hidden;
+}
+html[data-chat-viewport-lock] body {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100lvh;
+  overflow: hidden;
 }
 
-/* Keep the room/background canvas at its original size so custom theme images do not
-   recalculate background-size. Only the scroll pane and composer stop at the visible
-   viewport bottom while the soft keyboard is open. */
 .chat-app[data-keyboard-viewport] .chat-room-wrapper > .page-body,
 .chat-app[data-keyboard-viewport] .chat-room-wrapper > .chat-input-bar {
-  bottom: calc(100% - var(--chat-visual-viewport-height, 100%)) !important;
+  bottom: calc(100% - var(--chat-visual-viewport-bottom, 100%)) !important;
 }
 
 .chat-app[data-room-active] {
