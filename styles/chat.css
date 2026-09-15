@@ -11,6 +11,15 @@
   --chat-tabbar-height: calc(var(--chat-tabbar-content-height) + var(--chat-tabbar-safe-bottom));
 }
 
+/* Soft keyboards shrink the visual viewport without changing the 100lvh phone shell.
+   Keep the active chat room inside that visible area instead of letting the browser
+   pan the whole phone shell and push the header off-screen. */
+.chat-app[data-keyboard-viewport] {
+  top: var(--chat-visual-viewport-top, 0px) !important;
+  bottom: auto !important;
+  height: var(--chat-visual-viewport-height, 100%) !important;
+}
+
 .chat-app[data-room-active] {
   background: transparent;
 }

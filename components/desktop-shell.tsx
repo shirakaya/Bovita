@@ -961,6 +961,14 @@ function useAndroidCaretKeyboardLift() {
     const update = () => {
       raf = 0;
       const element = focusedElement;
+      const chatComposerManagesViewport = !!element
+        ?.closest(".chat-input-bar")
+        ?.closest("[data-chat-keyboard-managed]");
+      if (chatComposerManagesViewport) {
+        applyLift(0);
+        return;
+      }
+
       if (!element || document.activeElement !== element || !(mobileMq.matches || root.hasAttribute("data-force-mobile")) || !viewport) {
         applyLift(0);
         return;
