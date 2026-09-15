@@ -25,24 +25,7 @@ html[data-chat-viewport-lock] body {
   overflow: hidden;
 }
 
-/* The default mobile path follows the visual viewport. In the fixed iPad mode JS
-   stages the composer before focus and pins --chat-visual-viewport-top to zero, so
-   the header never participates in keyboard position correction. */
-.chat-app[data-keyboard-viewport] .chat-room-wrapper > .page-header {
-  top: var(--chat-visual-viewport-top, 0px) !important;
-  transition: none !important;
-}
-.chat-app[data-keyboard-viewport] .chat-room-wrapper > .chat-plugin-header {
-  top: calc(
-    var(--chat-visual-viewport-top, 0px)
-    + var(--safe-area-top, 48px)
-    + var(--page-header-content-height, 42px)
-  ) !important;
-}
-.chat-app[data-keyboard-viewport] .chat-room-wrapper > .page-body {
-  top: var(--chat-visual-viewport-top, 0px) !important;
-  bottom: calc(100% - var(--chat-visual-viewport-bottom, 100%)) !important;
-}
+.chat-app[data-keyboard-viewport] .chat-room-wrapper > .page-body,
 .chat-app[data-keyboard-viewport] .chat-room-wrapper > .chat-input-bar {
   bottom: calc(100% - var(--chat-visual-viewport-bottom, 100%)) !important;
 }

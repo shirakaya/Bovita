@@ -43,7 +43,7 @@ export function computeShellZoom(): number {
   try {
     if (!isMobileShell()) return 1;
     // stable 渠道且用户未强制手机壳时不缩放——与主线行为一致；beta 渠道照常
-    if (shellChannel() === "stable" && !["phone", "ipad"].includes(readShellModeOverride())) return 1;
+    if (shellChannel() === "stable" && readShellModeOverride() !== "phone") return 1;
     const shortSide = Math.min(window.screen.width, window.screen.height);
     if (shortSide < SHELL_ZOOM_MIN_SHORT_SIDE) return 1;
     const z = Math.min(
@@ -71,7 +71,7 @@ export function applyShellZoom(): void {
 // ── 部署渠道与人工覆盖 ──
 
 export type ShellChannel = "beta" | "stable";
-export type ShellModeOverride = "auto" | "phone" | "ipad" | "desktop";
+export type ShellModeOverride = "auto" | "phone" | "desktop";
 export const SHELL_MODE_STORAGE_KEY = "ai_phone_shell_mode_v1";
 
 /** 部署渠道：决定各行为"用户没动过开关"时的默认值。
@@ -81,16 +81,16 @@ export function shellChannel(): ShellChannel {
   return (process.env.NEXT_PUBLIC_SHELL_CHANNEL || "").trim() === "stable" ? "stable" : "beta";
 }
 
-/** 读显示形态覆盖：ipad=为固定 iPad 键盘布局预留独立路径。 */
+/** 读三挡显示形态覆盖：auto=按渠道默认判定 / phone=强制手机壳 / desktop=禁用物理强制。 */
 export function readShellModeOverride(): ShellModeOverride {
   if (typeof window === "undefined") return "auto";
   try {
     const raw = localStorage.getItem(SHELL_MODE_STORAGE_KEY);
-    return raw === "phone" || raw === "ipad" || raw === "desktop" ? raw : "auto";
+    return raw === "phone" || raw === "desktop" ? raw : "auto";
   } catch { return "auto"; }
 }
 
-/** 写显示形态覆盖并立即应用能即时生效的部分（data-force-mobile 标记 + 缩放）。
+/** 写三挡覆盖并立即应用能即时生效的部分（data-force-mobile 标记 + 缩放）。
  *  真触屏设备由 CSS 媒体查询直接命中手机壳，desktop 挡对它们无效（文案已说明）。 */
 export function writeShellModeOverride(mode: ShellModeOverride): void {
   if (typeof window === "undefined") return;
@@ -101,11 +101,9 @@ export function writeShellModeOverride(mode: ShellModeOverride): void {
   const root = document.documentElement;
   const mqMatches = window.matchMedia(MOBILE_SHELL_MQ).matches;
   const shouldForce = !mqMatches && (
-    (mode === "phone" || mode === "ipad") || (mode === "auto" && shellChannel() === "beta" && isPhysicallyPhone())
+    mode === "phone" || (mode === "auto" && shellChannel() === "beta" && isPhysicallyPhone())
   );
   if (shouldForce) root.setAttribute("data-force-mobile", "1");
   else root.removeAttribute("data-force-mobile");
-  if (mode === "ipad") root.setAttribute("data-ipad-fixed-shell", "1");
-  else root.removeAttribute("data-ipad-fixed-shell");
   applyShellZoom();
 }

@@ -17,7 +17,7 @@ import { formatXiaohongshuShareForPrompt, type ChatSharePayload } from "@/lib/ch
 import { CHAT_OPEN_SESSION_EVENT, CHAT_OPEN_ADD_CONTACT_EVENT } from "@/lib/chat-notification-events";
 import { CHAT_SESSIONS_MERGED_EVENT, type ChatSessionsMergedDetail } from "@/lib/chat-session-merge";
 import { getMascotSettingsSnapshot } from "@/lib/mascot-settings";
-import { isMobileShell, readShellModeOverride } from "@/lib/mobile-shell";
+import { isMobileShell } from "@/lib/mobile-shell";
 
 type TabKey = "messages" | "contacts" | "feeds" | "me";
 
@@ -29,8 +29,6 @@ export type PhoneChatAppProps = {
     onShareDone?: () => void;
 };
 
-const IPAD_KEYBOARD_VIEWPORT_STORAGE_PREFIX = "ai_phone_ipad_keyboard_viewport_v1";
-
 function useChatVisualViewport(appRef: RefObject<HTMLDivElement | null>, enabled: boolean) {
     useEffect(() => {
         if (!enabled || typeof window === "undefined" || typeof document === "undefined") return;
@@ -40,10 +38,8 @@ function useChatVisualViewport(appRef: RefObject<HTMLDivElement | null>, enabled
         if (!app || !viewport || !app.parentElement?.classList.contains("phone-app-pane") || !isMobileShell()) return;
 
         const root = document.documentElement;
-        const fixedIpadLayout = readShellModeOverride() === "ipad";
         root.setAttribute("data-chat-viewport-lock", "");
         app.setAttribute("data-chat-keyboard-managed", "");
-        if (fixedIpadLayout) app.setAttribute("data-ipad-fixed-keyboard", "");
         let baselineHeight = Math.max(window.innerHeight, viewport.height);
 
         const getVisibleMessagePane = () => (
@@ -68,83 +64,11 @@ function useChatVisualViewport(appRef: RefObject<HTMLDivElement | null>, enabled
             );
         };
 
-        const getScale = () => {
-            const phoneShell = app.closest<HTMLElement>(".phone-shell");
-            const measuredScale = phoneShell && phoneShell.offsetWidth > 0
-                ? phoneShell.getBoundingClientRect().width / phoneShell.offsetWidth
-                : 1;
-            return Number.isFinite(measuredScale) && measuredScale > 0 ? measuredScale : 1;
-        };
-
-        const getIpadKeyboardStorageKey = () => {
-            const orientation = window.matchMedia("(orientation: portrait)").matches ? "portrait" : "landscape";
-            const standaloneNavigator = navigator as Navigator & { standalone?: boolean };
-            const surface = standaloneNavigator.standalone
-                || window.matchMedia("(display-mode: standalone)").matches
-                ? "standalone"
-                : /CriOS/i.test(navigator.userAgent) ? "chrome" : "safari";
-            return `${IPAD_KEYBOARD_VIEWPORT_STORAGE_PREFIX}:${surface}:${orientation}`;
-        };
-
-        const readSavedIpadViewportHeight = () => {
-            try {
-                const value = Number(localStorage.getItem(getIpadKeyboardStorageKey()));
-                return Number.isFinite(value) && value >= 240 && value < baselineHeight - 80 ? value : null;
-            } catch {
-                return null;
-            }
-        };
-
-        const saveIpadViewportHeight = (height: number) => {
-            try {
-                localStorage.setItem(getIpadKeyboardStorageKey(), String(Math.round(height)));
-            } catch {
-                // Private browsing can reject storage; the current session still uses the measurement.
-            }
-        };
-
-        const applyKeyboardViewport = (visibleBottom: number, visualTop: number, pending = false) => {
-            preserveMessageFlow(() => {
-                app.style.setProperty("--chat-visual-viewport-top", fixedIpadLayout ? "0px" : `${visualTop}px`);
-                app.style.setProperty("--chat-visual-viewport-bottom", `${visibleBottom}px`);
-                app.setAttribute("data-keyboard-viewport", "");
-                if (pending) app.setAttribute("data-ipad-keyboard-pending", "");
-                else app.removeAttribute("data-ipad-keyboard-pending");
-            });
-        };
-
         const clearViewport = () => {
             preserveMessageFlow(() => {
                 app.removeAttribute("data-keyboard-viewport");
-                app.removeAttribute("data-ipad-keyboard-pending");
-                app.style.removeProperty("--chat-visual-viewport-top");
                 app.style.removeProperty("--chat-visual-viewport-bottom");
             });
-        };
-
-        const stageIpadKeyboardOnTouchEnd = (event: TouchEvent) => {
-            if (!fixedIpadLayout) return;
-            const target = event.target;
-            if (!(target instanceof HTMLElement) || !app.contains(target)) return;
-            if (!target.matches(
-                ".chat-input-bar input, .chat-input-bar textarea, .chat-input-bar [contenteditable='true']",
-            )) return;
-            const alreadyFocused = document.activeElement === target;
-
-            const portrait = window.matchMedia("(orientation: portrait)").matches;
-            const fallbackRatio = portrait ? 0.55 : 0.5;
-            const predictedViewportHeight = readSavedIpadViewportHeight()
-                ?? Math.max(280, Math.round(baselineHeight * fallbackRatio));
-
-            // iPad's keyboard-dismiss button can hide the keyboard without blurring the
-            // textarea. Stage the layout again even when focus never left the editor.
-            applyKeyboardViewport(predictedViewportHeight / getScale(), 0, true);
-            if (alreadyFocused) return;
-
-            // First focus: replace WebKit's synthetic click so the old screen coordinate
-            // cannot hit the page underneath after the composer moves.
-            if (event.cancelable) event.preventDefault();
-            target.focus({ preventScroll: true });
         };
 
         const updateViewport = () => {
@@ -161,25 +85,27 @@ function useChatVisualViewport(appRef: RefObject<HTMLDivElement | null>, enabled
 
             const keyboardShrink = Math.max(0, baselineHeight - viewport.height);
             if (keyboardShrink < 80) {
-                if (fixedIpadLayout && app.hasAttribute("data-ipad-keyboard-pending")) return;
                 clearViewport();
                 return;
             }
 
-            const scale = getScale();
-            const visibleTop = Math.max(0, viewport.offsetTop) / scale;
-            const visibleBottom = Math.max(0, viewport.offsetTop + viewport.height) / scale;
-            if (fixedIpadLayout) saveIpadViewportHeight(viewport.height);
-            applyKeyboardViewport(visibleBottom, visibleTop);
+            const phoneShell = app.closest<HTMLElement>(".phone-shell");
+            const measuredScale = phoneShell && phoneShell.offsetWidth > 0
+                ? phoneShell.getBoundingClientRect().width / phoneShell.offsetWidth
+                : 1;
+            const scale = Number.isFinite(measuredScale) && measuredScale > 0 ? measuredScale : 1;
+
+            preserveMessageFlow(() => {
+                const visibleBottom = Math.max(0, viewport.offsetTop + viewport.height) / scale;
+                app.style.setProperty("--chat-visual-viewport-bottom", `${visibleBottom}px`);
+                app.setAttribute("data-keyboard-viewport", "");
+            });
         };
 
         const requestUpdate = () => {
             updateViewport();
         };
 
-        if (fixedIpadLayout) {
-            document.addEventListener("touchend", stageIpadKeyboardOnTouchEnd, { capture: true, passive: false });
-        }
         document.addEventListener("focusin", requestUpdate, true);
         document.addEventListener("focusout", requestUpdate, true);
         viewport.addEventListener("resize", requestUpdate);
@@ -187,15 +113,11 @@ function useChatVisualViewport(appRef: RefObject<HTMLDivElement | null>, enabled
         requestUpdate();
 
         return () => {
-            if (fixedIpadLayout) {
-                document.removeEventListener("touchend", stageIpadKeyboardOnTouchEnd, true);
-            }
             document.removeEventListener("focusin", requestUpdate, true);
             document.removeEventListener("focusout", requestUpdate, true);
             viewport.removeEventListener("resize", requestUpdate);
             viewport.removeEventListener("scroll", requestUpdate);
             app.removeAttribute("data-chat-keyboard-managed");
-            app.removeAttribute("data-ipad-fixed-keyboard");
             root.removeAttribute("data-chat-viewport-lock");
             clearViewport();
         };
