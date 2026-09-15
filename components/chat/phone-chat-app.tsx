@@ -39,11 +39,20 @@ function useChatVisualViewport(appRef: RefObject<HTMLDivElement | null>, enabled
         app.setAttribute("data-chat-keyboard-managed", "");
         let baselineHeight = Math.max(window.innerHeight, viewport.height);
         let raf = 0;
+        let keyboardVisible = false;
+        let keepLatestVisible = false;
+
+        const getVisibleMessagePane = () => (
+            Array.from(app.querySelectorAll<HTMLElement>(".chat-room-wrapper > .page-body"))
+                .find(element => element.offsetParent !== null)
+        );
 
         const clearViewport = () => {
             app.removeAttribute("data-keyboard-viewport");
             app.style.removeProperty("--chat-visual-viewport-top");
             app.style.removeProperty("--chat-visual-viewport-height");
+            keyboardVisible = false;
+            keepLatestVisible = false;
         };
 
         const updateViewport = () => {
@@ -65,6 +74,15 @@ function useChatVisualViewport(appRef: RefObject<HTMLDivElement | null>, enabled
                 return;
             }
 
+            const messagePane = getVisibleMessagePane();
+            if (!keyboardVisible) {
+                const distanceFromBottom = messagePane
+                    ? messagePane.scrollHeight - messagePane.clientHeight - messagePane.scrollTop
+                    : Number.POSITIVE_INFINITY;
+                keepLatestVisible = distanceFromBottom <= 120;
+                keyboardVisible = true;
+            }
+
             const phoneShell = app.closest<HTMLElement>(".phone-shell");
             const measuredScale = phoneShell && phoneShell.offsetWidth > 0
                 ? phoneShell.getBoundingClientRect().width / phoneShell.offsetWidth
@@ -74,6 +92,12 @@ function useChatVisualViewport(appRef: RefObject<HTMLDivElement | null>, enabled
             app.style.setProperty("--chat-visual-viewport-top", `${Math.max(0, viewport.offsetTop) / scale}px`);
             app.style.setProperty("--chat-visual-viewport-height", `${viewport.height / scale}px`);
             app.setAttribute("data-keyboard-viewport", "");
+
+            if (keepLatestVisible && messagePane) {
+                window.requestAnimationFrame(() => {
+                    messagePane.scrollTop = messagePane.scrollHeight;
+                });
+            }
         };
 
         const requestUpdate = () => {
