@@ -122,22 +122,26 @@ function useChatVisualViewport(appRef: RefObject<HTMLDivElement | null>, enabled
             });
         };
 
-        const stageIpadKeyboardAfterFocus = (event: FocusEvent) => {
+        const stageIpadKeyboardOnTouchEnd = (event: TouchEvent) => {
             if (!fixedIpadLayout) return;
             const target = event.target;
             if (!(target instanceof HTMLElement) || !app.contains(target)) return;
             if (!target.matches(
                 ".chat-input-bar input, .chat-input-bar textarea, .chat-input-bar [contenteditable='true']",
             )) return;
+            if (document.activeElement === target) return;
 
             const portrait = window.matchMedia("(orientation: portrait)").matches;
             const fallbackRatio = portrait ? 0.55 : 0.5;
             const predictedViewportHeight = readSavedIpadViewportHeight()
                 ?? Math.max(280, Math.round(baselineHeight * fallbackRatio));
 
-            // Native focus is already established, while keyboard presentation has not
-            // started yet. Stage the saved layout now without moving the tap target.
+            // Wait until the finger is released, then replace WebKit's default focus.
+            // The tap target no longer moves mid-gesture and cancelling touchend prevents
+            // a synthetic click at the composer's old screen coordinate.
+            if (event.cancelable) event.preventDefault();
             applyKeyboardViewport(predictedViewportHeight / getScale(), 0, true);
+            target.focus({ preventScroll: true });
         };
 
         const updateViewport = () => {
@@ -169,19 +173,21 @@ function useChatVisualViewport(appRef: RefObject<HTMLDivElement | null>, enabled
         const requestUpdate = () => {
             updateViewport();
         };
-        const handleFocusIn = (event: FocusEvent) => {
-            stageIpadKeyboardAfterFocus(event);
-            updateViewport();
-        };
 
-        document.addEventListener("focusin", handleFocusIn, true);
+        if (fixedIpadLayout) {
+            document.addEventListener("touchend", stageIpadKeyboardOnTouchEnd, { capture: true, passive: false });
+        }
+        document.addEventListener("focusin", requestUpdate, true);
         document.addEventListener("focusout", requestUpdate, true);
         viewport.addEventListener("resize", requestUpdate);
         viewport.addEventListener("scroll", requestUpdate);
         requestUpdate();
 
         return () => {
-            document.removeEventListener("focusin", handleFocusIn, true);
+            if (fixedIpadLayout) {
+                document.removeEventListener("touchend", stageIpadKeyboardOnTouchEnd, true);
+            }
+            document.removeEventListener("focusin", requestUpdate, true);
             document.removeEventListener("focusout", requestUpdate, true);
             viewport.removeEventListener("resize", requestUpdate);
             viewport.removeEventListener("scroll", requestUpdate);
