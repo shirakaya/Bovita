@@ -39,20 +39,35 @@ function useChatVisualViewport(appRef: RefObject<HTMLDivElement | null>, enabled
         app.setAttribute("data-chat-keyboard-managed", "");
         let baselineHeight = Math.max(window.innerHeight, viewport.height);
         let raf = 0;
-        let keyboardVisible = false;
-        let keepLatestVisible = false;
 
         const getVisibleMessagePane = () => (
             Array.from(app.querySelectorAll<HTMLElement>(".chat-room-wrapper > .page-body"))
                 .find(element => element.offsetParent !== null)
         );
 
+        const preserveMessageFlow = (changeLayout: () => void) => {
+            const messagePane = getVisibleMessagePane();
+            if (!messagePane) {
+                changeLayout();
+                return;
+            }
+
+            const distanceFromBottom = messagePane.scrollHeight
+                - messagePane.clientHeight
+                - messagePane.scrollTop;
+            changeLayout();
+            messagePane.scrollTop = Math.max(
+                0,
+                messagePane.scrollHeight - messagePane.clientHeight - distanceFromBottom,
+            );
+        };
+
         const clearViewport = () => {
-            app.removeAttribute("data-keyboard-viewport");
-            app.style.removeProperty("--chat-visual-viewport-top");
-            app.style.removeProperty("--chat-visual-viewport-height");
-            keyboardVisible = false;
-            keepLatestVisible = false;
+            preserveMessageFlow(() => {
+                app.removeAttribute("data-keyboard-viewport");
+                app.style.removeProperty("--chat-visual-viewport-top");
+                app.style.removeProperty("--chat-visual-viewport-height");
+            });
         };
 
         const updateViewport = () => {
@@ -74,30 +89,17 @@ function useChatVisualViewport(appRef: RefObject<HTMLDivElement | null>, enabled
                 return;
             }
 
-            const messagePane = getVisibleMessagePane();
-            if (!keyboardVisible) {
-                const distanceFromBottom = messagePane
-                    ? messagePane.scrollHeight - messagePane.clientHeight - messagePane.scrollTop
-                    : Number.POSITIVE_INFINITY;
-                keepLatestVisible = distanceFromBottom <= 120;
-                keyboardVisible = true;
-            }
-
             const phoneShell = app.closest<HTMLElement>(".phone-shell");
             const measuredScale = phoneShell && phoneShell.offsetWidth > 0
                 ? phoneShell.getBoundingClientRect().width / phoneShell.offsetWidth
                 : 1;
             const scale = Number.isFinite(measuredScale) && measuredScale > 0 ? measuredScale : 1;
 
-            app.style.setProperty("--chat-visual-viewport-top", `${Math.max(0, viewport.offsetTop) / scale}px`);
-            app.style.setProperty("--chat-visual-viewport-height", `${viewport.height / scale}px`);
-            app.setAttribute("data-keyboard-viewport", "");
-
-            if (keepLatestVisible && messagePane) {
-                window.requestAnimationFrame(() => {
-                    messagePane.scrollTop = messagePane.scrollHeight;
-                });
-            }
+            preserveMessageFlow(() => {
+                app.style.setProperty("--chat-visual-viewport-top", `${Math.max(0, viewport.offsetTop) / scale}px`);
+                app.style.setProperty("--chat-visual-viewport-height", `${viewport.height / scale}px`);
+                app.setAttribute("data-keyboard-viewport", "");
+            });
         };
 
         const requestUpdate = () => {
