@@ -129,18 +129,21 @@ function useChatVisualViewport(appRef: RefObject<HTMLDivElement | null>, enabled
             if (!target.matches(
                 ".chat-input-bar input, .chat-input-bar textarea, .chat-input-bar [contenteditable='true']",
             )) return;
-            if (document.activeElement === target) return;
+            const alreadyFocused = document.activeElement === target;
 
             const portrait = window.matchMedia("(orientation: portrait)").matches;
             const fallbackRatio = portrait ? 0.55 : 0.5;
             const predictedViewportHeight = readSavedIpadViewportHeight()
                 ?? Math.max(280, Math.round(baselineHeight * fallbackRatio));
 
-            // Wait until the finger is released, then replace WebKit's default focus.
-            // The tap target no longer moves mid-gesture and cancelling touchend prevents
-            // a synthetic click at the composer's old screen coordinate.
-            if (event.cancelable) event.preventDefault();
+            // iPad's keyboard-dismiss button can hide the keyboard without blurring the
+            // textarea. Stage the layout again even when focus never left the editor.
             applyKeyboardViewport(predictedViewportHeight / getScale(), 0, true);
+            if (alreadyFocused) return;
+
+            // First focus: replace WebKit's synthetic click so the old screen coordinate
+            // cannot hit the page underneath after the composer moves.
+            if (event.cancelable) event.preventDefault();
             target.focus({ preventScroll: true });
         };
 
