@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useState, useEffect, useRef, type RefObject } from "react";
+import { memo, useState, useEffect, useRef } from "react";
 import { ChatMessageList } from "./chat-message-list";
 import { ChatContactsList } from "./chat-contacts-list";
 import { MomentsFeed } from "./moments-feed";
@@ -17,7 +17,6 @@ import { formatXiaohongshuShareForPrompt, type ChatSharePayload } from "@/lib/ch
 import { CHAT_OPEN_SESSION_EVENT, CHAT_OPEN_ADD_CONTACT_EVENT } from "@/lib/chat-notification-events";
 import { CHAT_SESSIONS_MERGED_EVENT, type ChatSessionsMergedDetail } from "@/lib/chat-session-merge";
 import { getMascotSettingsSnapshot } from "@/lib/mascot-settings";
-import { isMobileShell } from "@/lib/mobile-shell";
 
 type TabKey = "messages" | "contacts" | "feeds" | "me";
 
@@ -29,103 +28,7 @@ export type PhoneChatAppProps = {
     onShareDone?: () => void;
 };
 
-function useChatVisualViewport(appRef: RefObject<HTMLDivElement | null>, enabled: boolean) {
-    useEffect(() => {
-        if (!enabled || typeof window === "undefined" || typeof document === "undefined") return;
-
-        const app = appRef.current;
-        const viewport = window.visualViewport;
-        if (!app || !viewport || !app.parentElement?.classList.contains("phone-app-pane") || !isMobileShell()) return;
-
-        const root = document.documentElement;
-        root.setAttribute("data-chat-viewport-lock", "");
-        app.setAttribute("data-chat-keyboard-managed", "");
-        let baselineHeight = Math.max(window.innerHeight, viewport.height);
-
-        const getVisibleMessagePane = () => (
-            Array.from(app.querySelectorAll<HTMLElement>(".chat-room-wrapper > .page-body"))
-                .find(element => element.offsetParent !== null)
-        );
-
-        const preserveMessageFlow = (changeLayout: () => void) => {
-            const messagePane = getVisibleMessagePane();
-            if (!messagePane) {
-                changeLayout();
-                return;
-            }
-
-            const distanceFromBottom = messagePane.scrollHeight
-                - messagePane.clientHeight
-                - messagePane.scrollTop;
-            changeLayout();
-            messagePane.scrollTop = Math.max(
-                0,
-                messagePane.scrollHeight - messagePane.clientHeight - distanceFromBottom,
-            );
-        };
-
-        const clearViewport = () => {
-            preserveMessageFlow(() => {
-                app.removeAttribute("data-keyboard-viewport");
-                app.style.removeProperty("--chat-visual-viewport-bottom");
-            });
-        };
-
-        const updateViewport = () => {
-            const active = document.activeElement;
-            const composerFocused = active instanceof HTMLElement
-                && app.contains(active)
-                && !!active.closest(".chat-input-bar");
-
-            if (!composerFocused) {
-                baselineHeight = Math.max(window.innerHeight, viewport.height);
-                clearViewport();
-                return;
-            }
-
-            const keyboardShrink = Math.max(0, baselineHeight - viewport.height);
-            if (keyboardShrink < 80) {
-                clearViewport();
-                return;
-            }
-
-            const phoneShell = app.closest<HTMLElement>(".phone-shell");
-            const measuredScale = phoneShell && phoneShell.offsetWidth > 0
-                ? phoneShell.getBoundingClientRect().width / phoneShell.offsetWidth
-                : 1;
-            const scale = Number.isFinite(measuredScale) && measuredScale > 0 ? measuredScale : 1;
-
-            preserveMessageFlow(() => {
-                const visibleBottom = Math.max(0, viewport.offsetTop + viewport.height) / scale;
-                app.style.setProperty("--chat-visual-viewport-bottom", `${visibleBottom}px`);
-                app.setAttribute("data-keyboard-viewport", "");
-            });
-        };
-
-        const requestUpdate = () => {
-            updateViewport();
-        };
-
-        document.addEventListener("focusin", requestUpdate, true);
-        document.addEventListener("focusout", requestUpdate, true);
-        viewport.addEventListener("resize", requestUpdate);
-        viewport.addEventListener("scroll", requestUpdate);
-        requestUpdate();
-
-        return () => {
-            document.removeEventListener("focusin", requestUpdate, true);
-            document.removeEventListener("focusout", requestUpdate, true);
-            viewport.removeEventListener("resize", requestUpdate);
-            viewport.removeEventListener("scroll", requestUpdate);
-            app.removeAttribute("data-chat-keyboard-managed");
-            root.removeAttribute("data-chat-viewport-lock");
-            clearViewport();
-        };
-    }, [appRef, enabled]);
-}
-
 export const PhoneChatApp = memo(function PhoneChatApp({ onClose, initialSessionId, onSessionChange, sharePayload, onShareDone }: PhoneChatAppProps) {
-    const appRef = useRef<HTMLDivElement>(null);
     const [activeTab, setActiveTab] = useState<TabKey>("messages");
     const [activeSession, setActiveSession] = useState<ChatSession | null>(null);
     const [activeMascot, setActiveMascot] = useState(false);
@@ -137,7 +40,6 @@ export const PhoneChatApp = memo(function PhoneChatApp({ onClose, initialSession
     const [visitedSessions, setVisitedSessions] = useState<Map<string, ChatSession>>(new Map());
     const [dbReady, setDbReady] = useState(false);
     const [hideTabBar, setHideTabBar] = useState(false);
-    useChatVisualViewport(appRef, dbReady);
 
     // Hydrate IndexedDB → in-memory caches on mount
     useEffect(() => {
@@ -333,7 +235,6 @@ export const PhoneChatApp = memo(function PhoneChatApp({ onClose, initialSession
 
     return (
         <div
-            ref={appRef}
             className="chat-app absolute inset-0 flex flex-col overflow-hidden z-10"
             {...(activeSession || activeMascot ? { "data-room-active": "" } : {})}
             {...(hideTabBar ? { "data-tabbar-hidden": "" } : {})}
