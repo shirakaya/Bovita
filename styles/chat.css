@@ -17,7 +17,15 @@
 .chat-app[data-keyboard-viewport] {
   top: var(--chat-visual-viewport-top, 0px) !important;
   bottom: auto !important;
-  height: var(--chat-visual-viewport-height, 100%) !important;
+  height: 100% !important;
+}
+
+/* Keep the room/background canvas at its original size so custom theme images do not
+   recalculate background-size. Only the scroll pane and composer stop at the visible
+   viewport bottom while the soft keyboard is open. */
+.chat-app[data-keyboard-viewport] .chat-room-wrapper > .page-body,
+.chat-app[data-keyboard-viewport] .chat-room-wrapper > .chat-input-bar {
+  bottom: calc(100% - var(--chat-visual-viewport-height, 100%)) !important;
 }
 
 .chat-app[data-room-active] {
