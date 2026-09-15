@@ -25,7 +25,23 @@ html[data-chat-viewport-lock] body {
   overflow: hidden;
 }
 
-.chat-app[data-keyboard-viewport] .chat-room-wrapper > .page-body,
+/* iOS may pan the visual viewport even while the document is fixed. Move only the
+   foreground chrome into that viewport; the app and themed background never move. */
+.chat-app[data-keyboard-viewport] .chat-room-wrapper > .page-header {
+  top: var(--chat-visual-viewport-top, 0px) !important;
+  transition: none !important;
+}
+.chat-app[data-keyboard-viewport] .chat-room-wrapper > .chat-plugin-header {
+  top: calc(
+    var(--chat-visual-viewport-top, 0px)
+    + var(--safe-area-top, 48px)
+    + var(--page-header-content-height, 42px)
+  ) !important;
+}
+.chat-app[data-keyboard-viewport] .chat-room-wrapper > .page-body {
+  top: var(--chat-visual-viewport-top, 0px) !important;
+  bottom: calc(100% - var(--chat-visual-viewport-bottom, 100%)) !important;
+}
 .chat-app[data-keyboard-viewport] .chat-room-wrapper > .chat-input-bar {
   bottom: calc(100% - var(--chat-visual-viewport-bottom, 100%)) !important;
 }

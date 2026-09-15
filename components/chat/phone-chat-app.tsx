@@ -67,6 +67,7 @@ function useChatVisualViewport(appRef: RefObject<HTMLDivElement | null>, enabled
         const clearViewport = () => {
             preserveMessageFlow(() => {
                 app.removeAttribute("data-keyboard-viewport");
+                app.style.removeProperty("--chat-visual-viewport-top");
                 app.style.removeProperty("--chat-visual-viewport-bottom");
             });
         };
@@ -96,7 +97,9 @@ function useChatVisualViewport(appRef: RefObject<HTMLDivElement | null>, enabled
             const scale = Number.isFinite(measuredScale) && measuredScale > 0 ? measuredScale : 1;
 
             preserveMessageFlow(() => {
+                const visibleTop = Math.max(0, viewport.offsetTop) / scale;
                 const visibleBottom = Math.max(0, viewport.offsetTop + viewport.height) / scale;
+                app.style.setProperty("--chat-visual-viewport-top", `${visibleTop}px`);
                 app.style.setProperty("--chat-visual-viewport-bottom", `${visibleBottom}px`);
                 app.setAttribute("data-keyboard-viewport", "");
             });
