@@ -25,8 +25,9 @@ html[data-chat-viewport-lock] body {
   overflow: hidden;
 }
 
-/* iOS may pan the visual viewport even while the document is fixed. Move only the
-   foreground chrome into that viewport; the app and themed background never move. */
+/* The default mobile path follows the visual viewport. In the fixed iPad mode JS
+   stages the composer before focus and pins --chat-visual-viewport-top to zero, so
+   the header never participates in keyboard position correction. */
 .chat-app[data-keyboard-viewport] .chat-room-wrapper > .page-header {
   top: var(--chat-visual-viewport-top, 0px) !important;
   transition: none !important;
