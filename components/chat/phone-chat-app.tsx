@@ -38,7 +38,6 @@ function useChatVisualViewport(appRef: RefObject<HTMLDivElement | null>, enabled
 
         app.setAttribute("data-chat-keyboard-managed", "");
         let baselineHeight = Math.max(window.innerHeight, viewport.height);
-        let raf = 0;
 
         const getVisibleMessagePane = () => (
             Array.from(app.querySelectorAll<HTMLElement>(".chat-room-wrapper > .page-body"))
@@ -71,7 +70,6 @@ function useChatVisualViewport(appRef: RefObject<HTMLDivElement | null>, enabled
         };
 
         const updateViewport = () => {
-            raf = 0;
             const active = document.activeElement;
             const composerFocused = active instanceof HTMLElement
                 && app.contains(active)
@@ -103,8 +101,7 @@ function useChatVisualViewport(appRef: RefObject<HTMLDivElement | null>, enabled
         };
 
         const requestUpdate = () => {
-            if (raf) window.cancelAnimationFrame(raf);
-            raf = window.requestAnimationFrame(updateViewport);
+            updateViewport();
         };
 
         document.addEventListener("focusin", requestUpdate, true);
@@ -114,7 +111,6 @@ function useChatVisualViewport(appRef: RefObject<HTMLDivElement | null>, enabled
         requestUpdate();
 
         return () => {
-            if (raf) window.cancelAnimationFrame(raf);
             document.removeEventListener("focusin", requestUpdate, true);
             document.removeEventListener("focusout", requestUpdate, true);
             viewport.removeEventListener("resize", requestUpdate);
