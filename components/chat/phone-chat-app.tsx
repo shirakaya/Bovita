@@ -135,11 +135,17 @@ function useChatVisualViewport(appRef: RefObject<HTMLDivElement | null>, enabled
             const fallbackRatio = portrait ? 0.55 : 0.5;
             const predictedViewportHeight = readSavedIpadViewportHeight()
                 ?? Math.max(280, Math.round(baselineHeight * fallbackRatio));
+            const needsManualFocus = document.activeElement !== editor;
+
+            // The composer moves before pointerup. Cancel WebKit's default tap handling so
+            // the old screen coordinate cannot land on the page underneath and blur it.
+            if (needsManualFocus && event.cancelable) {
+                event.preventDefault();
+            }
             applyKeyboardViewport(predictedViewportHeight / getScale(), 0, true);
 
-            // Moving the composer during pointerdown makes WebKit drop its later default
-            // focus. Focus the same editor now, while the tap still counts as a user gesture.
-            if (document.activeElement !== editor) {
+            // Focus while the original tap still counts as a user gesture on iOS.
+            if (needsManualFocus) {
                 editor.focus({ preventScroll: true });
             }
         };
