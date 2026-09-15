@@ -126,13 +126,22 @@ function useChatVisualViewport(appRef: RefObject<HTMLDivElement | null>, enabled
             if (!fixedIpadLayout) return;
             const target = event.target;
             if (!(target instanceof Element) || !app.contains(target)) return;
-            if (!target.closest(".chat-input-bar input, .chat-input-bar textarea, .chat-input-bar [contenteditable='true']")) return;
+            const editor = target.closest<HTMLElement>(
+                ".chat-input-bar input, .chat-input-bar textarea, .chat-input-bar [contenteditable='true']",
+            );
+            if (!editor) return;
 
             const portrait = window.matchMedia("(orientation: portrait)").matches;
             const fallbackRatio = portrait ? 0.55 : 0.5;
             const predictedViewportHeight = readSavedIpadViewportHeight()
                 ?? Math.max(280, Math.round(baselineHeight * fallbackRatio));
             applyKeyboardViewport(predictedViewportHeight / getScale(), 0, true);
+
+            // Moving the composer during pointerdown makes WebKit drop its later default
+            // focus. Focus the same editor now, while the tap still counts as a user gesture.
+            if (document.activeElement !== editor) {
+                editor.focus({ preventScroll: true });
+            }
         };
 
         const updateViewport = () => {
