@@ -269,43 +269,22 @@ export async function getNeteasePlayUrl(songId: number): Promise<string | null> 
 export type NeteaseLyricBundle = {
     lyrics: string;
     translatedLyrics: string;
-    wordLyrics: string;
 };
 
-/**
- * Get line lyrics, translated lyrics and NetEase karaoke word timing.
- * Newer API builds expose yrc through /lyric/new; older deployments may only
- * have /lyric, so fall back without breaking playback.
- */
+/** Get original + translated lyrics for a Netease song in one request. */
 export async function getNeteaseLyricBundle(songId: number): Promise<NeteaseLyricBundle> {
     const base = neteaseBase();
-    const empty = { lyrics: "", translatedLyrics: "", wordLyrics: "" };
-    if (!base) return empty;
-
-    let best = empty;
-    for (const endpoint of ["lyric/new", "lyric"]) {
-        try {
-            const resp = await fetch(withNeteaseParams(`${base}/${endpoint}?id=${songId}`));
-            if (!resp.ok) continue;
-            const data = await resp.json();
-            const bundle = {
-                lyrics: data?.lrc?.lyric || "",
-                translatedLyrics: data?.tlyric?.lyric || "",
-                wordLyrics: data?.yrc?.lyric || "",
-            };
-            best = {
-                lyrics: bundle.lyrics || best.lyrics,
-                translatedLyrics: bundle.translatedLyrics || best.translatedLyrics,
-                wordLyrics: bundle.wordLyrics || best.wordLyrics,
-            };
-            // Once karaoke timing is available there is no reason to make the
-            // compatibility request as well.
-            if (best.wordLyrics) return best;
-        } catch {
-            // Try the compatible endpoint below.
-        }
+    if (!base) return { lyrics: "", translatedLyrics: "" };
+    try {
+        const resp = await fetch(withNeteaseParams(`${base}/lyric?id=${songId}`));
+        const data = await resp.json();
+        return {
+            lyrics: data?.lrc?.lyric || "",
+            translatedLyrics: data?.tlyric?.lyric || "",
+        };
+    } catch {
+        return { lyrics: "", translatedLyrics: "" };
     }
-    return best;
 }
 
 /** Backward-compatible original lyric helper. */
