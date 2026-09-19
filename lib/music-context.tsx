@@ -33,6 +33,7 @@ export type MusicActions = {
     next: () => void;
     prev: () => void;
     seek: (time: number) => void;
+    getPlaybackTime: () => number;
     setPlayMode: (mode: PlayMode) => void;
     setQueue: (tracks: MusicTrack[]) => void;
     removeFromQueue: (trackId: string) => void;
@@ -309,6 +310,14 @@ export function MusicProvider({ children }: { children: ReactNode }) {
         if (audio) audio.currentTime = clamped;
     }, [duration]);
 
+    // Read the media element clock without subscribing React to every animation
+    // frame. Karaoke rendering can use this from requestAnimationFrame and
+    // update only the active lyric overlay.
+    const getPlaybackTime = useCallback(() => {
+        const time = audioRef.current?.currentTime;
+        return Number.isFinite(time) ? time! : 0;
+    }, []);
+
     const setVolume = useCallback((vol: number) => {
         const clamped = Math.max(0, Math.min(1, vol));
         setVolumeState(clamped);
@@ -466,11 +475,11 @@ export function MusicProvider({ children }: { children: ReactNode }) {
 
     const controlsValue = useMemo<MusicControlsValue>(() => ({
         currentTrack, isPlaying, duration, playMode, queue, volume, showFullPlayer, floatDismissed,
-        playTrack, playUrl, pause, resume, togglePlay, next, prev, seek,
+        playTrack, playUrl, pause, resume, togglePlay, next, prev, seek, getPlaybackTime,
         setPlayMode, setQueue, removeFromQueue, setVolume, stop, dismissFloat, openFullPlayer, closeFullPlayer,
     }), [
         currentTrack, isPlaying, duration, playMode, queue, volume, showFullPlayer, floatDismissed,
-        playTrack, playUrl, pause, resume, togglePlay, next, prev, seek,
+        playTrack, playUrl, pause, resume, togglePlay, next, prev, seek, getPlaybackTime,
         setQueue, removeFromQueue, setVolume, stop, dismissFloat, openFullPlayer, closeFullPlayer,
     ]);
 
