@@ -11,7 +11,6 @@ export type MusicTrack = {
     coverUrl?: string;       // data URL or blob URL
     lyrics?: string;         // LRC format or plain text
     translatedLyrics?: string; // translated LRC (e.g. NetEase tlyric)
-    wordLyrics?: string;       // NetEase yrc karaoke word timing
     liked: boolean;
     addedAt: string;         // ISO timestamp
     lastPlayedAt?: string;   // ISO timestamp
