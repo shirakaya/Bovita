@@ -3,22 +3,19 @@
 
 export type CoverPalette = [string, string, string];
 
-/** Fallback aurora palette when the cover can't be sampled (CORS, no cover, error). */
+/** Fallback light-green palette when the cover can't be sampled. */
 export const DEFAULT_COVER_PALETTE: CoverPalette = [
-    "rgba(88, 116, 196, 0.55)",
-    "rgba(122, 96, 202, 0.42)",
-    "rgba(66, 134, 160, 0.38)",
+    "rgba(116, 222, 171, 0.34)",
+    "rgba(190, 239, 215, 0.30)",
+    "rgba(224, 248, 236, 0.38)",
 ];
 
 const paletteCache = new Map<string, CoverPalette>();
 
-/** Clamp channel brightness so ambient blobs stay moody on the dark ground. */
+/** Lift sampled cover colors toward white so the player stays bright and airy. */
 function tone(r: number, g: number, b: number, alpha: number): string {
-    const max = Math.max(r, g, b, 1);
-    // Normalize very bright covers down, lift very dark ones slightly
-    const target = 170;
-    const scale = max > target ? target / max : max < 60 ? 1.6 : 1;
-    const c = (v: number) => Math.round(Math.min(255, v * scale));
+    const mixWithWhite = 0.64;
+    const c = (v: number) => Math.round(Math.min(255, v * (1 - mixWithWhite) + 255 * mixWithWhite));
     return `rgba(${c(r)}, ${c(g)}, ${c(b)}, ${alpha})`;
 }
 
@@ -62,7 +59,7 @@ export function extractCoverPalette(coverUrl?: string | null): Promise<CoverPale
                         bands[band][3]++;
                     }
                 }
-                const alphas = [0.55, 0.42, 0.38];
+                const alphas = [0.36, 0.30, 0.26];
                 finish(bands.map((b, i) =>
                     tone(b[0] / b[3], b[1] / b[3], b[2] / b[3], alphas[i]),
                 ) as CoverPalette);
