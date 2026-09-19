@@ -201,7 +201,7 @@ export function MusicProvider({ children }: { children: ReactNode }) {
             const [playUrl, detail, lyricBundle] = await Promise.all([
                 getNeteasePlayUrl(nid),
                 getNeteaseSongDetail(nid).catch(() => null),
-                getNeteaseLyricBundle(nid).catch(() => ({ lyrics: "", translatedLyrics: "" })),
+                getNeteaseLyricBundle(nid).catch(() => ({ lyrics: "", translatedLyrics: "", wordLyrics: "" })),
             ]);
             if (!playUrl) return;
             track = {
@@ -211,6 +211,7 @@ export function MusicProvider({ children }: { children: ReactNode }) {
                 coverUrl: detail?.coverUrl || track.coverUrl,
                 lyrics: lyricBundle.lyrics || track.lyrics,
                 translatedLyrics: lyricBundle.translatedLyrics || track.translatedLyrics,
+                wordLyrics: lyricBundle.wordLyrics || track.wordLyrics,
             };
             audio.src = playUrl;
         } else {
@@ -355,7 +356,7 @@ export function MusicProvider({ children }: { children: ReactNode }) {
             if (!url) return { ok: false, message: info.reason || "没有找到可播放的音乐" };
             const [detail, lyricBundle] = await Promise.all([
                 getNeteaseSongDetail(nid).catch(() => null),
-                getNeteaseLyricBundle(nid).catch(() => ({ lyrics: "", translatedLyrics: "" })),
+                getNeteaseLyricBundle(nid).catch(() => ({ lyrics: "", translatedLyrics: "", wordLyrics: "" })),
             ]);
             const resolvedTrack: MusicTrack = {
                 ...track,
@@ -364,6 +365,7 @@ export function MusicProvider({ children }: { children: ReactNode }) {
                 coverUrl: detail?.coverUrl || track.coverUrl,
                 lyrics: lyricBundle.lyrics || track.lyrics,
                 translatedLyrics: lyricBundle.translatedLyrics || track.translatedLyrics,
+                wordLyrics: lyricBundle.wordLyrics || track.wordLyrics,
             };
             playUrl(url, resolvedTrack);
             return { ok: true, message: `正在播放「${resolvedTrack.title}」`, track: resolvedTrack };
@@ -384,7 +386,7 @@ export function MusicProvider({ children }: { children: ReactNode }) {
             const r = result.neteaseResult;
             const [detail, lyricBundle] = await Promise.all([
                 getNeteaseSongDetail(r.id).catch(() => null),
-                getNeteaseLyricBundle(r.id).catch(() => ({ lyrics: "", translatedLyrics: "" })),
+                getNeteaseLyricBundle(r.id).catch(() => ({ lyrics: "", translatedLyrics: "", wordLyrics: "" })),
             ]);
             const track: MusicTrack = {
                 id: `netease_${r.id}`,
@@ -394,6 +396,7 @@ export function MusicProvider({ children }: { children: ReactNode }) {
                 coverUrl: detail?.coverUrl || r.coverUrl,
                 lyrics: lyricBundle.lyrics,
                 translatedLyrics: lyricBundle.translatedLyrics,
+                wordLyrics: lyricBundle.wordLyrics,
                 liked: false,
                 addedAt: new Date().toISOString(),
             };
