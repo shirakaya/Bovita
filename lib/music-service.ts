@@ -266,17 +266,30 @@ export async function getNeteasePlayUrl(songId: number): Promise<string | null> 
     return info.url;
 }
 
-/** Get lyrics for a Netease song */
-export async function getNeteaseLyrics(songId: number): Promise<string> {
+export type NeteaseLyricBundle = {
+    lyrics: string;
+    translatedLyrics: string;
+};
+
+/** Get original + translated lyrics for a Netease song in one request. */
+export async function getNeteaseLyricBundle(songId: number): Promise<NeteaseLyricBundle> {
     const base = neteaseBase();
-    if (!base) return "";
+    if (!base) return { lyrics: "", translatedLyrics: "" };
     try {
         const resp = await fetch(withNeteaseParams(`${base}/lyric?id=${songId}`));
         const data = await resp.json();
-        return data?.lrc?.lyric || "";
+        return {
+            lyrics: data?.lrc?.lyric || "",
+            translatedLyrics: data?.tlyric?.lyric || "",
+        };
     } catch {
-        return "";
+        return { lyrics: "", translatedLyrics: "" };
     }
+}
+
+/** Backward-compatible original lyric helper. */
+export async function getNeteaseLyrics(songId: number): Promise<string> {
+    return (await getNeteaseLyricBundle(songId)).lyrics;
 }
 
 /** Get song detail (cover, artist ids, etc.) */
