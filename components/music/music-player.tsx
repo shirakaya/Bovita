@@ -403,11 +403,39 @@ export default function MusicPlayer() {
     useEffect(() => {
         // Set the correct frame immediately when the active line/view changes.
         updateKaraokeOverlay(player.getPlaybackTime());
-        if (view !== "lyrics" || activeLyricIdx < 0 || !player.isPlaying) return;
+        if (view !== "lyrics" || !player.isPlaying) return;
 
         let frame = 0;
         const tick = () => {
-            updateKaraokeOverlay(player.getPlaybackTime());
+            const time = player.getPlaybackTime();
+            const lyrics = parsedLyrics.current;
+            let nextIdx = activeLyricIdx;
+
+            // Keep line changes on the same high-resolution media clock. This
+            // avoids waiting for the relatively sparse <audio> timeupdate event,
+            // while React still only re-renders once when the line actually changes.
+            if (lyrics.length > 0) {
+                if (nextIdx < 0 || nextIdx >= lyrics.length || time < lyrics[nextIdx].time) {
+                    nextIdx = -1;
+                    for (let i = lyrics.length - 1; i >= 0; i--) {
+                        if (time >= lyrics[i].time) {
+                            nextIdx = i;
+                            break;
+                        }
+                    }
+                } else {
+                    while (nextIdx + 1 < lyrics.length && time >= lyrics[nextIdx + 1].time) {
+                        nextIdx++;
+                    }
+                }
+            }
+
+            if (nextIdx !== activeLyricIdx) {
+                setActiveLyricIdx(nextIdx);
+                return;
+            }
+
+            updateKaraokeOverlay(time);
             frame = window.requestAnimationFrame(tick);
         };
         frame = window.requestAnimationFrame(tick);
