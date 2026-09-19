@@ -183,7 +183,7 @@ export default function MusicApp({ onClose }: Props) {
     };
 
     /** Convert NeteaseSearchResult → MusicTrack */
-    const toMusicTrack = useCallback((r: NeteaseSearchResult, extra?: { lyrics?: string; translatedLyrics?: string; wordLyrics?: string; coverUrl?: string; name?: string; artists?: string }): MusicTrack => ({
+    const toMusicTrack = useCallback((r: NeteaseSearchResult, extra?: { lyrics?: string; translatedLyrics?: string; coverUrl?: string; name?: string; artists?: string }): MusicTrack => ({
         id: `netease_${r.id}`,
         title: extra?.name || r.name,
         artist: extra?.artists || r.artists,
@@ -191,7 +191,6 @@ export default function MusicApp({ onClose }: Props) {
         coverUrl: extra?.coverUrl || r.coverUrl,
         lyrics: extra?.lyrics,
         translatedLyrics: extra?.translatedLyrics,
-        wordLyrics: extra?.wordLyrics,
         liked: false,
         addedAt: new Date().toISOString(),
     }), []);
@@ -212,7 +211,6 @@ export default function MusicApp({ onClose }: Props) {
         const track = toMusicTrack(result, {
             lyrics: lyricBundle.lyrics,
             translatedLyrics: lyricBundle.translatedLyrics,
-            wordLyrics: lyricBundle.wordLyrics,
             coverUrl: detail?.coverUrl,
             name: detail?.name,
             artists: detail?.artists,
@@ -257,7 +255,6 @@ export default function MusicApp({ onClose }: Props) {
         const track = toMusicTrack(playable.song, {
             lyrics: lyricBundle.lyrics,
             translatedLyrics: lyricBundle.translatedLyrics,
-            wordLyrics: lyricBundle.wordLyrics,
             coverUrl: detail?.coverUrl,
             name: detail?.name,
             artists: detail?.artists,
