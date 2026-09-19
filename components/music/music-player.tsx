@@ -247,19 +247,11 @@ export default function MusicPlayer() {
         });
     }, [showMusicToast]);
 
-    // ── Parse line lyrics + translation + NetEase YRC word timing ──
-    type KaraokeWord = { text: string; start: number; end: number };
-    type ParsedLyricLine = {
-        time: number;
-        text: string;
-        duration?: number;
-        translation?: string;
-        words?: KaraokeWord[];
-    };
+    // ── Parse original + translated LRC lyrics ──
+    type ParsedLyricLine = { time: number; text: string; translation?: string };
     const parsedLyrics = useRef<ParsedLyricLine[]>([]);
     const [activeLyricIdx, setActiveLyricIdx] = useState(-1);
     const lyricsContainerRef = useRef<HTMLDivElement>(null);
-    const karaokeOverlayRef = useRef<HTMLSpanElement>(null);
 
     useEffect(() => {
         const parseLrc = (lrc: string) => {
@@ -274,58 +266,13 @@ export default function MusicPlayer() {
             return lines.sort((a, b) => a.time - b.time);
         };
 
-        const parseYrc = (yrc: string): ParsedLyricLine[] => {
-            const lines: ParsedLyricLine[] = [];
-            for (const rawLine of yrc.split("\n")) {
-                const head = rawLine.match(/^\[(\d+),(\d+)\](.*)$/);
-                if (!head) continue;
-                const lineStartMs = parseInt(head[1], 10);
-                const lineDurationMs = parseInt(head[2], 10);
-                const body = head[3] || "";
-                const rawWords: { start: number; duration: number; text: string }[] = [];
-                const tokenRe = /\((-?\d+),(\d+),[^)]*\)([^()]*)/g;
-                let token: RegExpExecArray | null;
-                while ((token = tokenRe.exec(body))) {
-                    rawWords.push({
-                        start: parseInt(token[1], 10),
-                        duration: parseInt(token[2], 10),
-                        text: token[3] || "",
-                    });
-                }
-                if (rawWords.length === 0) continue;
-
-                // YRC variants use either absolute millisecond word starts or
-                // offsets relative to the line. Detect once from the first word.
-                const relativeTiming = rawWords[0].start < lineStartMs * 0.5;
-                const words = rawWords.map(word => {
-                    const startMs = relativeTiming ? lineStartMs + word.start : word.start;
-                    return {
-                        text: word.text,
-                        start: startMs / 1000,
-                        end: (startMs + Math.max(1, word.duration)) / 1000,
-                    };
-                });
-                lines.push({
-                    time: lineStartMs / 1000,
-                    duration: lineDurationMs / 1000,
-                    text: words.map(word => word.text).join("").trim(),
-                    words,
-                });
-            }
-            return lines.sort((a, b) => a.time - b.time);
-        };
-
-        const translations = parseLrc(player.currentTrack?.translatedLyrics || "");
-        const timed = parseYrc(player.currentTrack?.wordLyrics || "");
-        const originals: ParsedLyricLine[] = timed.length > 0
-            ? timed
-            : parseLrc(player.currentTrack?.lyrics || "");
-
+        const originals = parseLrc(player.currentTrack?.lyrics || "");
         if (originals.length === 0) {
             parsedLyrics.current = [];
             return;
         }
 
+        const translations = parseLrc(player.currentTrack?.translatedLyrics || "");
         parsedLyrics.current = originals.map(line => {
             let nearest: { time: number; text: string } | undefined;
             let nearestDelta = Number.POSITIVE_INFINITY;
@@ -335,18 +282,14 @@ export default function MusicPlayer() {
                     nearest = item;
                     nearestDelta = delta;
                 }
-                if (item.time > line.time + 0.6) break;
+                if (item.time > line.time + 0.3) break;
             }
             return {
                 ...line,
-                translation: nearest && nearestDelta <= 0.6 ? nearest.text : undefined,
+                translation: nearest && nearestDelta <= 0.3 ? nearest.text : undefined,
             };
         });
-    }, [
-        player.currentTrack?.lyrics,
-        player.currentTrack?.translatedLyrics,
-        player.currentTrack?.wordLyrics,
-    ]);
+    }, [player.currentTrack?.lyrics, player.currentTrack?.translatedLyrics]);
 
     useEffect(() => {
         const lyrics = parsedLyrics.current;
@@ -360,92 +303,6 @@ export default function MusicPlayer() {
         }
         setActiveLyricIdx(idx);
     }, [player.currentTime]);
-
-    // Safari is especially expensive when every YRC word gets its own animated
-    // background-clip gradient. Keep React responsible only for the active line
-    // and animate one colored overlay directly from the media clock instead.
-    const updateKaraokeOverlay = useCallback((time: number) => {
-        const overlay = karaokeOverlayRef.current;
-        const line = parsedLyrics.current[activeLyricIdx];
-        if (!overlay || !line || activeLyricIdx < 0) return;
-
-        let progress = 0;
-        if (line.words?.length) {
-            const units = line.words.map(word => Math.max(1, Array.from(word.text).length));
-            const totalUnits = Math.max(1, units.reduce((sum, value) => sum + value, 0));
-            let completedUnits = 0;
-
-            for (let i = 0; i < line.words.length; i++) {
-                const word = line.words[i];
-                const wordUnits = units[i];
-                if (time >= word.end) {
-                    completedUnits += wordUnits;
-                    continue;
-                }
-                if (time <= word.start) break;
-
-                const duration = Math.max(0.001, word.end - word.start);
-                const localProgress = Math.max(0, Math.min(1, (time - word.start) / duration));
-                completedUnits += wordUnits * localProgress;
-                break;
-            }
-            progress = completedUnits / totalUnits;
-        } else {
-            const nextTime = parsedLyrics.current[activeLyricIdx + 1]?.time;
-            const duration = Math.max(0.8, line.duration || (nextTime ? nextTime - line.time : 4));
-            progress = (time - line.time) / duration;
-        }
-
-        const percent = Math.max(0, Math.min(1, progress)) * 100;
-        overlay.style.setProperty("--karaoke-progress", `${percent.toFixed(2)}%`);
-    }, [activeLyricIdx]);
-
-    useEffect(() => {
-        // Set the correct frame immediately when the active line/view changes.
-        updateKaraokeOverlay(player.getPlaybackTime());
-        if (view !== "lyrics" || !player.isPlaying) return;
-
-        let frame = 0;
-        const tick = () => {
-            const time = player.getPlaybackTime();
-            const lyrics = parsedLyrics.current;
-            let nextIdx = activeLyricIdx;
-
-            // Keep line changes on the same high-resolution media clock. This
-            // avoids waiting for the relatively sparse <audio> timeupdate event,
-            // while React still only re-renders once when the line actually changes.
-            if (lyrics.length > 0) {
-                if (nextIdx < 0 || nextIdx >= lyrics.length || time < lyrics[nextIdx].time) {
-                    nextIdx = -1;
-                    for (let i = lyrics.length - 1; i >= 0; i--) {
-                        if (time >= lyrics[i].time) {
-                            nextIdx = i;
-                            break;
-                        }
-                    }
-                } else {
-                    while (nextIdx + 1 < lyrics.length && time >= lyrics[nextIdx + 1].time) {
-                        nextIdx++;
-                    }
-                }
-            }
-
-            if (nextIdx !== activeLyricIdx) {
-                setActiveLyricIdx(nextIdx);
-                return;
-            }
-
-            updateKaraokeOverlay(time);
-            frame = window.requestAnimationFrame(tick);
-        };
-        frame = window.requestAnimationFrame(tick);
-        return () => window.cancelAnimationFrame(frame);
-    }, [activeLyricIdx, player.getPlaybackTime, player.isPlaying, updateKaraokeOverlay, view]);
-
-    // While paused, seeking within the same line should still refresh the reveal.
-    useEffect(() => {
-        if (!player.isPlaying) updateKaraokeOverlay(player.currentTime);
-    }, [player.currentTime, player.isPlaying, updateKaraokeOverlay]);
 
     // Auto-scroll lyrics
     useEffect(() => {
@@ -561,7 +418,7 @@ export default function MusicPlayer() {
             const [info, detail, lyricBundle] = await Promise.all([
                 getNeteasePlayInfo(nid),
                 getNeteaseSongDetail(nid).catch(() => null),
-                getNeteaseLyricBundle(nid).catch(() => ({ lyrics: "", translatedLyrics: "", wordLyrics: "" })),
+                getNeteaseLyricBundle(nid).catch(() => ({ lyrics: "", translatedLyrics: "" })),
             ]);
             if (!info.url) {
                 showMusicToast(info.reason || "加载失败，请稍后重试", 2600);
@@ -574,7 +431,6 @@ export default function MusicPlayer() {
                 coverUrl: detail?.coverUrl || target.coverUrl,
                 lyrics: lyricBundle.lyrics || target.lyrics,
                 translatedLyrics: lyricBundle.translatedLyrics || target.translatedLyrics,
-                wordLyrics: lyricBundle.wordLyrics || target.wordLyrics,
             };
             player.playUrl(info.url, resolvedTarget);
             if (info.trial) showMusicToast("VIP 歌曲，当前播放 30 秒试听", 2600);
@@ -698,20 +554,7 @@ export default function MusicPlayer() {
                                             {...(i === activeLyricIdx ? { "data-active": "" } : dist === 1 ? { "data-near": "" } : {})}
                                             onClick={(e) => handleLyricClick(i, e)}
                                         >
-                                            <span className="mp-lyric-original">
-                                                {i === activeLyricIdx ? (
-                                                    <>
-                                                        <span className="mp-karaoke-base">{line.text || " "}</span>
-                                                        <span
-                                                            ref={karaokeOverlayRef}
-                                                            className="mp-karaoke-overlay"
-                                                            aria-hidden="true"
-                                                        >
-                                                            {line.text || " "}
-                                                        </span>
-                                                    </>
-                                                ) : (line.text || " ")}
-                                            </span>
+                                            <span className="mp-lyric-original">{line.text || " "}</span>
                                             {line.translation && <span className="mp-lyric-translation">{line.translation}</span>}
                                         </div>
                                     );
