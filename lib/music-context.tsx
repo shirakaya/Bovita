@@ -33,7 +33,6 @@ export type MusicActions = {
     next: () => void;
     prev: () => void;
     seek: (time: number) => void;
-    getPlaybackTime: () => number;
     setPlayMode: (mode: PlayMode) => void;
     setQueue: (tracks: MusicTrack[]) => void;
     removeFromQueue: (trackId: string) => void;
@@ -202,7 +201,7 @@ export function MusicProvider({ children }: { children: ReactNode }) {
             const [playUrl, detail, lyricBundle] = await Promise.all([
                 getNeteasePlayUrl(nid),
                 getNeteaseSongDetail(nid).catch(() => null),
-                getNeteaseLyricBundle(nid).catch(() => ({ lyrics: "", translatedLyrics: "", wordLyrics: "" })),
+                getNeteaseLyricBundle(nid).catch(() => ({ lyrics: "", translatedLyrics: "" })),
             ]);
             if (!playUrl) return;
             track = {
@@ -212,7 +211,6 @@ export function MusicProvider({ children }: { children: ReactNode }) {
                 coverUrl: detail?.coverUrl || track.coverUrl,
                 lyrics: lyricBundle.lyrics || track.lyrics,
                 translatedLyrics: lyricBundle.translatedLyrics || track.translatedLyrics,
-                wordLyrics: lyricBundle.wordLyrics || track.wordLyrics,
             };
             audio.src = playUrl;
         } else {
@@ -310,14 +308,6 @@ export function MusicProvider({ children }: { children: ReactNode }) {
         if (audio) audio.currentTime = clamped;
     }, [duration]);
 
-    // Read the media element clock without subscribing React to every animation
-    // frame. Karaoke rendering can use this from requestAnimationFrame and
-    // update only the active lyric overlay.
-    const getPlaybackTime = useCallback(() => {
-        const time = audioRef.current?.currentTime;
-        return typeof time === "number" && Number.isFinite(time) ? time : 0;
-    }, []);
-
     const setVolume = useCallback((vol: number) => {
         const clamped = Math.max(0, Math.min(1, vol));
         setVolumeState(clamped);
@@ -365,7 +355,7 @@ export function MusicProvider({ children }: { children: ReactNode }) {
             if (!url) return { ok: false, message: info.reason || "没有找到可播放的音乐" };
             const [detail, lyricBundle] = await Promise.all([
                 getNeteaseSongDetail(nid).catch(() => null),
-                getNeteaseLyricBundle(nid).catch(() => ({ lyrics: "", translatedLyrics: "", wordLyrics: "" })),
+                getNeteaseLyricBundle(nid).catch(() => ({ lyrics: "", translatedLyrics: "" })),
             ]);
             const resolvedTrack: MusicTrack = {
                 ...track,
@@ -374,7 +364,6 @@ export function MusicProvider({ children }: { children: ReactNode }) {
                 coverUrl: detail?.coverUrl || track.coverUrl,
                 lyrics: lyricBundle.lyrics || track.lyrics,
                 translatedLyrics: lyricBundle.translatedLyrics || track.translatedLyrics,
-                wordLyrics: lyricBundle.wordLyrics || track.wordLyrics,
             };
             playUrl(url, resolvedTrack);
             return { ok: true, message: `正在播放「${resolvedTrack.title}」`, track: resolvedTrack };
@@ -395,7 +384,7 @@ export function MusicProvider({ children }: { children: ReactNode }) {
             const r = result.neteaseResult;
             const [detail, lyricBundle] = await Promise.all([
                 getNeteaseSongDetail(r.id).catch(() => null),
-                getNeteaseLyricBundle(r.id).catch(() => ({ lyrics: "", translatedLyrics: "", wordLyrics: "" })),
+                getNeteaseLyricBundle(r.id).catch(() => ({ lyrics: "", translatedLyrics: "" })),
             ]);
             const track: MusicTrack = {
                 id: `netease_${r.id}`,
@@ -405,7 +394,6 @@ export function MusicProvider({ children }: { children: ReactNode }) {
                 coverUrl: detail?.coverUrl || r.coverUrl,
                 lyrics: lyricBundle.lyrics,
                 translatedLyrics: lyricBundle.translatedLyrics,
-                wordLyrics: lyricBundle.wordLyrics,
                 liked: false,
                 addedAt: new Date().toISOString(),
             };
@@ -475,11 +463,11 @@ export function MusicProvider({ children }: { children: ReactNode }) {
 
     const controlsValue = useMemo<MusicControlsValue>(() => ({
         currentTrack, isPlaying, duration, playMode, queue, volume, showFullPlayer, floatDismissed,
-        playTrack, playUrl, pause, resume, togglePlay, next, prev, seek, getPlaybackTime,
+        playTrack, playUrl, pause, resume, togglePlay, next, prev, seek,
         setPlayMode, setQueue, removeFromQueue, setVolume, stop, dismissFloat, openFullPlayer, closeFullPlayer,
     }), [
         currentTrack, isPlaying, duration, playMode, queue, volume, showFullPlayer, floatDismissed,
-        playTrack, playUrl, pause, resume, togglePlay, next, prev, seek, getPlaybackTime,
+        playTrack, playUrl, pause, resume, togglePlay, next, prev, seek,
         setQueue, removeFromQueue, setVolume, stop, dismissFloat, openFullPlayer, closeFullPlayer,
     ]);
 
