@@ -473,11 +473,14 @@ export default function MusicPlayer() {
         "--mp-c3": palette.glowC,
         "--mp-accent": palette.accent,
         "--mp-accent-soft": palette.accentSoft,
+        "--mp-native-c1": palette.nativeGlowA,
+        "--mp-native-c2": palette.nativeGlowB,
+        "--mp-native-c3": palette.nativeGlowC,
         ...(customBg || {}),
     } as React.CSSProperties;
 
     return (
-        <div className="music-player mp-lumen" style={ambientVars}>
+        <div className="music-player mp-lumen" data-bg-mode={bgCfg.playerMode} style={ambientVars}>
             {customCss && <SessionCustomCSS css={customCss} scope=".music-player" />}
             {musicToast && (
                 <div className="music-toast-overlay">
