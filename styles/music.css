@@ -2994,19 +2994,19 @@
        by the current album cover through --mp-c1/2/3. */
     --c-music-text: #202521;
     --c-music-accent: #7a837d;
-    --c-music-primary: #31c27c;
-    --c-music-primary-dim: rgba(49, 194, 124, 0.14);
+    --c-music-primary: var(--mp-accent, #31c27c);
+    --c-music-primary-dim: var(--mp-accent-soft, rgba(49, 194, 124, 0.14));
     --c-music-surface: rgba(255, 255, 255, 0.74);
     --c-music-surface-solid: rgba(255, 255, 255, 0.94);
     --c-music-glass-dim: rgba(30, 55, 42, 0.08);
-    --c-music-gold: rgba(49, 194, 124, 0.28);
+    --c-music-gold: var(--mp-accent-soft, rgba(49, 194, 124, 0.28));
     --c-music-overlay: rgba(30, 45, 37, 0.24);
-    background-color: #f8fbf9;
+    background-color: var(--mp-bg, rgb(226, 249, 237));
     background-image:
-        radial-gradient(ellipse 98% 74% at 4% 12%, var(--mp-c1, rgba(116, 222, 171, 0.34)) 0%, transparent 72%),
-        radial-gradient(ellipse 92% 78% at 98% 30%, var(--mp-c2, rgba(190, 239, 215, 0.30)) 0%, transparent 75%),
-        radial-gradient(ellipse 92% 74% at 50% 108%, var(--mp-c3, rgba(224, 248, 236, 0.38)) 0%, transparent 78%),
-        linear-gradient(180deg, rgba(255, 255, 255, 0.80), rgba(244, 250, 247, 0.96));
+        radial-gradient(ellipse 100% 78% at 0% 8%, var(--mp-c1, rgba(169, 234, 202, 0.72)) 0%, transparent 70%),
+        radial-gradient(ellipse 94% 78% at 100% 32%, var(--mp-c2, rgba(201, 243, 222, 0.64)) 0%, transparent 74%),
+        radial-gradient(ellipse 94% 74% at 50% 108%, var(--mp-c3, rgba(232, 250, 241, 0.82)) 0%, transparent 78%),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.20));
     transition: background-color 0.8s ease, background-image 0.8s ease;
 }
 
@@ -3272,6 +3272,27 @@
 
 .mp-lyric-original {
     display: block;
+    white-space: pre-wrap;
+}
+
+.mp-karaoke-word,
+.mp-karaoke-fallback {
+    color: transparent;
+    background:
+        linear-gradient(
+            90deg,
+            var(--mp-accent, #31c27c) 0%,
+            var(--mp-accent, #31c27c) var(--karaoke-progress, 0%),
+            #26302a var(--karaoke-progress, 0%),
+            #26302a 100%
+        );
+    -webkit-background-clip: text;
+    background-clip: text;
+    transition: background 90ms linear;
+}
+
+.mp-karaoke-word {
+    display: inline;
 }
 
 .mp-lyric-translation {
@@ -3303,7 +3324,7 @@
 }
 
 .mp-lyric-line[data-active] .mp-lyric-translation {
-    color: rgba(49, 112, 79, 0.72);
+    color: rgba(54, 65, 59, 0.68);
     font-size: 0.66em;
     letter-spacing: 0.04em;
 }
@@ -3344,13 +3365,15 @@
 }
 
 .mp-wave i[data-lit] {
-    background: rgba(49, 194, 124, 0.78);
+    background: var(--mp-accent, #31c27c);
+    opacity: 0.72;
     box-shadow: none;
 }
 
 .mp-wave i[data-head] {
-    background: #31c27c;
-    box-shadow: 0 0 0 3px rgba(49, 194, 124, 0.12);
+    background: var(--mp-accent, #31c27c);
+    opacity: 1;
+    box-shadow: 0 0 0 3px var(--mp-accent-soft, rgba(49, 194, 124, 0.12));
 }
 
 .mp-times {
@@ -3392,10 +3415,10 @@
     width: 64px;
     height: 64px;
     border-radius: 50%;
-    background: #31c27c;
+    background: var(--mp-accent, #31c27c);
     color: #fff;
     border: none;
-    box-shadow: 0 10px 28px rgba(49, 194, 124, 0.24);
+    box-shadow: 0 10px 28px var(--mp-accent-soft, rgba(49, 194, 124, 0.24));
     display: flex;
     align-items: center;
     justify-content: center;
@@ -3406,7 +3429,8 @@
 .mp-ctrl-play:active {
     transform: scale(0.94);
     color: #fff;
-    background: #2ab36f;
+    background: var(--mp-accent, #31c27c);
+    filter: brightness(0.94);
 }
 
 /* Social row */
