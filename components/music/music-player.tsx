@@ -11,7 +11,7 @@ import { extractCoverPalette, DEFAULT_COVER_PALETTE, type CoverPalette } from "@
 import {
     getUserPlaylists, addTracksToPlaylist, removeTracksFromPlaylist, getNeteasePlayInfo,
     isNeteaseConfigured, recordTrackPlaylist, removeTrackPlaylistRecord, getTrackPlaylistId,
-    getSongCommentPage, getNeteaseSongDetail,
+    getSongCommentPage, getNeteaseSongDetail, getNeteaseLyricBundle,
     type NeteasePlaylist,
 } from "@/lib/music-service";
 import MusicCommentsPage from "./music-comments";
@@ -224,29 +224,49 @@ export default function MusicPlayer() {
         });
     }, [showMusicToast]);
 
-    // ── Parse LRC lyrics ──
-    const parsedLyrics = useRef<{ time: number; text: string }[]>([]);
+    // ── Parse original + translated LRC lyrics ──
+    type ParsedLyricLine = { time: number; text: string; translation?: string };
+    const parsedLyrics = useRef<ParsedLyricLine[]>([]);
     const [activeLyricIdx, setActiveLyricIdx] = useState(-1);
     const lyricsContainerRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
-        const lrc = player.currentTrack?.lyrics || "";
-        if (!lrc) {
-            parsedLyrics.current = [];
-            return;
-        }
-        const lines: { time: number; text: string }[] = [];
-        for (const line of lrc.split("\n")) {
-            const match = line.match(/\[(\d+):(\d+(?:\.\d+)?)\](.*)/);
-            if (match) {
+        const parseLrc = (lrc: string) => {
+            const lines: { time: number; text: string }[] = [];
+            for (const rawLine of lrc.split("\n")) {
+                const match = rawLine.match(/\[(\d+):(\d+(?:\.\d+)?)\](.*)/);
+                if (!match) continue;
                 const mins = parseInt(match[1], 10);
                 const secs = parseFloat(match[2]);
                 lines.push({ time: mins * 60 + secs, text: match[3].trim() });
             }
+            return lines.sort((a, b) => a.time - b.time);
+        };
+
+        const originals = parseLrc(player.currentTrack?.lyrics || "");
+        if (originals.length === 0) {
+            parsedLyrics.current = [];
+            return;
         }
-        lines.sort((a, b) => a.time - b.time);
-        parsedLyrics.current = lines;
-    }, [player.currentTrack?.lyrics]);
+
+        const translations = parseLrc(player.currentTrack?.translatedLyrics || "");
+        parsedLyrics.current = originals.map(line => {
+            let nearest: { time: number; text: string } | undefined;
+            let nearestDelta = Number.POSITIVE_INFINITY;
+            for (const item of translations) {
+                const delta = Math.abs(item.time - line.time);
+                if (delta < nearestDelta) {
+                    nearest = item;
+                    nearestDelta = delta;
+                }
+                if (item.time > line.time + 0.3) break;
+            }
+            return {
+                ...line,
+                translation: nearest && nearestDelta <= 0.3 ? nearest.text : undefined,
+            };
+        });
+    }, [player.currentTrack?.lyrics, player.currentTrack?.translatedLyrics]);
 
     useEffect(() => {
         const lyrics = parsedLyrics.current;
@@ -372,12 +392,24 @@ export default function MusicPlayer() {
         if (target.id.startsWith("netease_")) {
             beginMusicLoadingToast(target.id);
             const nid = parseInt(target.id.replace("netease_", ""), 10);
-            const info = await getNeteasePlayInfo(nid);
+            const [info, detail, lyricBundle] = await Promise.all([
+                getNeteasePlayInfo(nid),
+                getNeteaseSongDetail(nid).catch(() => null),
+                getNeteaseLyricBundle(nid).catch(() => ({ lyrics: "", translatedLyrics: "" })),
+            ]);
             if (!info.url) {
                 showMusicToast(info.reason || "加载失败，请稍后重试", 2600);
                 return;
             }
-            player.playUrl(info.url, target);
+            const resolvedTarget = {
+                ...target,
+                title: detail?.name || target.title,
+                artist: detail?.artists || target.artist,
+                coverUrl: detail?.coverUrl || target.coverUrl,
+                lyrics: lyricBundle.lyrics || target.lyrics,
+                translatedLyrics: lyricBundle.translatedLyrics || target.translatedLyrics,
+            };
+            player.playUrl(info.url, resolvedTarget);
             if (info.trial) showMusicToast("VIP 歌曲，当前播放 30 秒试听", 2600);
             return;
         }
@@ -409,6 +441,7 @@ export default function MusicPlayer() {
     const hasLyrics = parsedLyrics.current.length > 0;
     const modeInfo = PLAY_MODE_ICONS[player.playMode];
     const activeLyricText = activeLyricIdx >= 0 ? parsedLyrics.current[activeLyricIdx]?.text : "";
+    const activeLyricTranslation = activeLyricIdx >= 0 ? parsedLyrics.current[activeLyricIdx]?.translation : "";
     const customBg = playerBgStyle(bgCfg);
     const ambientVars = {
         "--mp-c1": palette[0],
@@ -494,7 +527,8 @@ export default function MusicPlayer() {
                                             {...(i === activeLyricIdx ? { "data-active": "" } : dist === 1 ? { "data-near": "" } : {})}
                                             onClick={(e) => handleLyricClick(i, e)}
                                         >
-                                            {line.text || " "}
+                                            <span className="mp-lyric-original">{line.text || " "}</span>
+                                            {line.translation && <span className="mp-lyric-translation">{line.translation}</span>}
                                         </div>
                                     );
                                 })}
@@ -547,7 +581,11 @@ export default function MusicPlayer() {
                         </div>
                         <div className="mp-lyric-peek">
                             {activeLyricText ? (
-                                <>「{activeLyricText}」<span>点击查看歌词</span></>
+                                <>
+                                    「{activeLyricText}」
+                                    {activeLyricTranslation && <small>{activeLyricTranslation}</small>}
+                                    <span>点击查看歌词</span>
+                                </>
                             ) : hasLyrics ? (
                                 <span>点击查看歌词</span>
                             ) : null}
