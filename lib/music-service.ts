@@ -282,6 +282,7 @@ export async function getNeteaseLyricBundle(songId: number): Promise<NeteaseLyri
     const empty = { lyrics: "", translatedLyrics: "", wordLyrics: "" };
     if (!base) return empty;
 
+    let best = empty;
     for (const endpoint of ["lyric/new", "lyric"]) {
         try {
             const resp = await fetch(withNeteaseParams(`${base}/${endpoint}?id=${songId}`));
@@ -292,12 +293,19 @@ export async function getNeteaseLyricBundle(songId: number): Promise<NeteaseLyri
                 translatedLyrics: data?.tlyric?.lyric || "",
                 wordLyrics: data?.yrc?.lyric || "",
             };
-            if (bundle.lyrics || bundle.wordLyrics) return bundle;
+            best = {
+                lyrics: bundle.lyrics || best.lyrics,
+                translatedLyrics: bundle.translatedLyrics || best.translatedLyrics,
+                wordLyrics: bundle.wordLyrics || best.wordLyrics,
+            };
+            // Once karaoke timing is available there is no reason to make the
+            // compatibility request as well.
+            if (best.wordLyrics) return best;
         } catch {
             // Try the compatible endpoint below.
         }
     }
-    return empty;
+    return best;
 }
 
 /** Backward-compatible original lyric helper. */
