@@ -2990,15 +2990,23 @@
    ══════════════════════════════════════════ */
 
 .mp-lumen {
-    /* The full player follows the current cover palette. The same three
-       sampled colors are used both as a broad wash and as moving blobs,
-       so a track change visibly changes the whole playback surface. */
-    background-color: #07080d;
+    /* Bright QQ-music-like base: white/green by default, still tinted
+       by the current album cover through --mp-c1/2/3. */
+    --c-music-text: #202521;
+    --c-music-accent: #7a837d;
+    --c-music-primary: #31c27c;
+    --c-music-primary-dim: rgba(49, 194, 124, 0.14);
+    --c-music-surface: rgba(255, 255, 255, 0.74);
+    --c-music-surface-solid: rgba(255, 255, 255, 0.94);
+    --c-music-glass-dim: rgba(30, 55, 42, 0.08);
+    --c-music-gold: rgba(49, 194, 124, 0.28);
+    --c-music-overlay: rgba(30, 45, 37, 0.24);
+    background-color: #f8fbf9;
     background-image:
-        radial-gradient(ellipse 90% 68% at 8% 18%, var(--mp-c1, rgba(88, 116, 196, 0.55)) 0%, transparent 72%),
-        radial-gradient(ellipse 82% 72% at 94% 36%, var(--mp-c2, rgba(122, 96, 202, 0.42)) 0%, transparent 74%),
-        radial-gradient(ellipse 86% 70% at 48% 104%, var(--mp-c3, rgba(66, 134, 160, 0.38)) 0%, transparent 76%),
-        linear-gradient(180deg, rgba(7, 8, 13, 0.46), rgba(7, 8, 13, 0.88));
+        radial-gradient(ellipse 98% 74% at 4% 12%, var(--mp-c1, rgba(116, 222, 171, 0.34)) 0%, transparent 72%),
+        radial-gradient(ellipse 92% 78% at 98% 30%, var(--mp-c2, rgba(190, 239, 215, 0.30)) 0%, transparent 75%),
+        radial-gradient(ellipse 92% 74% at 50% 108%, var(--mp-c3, rgba(224, 248, 236, 0.38)) 0%, transparent 78%),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.80), rgba(244, 250, 247, 0.96));
     transition: background-color 0.8s ease, background-image 0.8s ease;
 }
 
@@ -3056,7 +3064,7 @@
     position: absolute;
     inset: 0;
     display: block;
-    opacity: 0.5;
+    opacity: 0.12;
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0.04 0'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)'/%3E%3C/svg%3E");
 }
 
@@ -3065,8 +3073,8 @@
     inset: 0;
     display: block;
     background:
-        radial-gradient(120% 90% at 50% 30%, transparent 40%, rgba(5, 6, 10, 0.5) 100%),
-        linear-gradient(180deg, transparent 70%, rgba(5, 6, 10, 0.45));
+        radial-gradient(120% 92% at 50% 28%, transparent 42%, rgba(255, 255, 255, 0.34) 100%),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.12), rgba(247, 251, 249, 0.46));
 }
 
 /* Player header */
@@ -3098,8 +3106,8 @@
 }
 
 .mp-song[data-glow] {
-    color: #fff;
-    text-shadow: 0 0 12px rgba(220, 235, 255, 0.75), 0 0 32px rgba(160, 195, 255, 0.4);
+    color: #202521;
+    text-shadow: none;
 }
 
 .mp-artist {
@@ -3161,7 +3169,7 @@
     aspect-ratio: 1;
     border-radius: 24px;
     overflow: hidden;
-    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.08);
+    box-shadow: 0 18px 46px rgba(46, 87, 65, 0.16), 0 0 0 1px rgba(255, 255, 255, 0.82);
     transition: transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1), filter 0.35s;
     background: var(--c-music-surface);
 }
@@ -3175,7 +3183,7 @@
 
 .mp-cover[data-paused] {
     transform: scale(0.94);
-    filter: brightness(0.8);
+    filter: brightness(0.94);
 }
 
 .mp-cover-placeholder {
@@ -3189,7 +3197,7 @@
 
 .mp-lyric-peek {
     font-size: calc(11.7px*var(--app-text-scale,1));
-    color: rgba(220, 232, 255, 0.6);
+    color: rgba(38, 51, 44, 0.72);
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -3205,7 +3213,7 @@
     display: block;
     max-width: 100%;
     font-size: calc(10.8px*var(--app-text-scale,1));
-    color: rgba(225, 235, 255, 0.48);
+    color: rgba(72, 86, 78, 0.62);
     font-weight: 400;
     line-height: 1.45;
     letter-spacing: 0.02em;
@@ -3252,8 +3260,8 @@
     font-weight: 600;
     letter-spacing: 0.08em;
     line-height: 1.7;
-    color: rgba(215, 230, 255, 0.32);
-    text-shadow: 0 0 8px rgba(170, 200, 250, 0.12);
+    color: rgba(45, 56, 50, 0.30);
+    text-shadow: none;
     transition: color 0.35s, text-shadow 0.35s, font-size 0.35s;
     cursor: pointer;
     text-align: left;
@@ -3272,30 +3280,30 @@
     font-weight: 450;
     line-height: 1.5;
     letter-spacing: 0.035em;
-    color: rgba(215, 230, 255, 0.22);
+    color: rgba(67, 79, 72, 0.22);
     text-shadow: none;
     transition: color 0.35s, opacity 0.35s;
 }
 
 .mp-lyric-line[data-near] {
-    color: rgba(220, 235, 255, 0.52);
-    text-shadow: 0 0 10px rgba(180, 208, 255, 0.25);
+    color: rgba(40, 52, 46, 0.54);
+    text-shadow: none;
 }
 
 .mp-lyric-line[data-near] .mp-lyric-translation {
-    color: rgba(220, 235, 255, 0.38);
+    color: rgba(66, 80, 72, 0.42);
 }
 
 .mp-lyric-line[data-active] {
     font-size: calc(18.9px*var(--app-text-scale,1));
-    color: #ffffff;
+    color: #202521;
     letter-spacing: 0.1em;
-    text-shadow: 0 0 10px rgba(235, 245, 255, 0.9), 0 0 30px rgba(170, 200, 255, 0.6), 0 0 66px rgba(130, 170, 245, 0.35);
-    animation: mp-breath 2.6s ease-in-out infinite;
+    text-shadow: none;
+    animation: none;
 }
 
 .mp-lyric-line[data-active] .mp-lyric-translation {
-    color: rgba(242, 247, 255, 0.72);
+    color: rgba(49, 112, 79, 0.72);
     font-size: 0.66em;
     letter-spacing: 0.04em;
 }
@@ -3330,19 +3338,19 @@
     flex: 1;
     min-width: 2px;
     border-radius: 1px;
-    background: rgba(190, 212, 250, 0.18);
+    background: rgba(62, 78, 69, 0.14);
     transition: background 0.2s;
     display: block;
 }
 
 .mp-wave i[data-lit] {
-    background: rgba(240, 248, 255, 0.85);
-    box-shadow: 0 0 6px rgba(200, 224, 255, 0.7);
+    background: rgba(49, 194, 124, 0.78);
+    box-shadow: none;
 }
 
 .mp-wave i[data-head] {
-    background: #fff;
-    box-shadow: 0 0 10px rgba(230, 242, 255, 0.95), 0 0 20px rgba(160, 195, 255, 0.7);
+    background: #31c27c;
+    box-shadow: 0 0 0 3px rgba(49, 194, 124, 0.12);
 }
 
 .mp-times {
@@ -3384,10 +3392,10 @@
     width: 64px;
     height: 64px;
     border-radius: 50%;
-    background: #fff;
-    color: #10131c;
+    background: #31c27c;
+    color: #fff;
     border: none;
-    box-shadow: 0 10px 30px rgba(255, 255, 255, 0.14);
+    box-shadow: 0 10px 28px rgba(49, 194, 124, 0.24);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -3397,8 +3405,8 @@
 
 .mp-ctrl-play:active {
     transform: scale(0.94);
-    color: #10131c;
-    background: #fff;
+    color: #fff;
+    background: #2ab36f;
 }
 
 /* Social row */
