@@ -3271,34 +3271,7 @@
 }
 
 .mp-lyric-original {
-    display: inline-block;
-    position: relative;
-    align-self: flex-start;
-    max-width: 100%;
-    white-space: pre-wrap;
-}
-
-.mp-karaoke-base {
-    color: #26302a;
-}
-
-/*
- * Safari-friendly karaoke reveal:
- * only one duplicate text layer is repainted per frame. The old implementation
- * animated a background-clip gradient on every YRC word, which caused visible
- * jank on iPad/WebKit.
- */
-.mp-karaoke-overlay {
-    position: absolute;
-    inset: 0;
-    color: var(--mp-accent, #31c27c);
-    pointer-events: none;
-    -webkit-clip-path: inset(0 calc(100% - var(--karaoke-progress, 0%)) 0 0);
-    clip-path: inset(0 calc(100% - var(--karaoke-progress, 0%)) 0 0);
-    will-change: clip-path;
-    contain: paint;
-    transform: translateZ(0);
-    -webkit-transform: translateZ(0);
+    display: block;
 }
 
 .mp-lyric-translation {
