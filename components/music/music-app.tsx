@@ -11,7 +11,7 @@ import { useMusicControls, type MusicControlsValue } from "@/lib/music-context";
 import { SessionCustomCSS } from "@/components/ui/session-custom-css";
 import {
     isNeteaseConfigured, loadMusicApiConfig, saveMusicApiConfig,
-    searchNetease, getNeteasePlayInfo, getNeteaseLyrics, getNeteaseSongDetail,
+    searchNetease, getNeteasePlayInfo, getNeteaseLyricBundle, getNeteaseSongDetail,
     testNeteaseConnection, getQrKey, getQrImage, checkQrStatus, checkLoginStatus,
     getUserPlaylists, getPlaylistTracks, saveNeteaseCookie, clearNeteaseCookie,
     getDailyRecommendSongs, getHotSearchDetail, getPersonalizedPlaylists,
@@ -183,13 +183,14 @@ export default function MusicApp({ onClose }: Props) {
     };
 
     /** Convert NeteaseSearchResult → MusicTrack */
-    const toMusicTrack = useCallback((r: NeteaseSearchResult, extra?: { lyrics?: string; coverUrl?: string; name?: string; artists?: string }): MusicTrack => ({
+    const toMusicTrack = useCallback((r: NeteaseSearchResult, extra?: { lyrics?: string; translatedLyrics?: string; coverUrl?: string; name?: string; artists?: string }): MusicTrack => ({
         id: `netease_${r.id}`,
         title: extra?.name || r.name,
         artist: extra?.artists || r.artists,
         duration: r.duration / 1000,
         coverUrl: extra?.coverUrl || r.coverUrl,
         lyrics: extra?.lyrics,
+        translatedLyrics: extra?.translatedLyrics,
         liked: false,
         addedAt: new Date().toISOString(),
     }), []);
@@ -203,9 +204,17 @@ export default function MusicApp({ onClose }: Props) {
             showMusicToast(info.reason || "加载失败，请稍后重试", 2600);
             return;
         }
-        const detail = await getNeteaseSongDetail(result.id);
-        const lyrics = await getNeteaseLyrics(result.id);
-        const track = toMusicTrack(result, { lyrics, coverUrl: detail?.coverUrl, name: detail?.name, artists: detail?.artists });
+        const [detail, lyricBundle] = await Promise.all([
+            getNeteaseSongDetail(result.id),
+            getNeteaseLyricBundle(result.id),
+        ]);
+        const track = toMusicTrack(result, {
+            lyrics: lyricBundle.lyrics,
+            translatedLyrics: lyricBundle.translatedLyrics,
+            coverUrl: detail?.coverUrl,
+            name: detail?.name,
+            artists: detail?.artists,
+        });
         // Prepend to existing queue
         if (!player.queue.some(t => t.id === track.id)) {
             player.setQueue([track, ...player.queue]);
@@ -239,9 +248,17 @@ export default function MusicApp({ onClose }: Props) {
         }
 
         beginMusicLoadingToast(`netease_${playable.song.id}`);
-        const detail = await getNeteaseSongDetail(playable.song.id);
-        const lyrics = await getNeteaseLyrics(playable.song.id);
-        const track = toMusicTrack(playable.song, { lyrics, coverUrl: detail?.coverUrl, name: detail?.name, artists: detail?.artists });
+        const [detail, lyricBundle] = await Promise.all([
+            getNeteaseSongDetail(playable.song.id),
+            getNeteaseLyricBundle(playable.song.id),
+        ]);
+        const track = toMusicTrack(playable.song, {
+            lyrics: lyricBundle.lyrics,
+            translatedLyrics: lyricBundle.translatedLyrics,
+            coverUrl: detail?.coverUrl,
+            name: detail?.name,
+            artists: detail?.artists,
+        });
         player.playUrl(playable.url, track);
         if (playable.index > 0) showMusicToast(`已跳过 ${playable.index} 首不可播放歌曲`);
         else if (playable.trial) showMusicToast("VIP 歌曲，当前播放 30 秒试听", 2600);
