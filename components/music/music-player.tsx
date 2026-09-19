@@ -259,6 +259,7 @@ export default function MusicPlayer() {
     const parsedLyrics = useRef<ParsedLyricLine[]>([]);
     const [activeLyricIdx, setActiveLyricIdx] = useState(-1);
     const lyricsContainerRef = useRef<HTMLDivElement>(null);
+    const karaokeOverlayRef = useRef<HTMLSpanElement>(null);
 
     useEffect(() => {
         const parseLrc = (lrc: string) => {
@@ -359,6 +360,64 @@ export default function MusicPlayer() {
         }
         setActiveLyricIdx(idx);
     }, [player.currentTime]);
+
+    // Safari is especially expensive when every YRC word gets its own animated
+    // background-clip gradient. Keep React responsible only for the active line
+    // and animate one colored overlay directly from the media clock instead.
+    const updateKaraokeOverlay = useCallback((time: number) => {
+        const overlay = karaokeOverlayRef.current;
+        const line = parsedLyrics.current[activeLyricIdx];
+        if (!overlay || !line || activeLyricIdx < 0) return;
+
+        let progress = 0;
+        if (line.words?.length) {
+            const units = line.words.map(word => Math.max(1, Array.from(word.text).length));
+            const totalUnits = Math.max(1, units.reduce((sum, value) => sum + value, 0));
+            let completedUnits = 0;
+
+            for (let i = 0; i < line.words.length; i++) {
+                const word = line.words[i];
+                const wordUnits = units[i];
+                if (time >= word.end) {
+                    completedUnits += wordUnits;
+                    continue;
+                }
+                if (time <= word.start) break;
+
+                const duration = Math.max(0.001, word.end - word.start);
+                const localProgress = Math.max(0, Math.min(1, (time - word.start) / duration));
+                completedUnits += wordUnits * localProgress;
+                break;
+            }
+            progress = completedUnits / totalUnits;
+        } else {
+            const nextTime = parsedLyrics.current[activeLyricIdx + 1]?.time;
+            const duration = Math.max(0.8, line.duration || (nextTime ? nextTime - line.time : 4));
+            progress = (time - line.time) / duration;
+        }
+
+        const percent = Math.max(0, Math.min(1, progress)) * 100;
+        overlay.style.setProperty("--karaoke-progress", `${percent.toFixed(2)}%`);
+    }, [activeLyricIdx]);
+
+    useEffect(() => {
+        // Set the correct frame immediately when the active line/view changes.
+        updateKaraokeOverlay(player.getPlaybackTime());
+        if (view !== "lyrics" || activeLyricIdx < 0 || !player.isPlaying) return;
+
+        let frame = 0;
+        const tick = () => {
+            updateKaraokeOverlay(player.getPlaybackTime());
+            frame = window.requestAnimationFrame(tick);
+        };
+        frame = window.requestAnimationFrame(tick);
+        return () => window.cancelAnimationFrame(frame);
+    }, [activeLyricIdx, player.getPlaybackTime, player.isPlaying, updateKaraokeOverlay, view]);
+
+    // While paused, seeking within the same line should still refresh the reveal.
+    useEffect(() => {
+        if (!player.isPlaying) updateKaraokeOverlay(player.currentTime);
+    }, [player.currentTime, player.isPlaying, updateKaraokeOverlay]);
 
     // Auto-scroll lyrics
     useEffect(() => {
@@ -612,33 +671,18 @@ export default function MusicPlayer() {
                                             onClick={(e) => handleLyricClick(i, e)}
                                         >
                                             <span className="mp-lyric-original">
-                                                {i === activeLyricIdx && line.words?.length ? (
-                                                    line.words.map((word, wordIndex) => {
-                                                        const duration = Math.max(0.001, word.end - word.start);
-                                                        const wordProgress = Math.max(0, Math.min(1, (currentTime - word.start) / duration));
-                                                        return (
-                                                            <span
-                                                                key={wordIndex}
-                                                                className="mp-karaoke-word"
-                                                                style={{ "--karaoke-progress": `${wordProgress * 100}%` } as React.CSSProperties}
-                                                            >
-                                                                {word.text}
-                                                            </span>
-                                                        );
-                                                    })
-                                                ) : i === activeLyricIdx ? (() => {
-                                                    const nextTime = parsedLyrics.current[i + 1]?.time;
-                                                    const duration = Math.max(0.8, line.duration || (nextTime ? nextTime - line.time : 4));
-                                                    const lineProgress = Math.max(0, Math.min(1, (currentTime - line.time) / duration));
-                                                    return (
+                                                {i === activeLyricIdx ? (
+                                                    <>
+                                                        <span className="mp-karaoke-base">{line.text || " "}</span>
                                                         <span
-                                                            className="mp-karaoke-fallback"
-                                                            style={{ "--karaoke-progress": `${lineProgress * 100}%` } as React.CSSProperties}
+                                                            ref={karaokeOverlayRef}
+                                                            className="mp-karaoke-overlay"
+                                                            aria-hidden="true"
                                                         >
                                                             {line.text || " "}
                                                         </span>
-                                                    );
-                                                })() : (line.text || " ")}
+                                                    </>
+                                                ) : (line.text || " ")}
                                             </span>
                                             {line.translation && <span className="mp-lyric-translation">{line.translation}</span>}
                                         </div>
