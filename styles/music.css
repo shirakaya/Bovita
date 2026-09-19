@@ -2990,8 +2990,16 @@
    ══════════════════════════════════════════ */
 
 .mp-lumen {
-    background-image: none;
+    /* The full player follows the current cover palette. The same three
+       sampled colors are used both as a broad wash and as moving blobs,
+       so a track change visibly changes the whole playback surface. */
     background-color: #07080d;
+    background-image:
+        radial-gradient(ellipse 90% 68% at 8% 18%, var(--mp-c1, rgba(88, 116, 196, 0.55)) 0%, transparent 72%),
+        radial-gradient(ellipse 82% 72% at 94% 36%, var(--mp-c2, rgba(122, 96, 202, 0.42)) 0%, transparent 74%),
+        radial-gradient(ellipse 86% 70% at 48% 104%, var(--mp-c3, rgba(66, 134, 160, 0.38)) 0%, transparent 76%),
+        linear-gradient(180deg, rgba(7, 8, 13, 0.46), rgba(7, 8, 13, 0.88));
+    transition: background-color 0.8s ease, background-image 0.8s ease;
 }
 
 .mp-ambient {
@@ -3193,6 +3201,16 @@
     min-height: 34px;
 }
 
+.mp-lyric-peek small {
+    display: block;
+    max-width: 100%;
+    font-size: calc(10.8px*var(--app-text-scale,1));
+    color: rgba(225, 235, 255, 0.48);
+    font-weight: 400;
+    line-height: 1.45;
+    letter-spacing: 0.02em;
+}
+
 .mp-lyric-peek span {
     font-size: calc(9px*var(--app-text-scale,1));
     color: var(--c-music-accent);
@@ -3239,11 +3257,33 @@
     transition: color 0.35s, text-shadow 0.35s, font-size 0.35s;
     cursor: pointer;
     text-align: left;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.mp-lyric-original {
+    display: block;
+}
+
+.mp-lyric-translation {
+    display: block;
+    font-size: 0.72em;
+    font-weight: 450;
+    line-height: 1.5;
+    letter-spacing: 0.035em;
+    color: rgba(215, 230, 255, 0.22);
+    text-shadow: none;
+    transition: color 0.35s, opacity 0.35s;
 }
 
 .mp-lyric-line[data-near] {
     color: rgba(220, 235, 255, 0.52);
     text-shadow: 0 0 10px rgba(180, 208, 255, 0.25);
+}
+
+.mp-lyric-line[data-near] .mp-lyric-translation {
+    color: rgba(220, 235, 255, 0.38);
 }
 
 .mp-lyric-line[data-active] {
@@ -3252,6 +3292,12 @@
     letter-spacing: 0.1em;
     text-shadow: 0 0 10px rgba(235, 245, 255, 0.9), 0 0 30px rgba(170, 200, 255, 0.6), 0 0 66px rgba(130, 170, 245, 0.35);
     animation: mp-breath 2.6s ease-in-out infinite;
+}
+
+.mp-lyric-line[data-active] .mp-lyric-translation {
+    color: rgba(242, 247, 255, 0.72);
+    font-size: 0.66em;
+    letter-spacing: 0.04em;
 }
 
 @keyframes mp-breath {
