@@ -3274,17 +3274,6 @@
     display: block;
 }
 
-/* Legacy cleanup: older builds rendered a duplicated colored karaoke overlay.
-   Keep it forcibly disabled so stale custom CSS / partially cached assets
-   cannot resurrect the "double text" effect after YRC support was removed. */
-.mp-karaoke-overlay {
-    display: none !important;
-}
-
-.mp-karaoke-base {
-    color: inherit !important;
-}
-
 .mp-lyric-translation {
     display: block;
     font-size: 0.72em;
