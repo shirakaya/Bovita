@@ -3296,7 +3296,7 @@
 
 .mp-lyric-line[data-active] {
     font-size: calc(18.9px*var(--app-text-scale,1));
-    color: #202521;
+    color: var(--mp-accent, #31c27c);
     letter-spacing: 0.1em;
     text-shadow: none;
     animation: none;
