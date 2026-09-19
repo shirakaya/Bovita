@@ -194,11 +194,24 @@ export function MusicProvider({ children }: { children: ReactNode }) {
         cleanupBlobUrl();
         audio.pause();
 
-        // Netease tracks: fetch play URL from API
+        // Netease tracks: resolve stream + rich metadata so automatic queue changes
+        // still refresh cover colors and translated lyrics.
         if (track.id.startsWith("netease_")) {
             const nid = parseInt(track.id.replace("netease_", ""), 10);
-            const playUrl = await getNeteasePlayUrl(nid);
+            const [playUrl, detail, lyricBundle] = await Promise.all([
+                getNeteasePlayUrl(nid),
+                getNeteaseSongDetail(nid).catch(() => null),
+                getNeteaseLyricBundle(nid).catch(() => ({ lyrics: "", translatedLyrics: "" })),
+            ]);
             if (!playUrl) return;
+            track = {
+                ...track,
+                title: detail?.name || track.title,
+                artist: detail?.artists || track.artist,
+                coverUrl: detail?.coverUrl || track.coverUrl,
+                lyrics: lyricBundle.lyrics || track.lyrics,
+                translatedLyrics: lyricBundle.translatedLyrics || track.translatedLyrics,
+            };
             audio.src = playUrl;
         } else {
             // Local tracks: load blob from IndexedDB
