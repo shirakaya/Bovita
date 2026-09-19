@@ -315,7 +315,7 @@ export function MusicProvider({ children }: { children: ReactNode }) {
     // update only the active lyric overlay.
     const getPlaybackTime = useCallback(() => {
         const time = audioRef.current?.currentTime;
-        return Number.isFinite(time) ? time! : 0;
+        return typeof time === "number" && Number.isFinite(time) ? time : 0;
     }, []);
 
     const setVolume = useCallback((vol: number) => {
