@@ -269,22 +269,35 @@ export async function getNeteasePlayUrl(songId: number): Promise<string | null> 
 export type NeteaseLyricBundle = {
     lyrics: string;
     translatedLyrics: string;
+    wordLyrics: string;
 };
 
-/** Get original + translated lyrics for a Netease song in one request. */
+/**
+ * Get line lyrics, translated lyrics and NetEase karaoke word timing.
+ * Newer API builds expose yrc through /lyric/new; older deployments may only
+ * have /lyric, so fall back without breaking playback.
+ */
 export async function getNeteaseLyricBundle(songId: number): Promise<NeteaseLyricBundle> {
     const base = neteaseBase();
-    if (!base) return { lyrics: "", translatedLyrics: "" };
-    try {
-        const resp = await fetch(withNeteaseParams(`${base}/lyric?id=${songId}`));
-        const data = await resp.json();
-        return {
-            lyrics: data?.lrc?.lyric || "",
-            translatedLyrics: data?.tlyric?.lyric || "",
-        };
-    } catch {
-        return { lyrics: "", translatedLyrics: "" };
+    const empty = { lyrics: "", translatedLyrics: "", wordLyrics: "" };
+    if (!base) return empty;
+
+    for (const endpoint of ["lyric/new", "lyric"]) {
+        try {
+            const resp = await fetch(withNeteaseParams(`${base}/${endpoint}?id=${songId}`));
+            if (!resp.ok) continue;
+            const data = await resp.json();
+            const bundle = {
+                lyrics: data?.lrc?.lyric || "",
+                translatedLyrics: data?.tlyric?.lyric || "",
+                wordLyrics: data?.yrc?.lyric || "",
+            };
+            if (bundle.lyrics || bundle.wordLyrics) return bundle;
+        } catch {
+            // Try the compatible endpoint below.
+        }
     }
+    return empty;
 }
 
 /** Backward-compatible original lyric helper. */
