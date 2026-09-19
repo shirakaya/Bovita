@@ -247,8 +247,15 @@ export default function MusicPlayer() {
         });
     }, [showMusicToast]);
 
-    // ── Parse original + translated LRC lyrics ──
-    type ParsedLyricLine = { time: number; text: string; translation?: string };
+    // ── Parse line lyrics + translation + NetEase YRC word timing ──
+    type KaraokeWord = { text: string; start: number; end: number };
+    type ParsedLyricLine = {
+        time: number;
+        text: string;
+        duration?: number;
+        translation?: string;
+        words?: KaraokeWord[];
+    };
     const parsedLyrics = useRef<ParsedLyricLine[]>([]);
     const [activeLyricIdx, setActiveLyricIdx] = useState(-1);
     const lyricsContainerRef = useRef<HTMLDivElement>(null);
@@ -266,13 +273,58 @@ export default function MusicPlayer() {
             return lines.sort((a, b) => a.time - b.time);
         };
 
-        const originals = parseLrc(player.currentTrack?.lyrics || "");
+        const parseYrc = (yrc: string): ParsedLyricLine[] => {
+            const lines: ParsedLyricLine[] = [];
+            for (const rawLine of yrc.split("\n")) {
+                const head = rawLine.match(/^\[(\d+),(\d+)\](.*)$/);
+                if (!head) continue;
+                const lineStartMs = parseInt(head[1], 10);
+                const lineDurationMs = parseInt(head[2], 10);
+                const body = head[3] || "";
+                const rawWords: { start: number; duration: number; text: string }[] = [];
+                const tokenRe = /\((-?\d+),(\d+),[^)]*\)([^()]*)/g;
+                let token: RegExpExecArray | null;
+                while ((token = tokenRe.exec(body))) {
+                    rawWords.push({
+                        start: parseInt(token[1], 10),
+                        duration: parseInt(token[2], 10),
+                        text: token[3] || "",
+                    });
+                }
+                if (rawWords.length === 0) continue;
+
+                // YRC variants use either absolute millisecond word starts or
+                // offsets relative to the line. Detect once from the first word.
+                const relativeTiming = rawWords[0].start < lineStartMs * 0.5;
+                const words = rawWords.map(word => {
+                    const startMs = relativeTiming ? lineStartMs + word.start : word.start;
+                    return {
+                        text: word.text,
+                        start: startMs / 1000,
+                        end: (startMs + Math.max(1, word.duration)) / 1000,
+                    };
+                });
+                lines.push({
+                    time: lineStartMs / 1000,
+                    duration: lineDurationMs / 1000,
+                    text: words.map(word => word.text).join("").trim(),
+                    words,
+                });
+            }
+            return lines.sort((a, b) => a.time - b.time);
+        };
+
+        const translations = parseLrc(player.currentTrack?.translatedLyrics || "");
+        const timed = parseYrc(player.currentTrack?.wordLyrics || "");
+        const originals: ParsedLyricLine[] = timed.length > 0
+            ? timed
+            : parseLrc(player.currentTrack?.lyrics || "");
+
         if (originals.length === 0) {
             parsedLyrics.current = [];
             return;
         }
 
-        const translations = parseLrc(player.currentTrack?.translatedLyrics || "");
         parsedLyrics.current = originals.map(line => {
             let nearest: { time: number; text: string } | undefined;
             let nearestDelta = Number.POSITIVE_INFINITY;
@@ -282,14 +334,18 @@ export default function MusicPlayer() {
                     nearest = item;
                     nearestDelta = delta;
                 }
-                if (item.time > line.time + 0.3) break;
+                if (item.time > line.time + 0.6) break;
             }
             return {
                 ...line,
-                translation: nearest && nearestDelta <= 0.3 ? nearest.text : undefined,
+                translation: nearest && nearestDelta <= 0.6 ? nearest.text : undefined,
             };
         });
-    }, [player.currentTrack?.lyrics, player.currentTrack?.translatedLyrics]);
+    }, [
+        player.currentTrack?.lyrics,
+        player.currentTrack?.translatedLyrics,
+        player.currentTrack?.wordLyrics,
+    ]);
 
     useEffect(() => {
         const lyrics = parsedLyrics.current;
@@ -418,7 +474,7 @@ export default function MusicPlayer() {
             const [info, detail, lyricBundle] = await Promise.all([
                 getNeteasePlayInfo(nid),
                 getNeteaseSongDetail(nid).catch(() => null),
-                getNeteaseLyricBundle(nid).catch(() => ({ lyrics: "", translatedLyrics: "" })),
+                getNeteaseLyricBundle(nid).catch(() => ({ lyrics: "", translatedLyrics: "", wordLyrics: "" })),
             ]);
             if (!info.url) {
                 showMusicToast(info.reason || "加载失败，请稍后重试", 2600);
@@ -431,6 +487,7 @@ export default function MusicPlayer() {
                 coverUrl: detail?.coverUrl || target.coverUrl,
                 lyrics: lyricBundle.lyrics || target.lyrics,
                 translatedLyrics: lyricBundle.translatedLyrics || target.translatedLyrics,
+                wordLyrics: lyricBundle.wordLyrics || target.wordLyrics,
             };
             player.playUrl(info.url, resolvedTarget);
             if (info.trial) showMusicToast("VIP 歌曲，当前播放 30 秒试听", 2600);
@@ -467,9 +524,12 @@ export default function MusicPlayer() {
     const activeLyricTranslation = activeLyricIdx >= 0 ? parsedLyrics.current[activeLyricIdx]?.translation : "";
     const customBg = playerBgStyle(bgCfg);
     const ambientVars = {
-        "--mp-c1": palette[0],
-        "--mp-c2": palette[1],
-        "--mp-c3": palette[2],
+        "--mp-bg": palette.background,
+        "--mp-c1": palette.glowA,
+        "--mp-c2": palette.glowB,
+        "--mp-c3": palette.glowC,
+        "--mp-accent": palette.accent,
+        "--mp-accent-soft": palette.accentSoft,
         ...(customBg || {}),
     } as React.CSSProperties;
 
@@ -551,7 +611,35 @@ export default function MusicPlayer() {
                                             {...(i === activeLyricIdx ? { "data-active": "" } : dist === 1 ? { "data-near": "" } : {})}
                                             onClick={(e) => handleLyricClick(i, e)}
                                         >
-                                            <span className="mp-lyric-original">{line.text || " "}</span>
+                                            <span className="mp-lyric-original">
+                                                {i === activeLyricIdx && line.words?.length ? (
+                                                    line.words.map((word, wordIndex) => {
+                                                        const duration = Math.max(0.001, word.end - word.start);
+                                                        const wordProgress = Math.max(0, Math.min(1, (currentTime - word.start) / duration));
+                                                        return (
+                                                            <span
+                                                                key={wordIndex}
+                                                                className="mp-karaoke-word"
+                                                                style={{ "--karaoke-progress": `${wordProgress * 100}%` } as React.CSSProperties}
+                                                            >
+                                                                {word.text}
+                                                            </span>
+                                                        );
+                                                    })
+                                                ) : i === activeLyricIdx ? (() => {
+                                                    const nextTime = parsedLyrics.current[i + 1]?.time;
+                                                    const duration = Math.max(0.8, line.duration || (nextTime ? nextTime - line.time : 4));
+                                                    const lineProgress = Math.max(0, Math.min(1, (currentTime - line.time) / duration));
+                                                    return (
+                                                        <span
+                                                            className="mp-karaoke-fallback"
+                                                            style={{ "--karaoke-progress": `${lineProgress * 100}%` } as React.CSSProperties}
+                                                        >
+                                                            {line.text || " "}
+                                                        </span>
+                                                    );
+                                                })() : (line.text || " ")}
+                                            </span>
                                             {line.translation && <span className="mp-lyric-translation">{line.translation}</span>}
                                         </div>
                                     );
