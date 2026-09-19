@@ -5043,3 +5043,134 @@
     font-size: calc(9px*var(--app-text-scale,1));
     color: color-mix(in srgb, var(--c-music-text) 55%, transparent);
 }
+
+
+/* ═══════════════════════════════════════════════════════
+   Player background modes
+   - cover: bright adaptive cover palette (QQ-Music-like)
+   - follow/custom: preserve Float's original dark Lumen player
+   App/custom image backgrounds still win through the player's inline style.
+   ═══════════════════════════════════════════════════════ */
+
+.mp-lumen:not([data-bg-mode="cover"]) {
+    --c-music-text: #eef0f7;
+    --c-music-accent: #9aa6c0;
+    --c-music-accent-dim: rgba(150, 170, 220, 0.14);
+    --c-music-primary: #ff5468;
+    --c-music-primary-dim: rgba(255, 84, 104, 0.14);
+    --c-music-surface: rgba(255, 255, 255, 0.06);
+    --c-music-surface-solid: rgba(255, 255, 255, 0.13);
+    --c-music-glass-dim: rgba(255, 255, 255, 0.09);
+    --c-music-gold: rgba(220, 235, 255, 0.4);
+    --c-music-overlay: rgba(0, 0, 0, 0.55);
+    --c-music-liked: #ff5468;
+
+    background-color: #07080d;
+    background-image: none;
+}
+
+.mp-lumen:not([data-bg-mode="cover"]) .mp-blob-1 {
+    background: var(--mp-native-c1, rgba(88, 116, 196, 0.55));
+}
+
+.mp-lumen:not([data-bg-mode="cover"]) .mp-blob-2 {
+    background: var(--mp-native-c2, rgba(122, 96, 202, 0.42));
+}
+
+.mp-lumen:not([data-bg-mode="cover"]) .mp-blob-3 {
+    background: var(--mp-native-c3, rgba(66, 134, 160, 0.38));
+}
+
+.mp-lumen:not([data-bg-mode="cover"]) .mp-grain {
+    opacity: 0.5;
+}
+
+.mp-lumen:not([data-bg-mode="cover"]) .mp-vignette {
+    background:
+        radial-gradient(120% 90% at 50% 30%, transparent 40%, rgba(5, 6, 10, 0.5) 100%),
+        linear-gradient(180deg, transparent 70%, rgba(5, 6, 10, 0.45));
+}
+
+.mp-lumen:not([data-bg-mode="cover"]) .mp-song[data-glow] {
+    color: #fff;
+    text-shadow: 0 0 12px rgba(220, 235, 255, 0.75), 0 0 32px rgba(160, 195, 255, 0.4);
+}
+
+.mp-lumen:not([data-bg-mode="cover"]) .mp-cover {
+    box-shadow:
+        0 24px 60px rgba(0, 0, 0, 0.55),
+        0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+
+.mp-lumen:not([data-bg-mode="cover"]) .mp-cover[data-paused] {
+    filter: brightness(0.8);
+}
+
+.mp-lumen:not([data-bg-mode="cover"]) .mp-lyric-peek {
+    color: rgba(220, 232, 255, 0.6);
+}
+
+.mp-lumen:not([data-bg-mode="cover"]) .mp-lyric-peek small {
+    color: rgba(225, 235, 255, 0.48);
+}
+
+.mp-lumen:not([data-bg-mode="cover"]) .mp-lyric-line {
+    color: rgba(215, 230, 255, 0.32);
+    text-shadow: 0 0 8px rgba(170, 200, 250, 0.12);
+}
+
+.mp-lumen:not([data-bg-mode="cover"]) .mp-lyric-translation {
+    color: rgba(215, 230, 255, 0.22);
+}
+
+.mp-lumen:not([data-bg-mode="cover"]) .mp-lyric-line[data-near] {
+    color: rgba(220, 235, 255, 0.52);
+    text-shadow: 0 0 10px rgba(180, 208, 255, 0.25);
+}
+
+.mp-lumen:not([data-bg-mode="cover"]) .mp-lyric-line[data-near] .mp-lyric-translation {
+    color: rgba(220, 235, 255, 0.38);
+}
+
+.mp-lumen:not([data-bg-mode="cover"]) .mp-lyric-line[data-active] {
+    color: #fff;
+    text-shadow:
+        0 0 10px rgba(235, 245, 255, 0.9),
+        0 0 30px rgba(170, 200, 255, 0.6),
+        0 0 66px rgba(130, 170, 245, 0.35);
+    animation: mp-breath 2.6s ease-in-out infinite;
+}
+
+.mp-lumen:not([data-bg-mode="cover"]) .mp-lyric-line[data-active] .mp-lyric-translation {
+    color: rgba(242, 247, 255, 0.72);
+}
+
+.mp-lumen:not([data-bg-mode="cover"]) .mp-wave i {
+    background: rgba(190, 212, 250, 0.18);
+    opacity: 1;
+}
+
+.mp-lumen:not([data-bg-mode="cover"]) .mp-wave i[data-lit] {
+    background: rgba(240, 248, 255, 0.85);
+    box-shadow: 0 0 6px rgba(200, 224, 255, 0.7);
+}
+
+.mp-lumen:not([data-bg-mode="cover"]) .mp-wave i[data-head] {
+    background: #fff;
+    box-shadow:
+        0 0 10px rgba(230, 242, 255, 0.95),
+        0 0 20px rgba(160, 195, 255, 0.7);
+}
+
+.mp-lumen:not([data-bg-mode="cover"]) .mp-ctrl-play {
+    background: #fff;
+    color: #10131c;
+    box-shadow: 0 10px 30px rgba(255, 255, 255, 0.14);
+    filter: none;
+}
+
+.mp-lumen:not([data-bg-mode="cover"]) .mp-ctrl-play:active {
+    background: #fff;
+    color: #10131c;
+    filter: none;
+}
