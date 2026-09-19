@@ -2,12 +2,17 @@
 // Used by the full-screen player to tint the whole surface and playback controls.
 
 export type CoverPalette = {
+    // Bright cover-palette mode (QQ-Music-like).
     background: string;
     glowA: string;
     glowB: string;
     glowC: string;
     accent: string;
     accentSoft: string;
+    // Original Float/Lumen ambient blobs for follow/custom modes.
+    nativeGlowA: string;
+    nativeGlowB: string;
+    nativeGlowC: string;
 };
 
 /** Fallback QQ-Music-like white/green palette when sampling fails. */
@@ -18,6 +23,9 @@ export const DEFAULT_COVER_PALETTE: CoverPalette = {
     glowC: "rgba(232, 250, 241, 0.82)",
     accent: "rgb(49, 194, 124)",
     accentSoft: "rgba(49, 194, 124, 0.18)",
+    nativeGlowA: "rgba(88, 116, 196, 0.55)",
+    nativeGlowB: "rgba(122, 96, 202, 0.42)",
+    nativeGlowC: "rgba(66, 134, 160, 0.38)",
 };
 
 const paletteCache = new Map<string, CoverPalette>();
@@ -43,6 +51,43 @@ function rgb(color: RGB): string {
 
 function rgba(color: RGB, alpha: number): string {
     return `rgba(${Math.round(color.r)}, ${Math.round(color.g)}, ${Math.round(color.b)}, ${alpha})`;
+}
+
+/** Original Float tone mapping: keep ambient blobs moody on the dark Lumen base. */
+function nativeTone(color: RGB, alpha: number): string {
+    const max = Math.max(color.r, color.g, color.b, 1);
+    const target = 170;
+    const scale = max > target ? target / max : max < 60 ? 1.6 : 1;
+    const channel = (value: number) => Math.round(Math.min(255, value * scale));
+    return `rgba(${channel(color.r)}, ${channel(color.g)}, ${channel(color.b)}, ${alpha})`;
+}
+
+function nativeBandColors(data: Uint8ClampedArray, size: number): [string, string, string] {
+    const bands: [number, number, number, number][] = [
+        [0, 0, 0, 0],
+        [0, 0, 0, 0],
+        [0, 0, 0, 0],
+    ];
+    for (let y = 0; y < size; y++) {
+        const band = Math.min(2, Math.floor((y / size) * 3));
+        for (let x = 0; x < size; x++) {
+            const i = (y * size + x) * 4;
+            if (data[i + 3] < 16) continue;
+            bands[band][0] += data[i];
+            bands[band][1] += data[i + 1];
+            bands[band][2] += data[i + 2];
+            bands[band][3]++;
+        }
+    }
+    const alphas = [0.55, 0.42, 0.38];
+    return bands.map((band, index) => {
+        const count = Math.max(1, band[3]);
+        return nativeTone({
+            r: band[0] / count,
+            g: band[1] / count,
+            b: band[2] / count,
+        }, alphas[index]);
+    }) as [string, string, string];
 }
 
 function rgbToHsl({ r, g, b }: RGB): { h: number; s: number; l: number } {
@@ -127,7 +172,7 @@ function dominantChromaticColor(data: Uint8ClampedArray): RGB | null {
     };
 }
 
-function makePalette(source: RGB): CoverPalette {
+function makePalette(source: RGB, nativeGlows: [string, string, string]): CoverPalette {
     const accent = makeAccent(source);
     // The target is the reference screenshot: a visibly tinted pastel surface,
     // not a white page with a faint colored glow.
@@ -142,6 +187,9 @@ function makePalette(source: RGB): CoverPalette {
         glowC: rgba(glowC, 0.84),
         accent: rgb(accent),
         accentSoft: rgba(accent, 0.18),
+        nativeGlowA: nativeGlows[0],
+        nativeGlowB: nativeGlows[1],
+        nativeGlowC: nativeGlows[2],
     };
 }
 
@@ -173,7 +221,9 @@ export function extractCoverPalette(coverUrl?: string | null): Promise<CoverPale
                 ctx.drawImage(img, 0, 0, size, size);
                 const { data } = ctx.getImageData(0, 0, size, size);
                 const dominant = dominantChromaticColor(data);
-                finish(dominant ? makePalette(dominant) : DEFAULT_COVER_PALETTE);
+                const nativeGlows = nativeBandColors(data, size);
+                const qqSource = dominant || { r: 49, g: 194, b: 124 };
+                finish(makePalette(qqSource, nativeGlows));
             } catch {
                 // Canvas tainted (no CORS) or decode failure.
                 finish(DEFAULT_COVER_PALETTE);
