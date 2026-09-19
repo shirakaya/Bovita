@@ -16,6 +16,7 @@ import {
 } from "@/lib/music-service";
 import MusicCommentsPage from "./music-comments";
 import MusicArtistPage from "./music-artist";
+import { SessionCustomCSS } from "@/components/ui/session-custom-css";
 import { loadMusicBg, playerBgStyle, MUSIC_BG_EVENT, type MusicBgConfig } from "@/lib/music-bg";
 
 const PLAY_MODE_ICONS: Record<PlayMode, { svg: string; label: string }> = {
@@ -71,6 +72,28 @@ export default function MusicPlayer() {
     const [palette, setPalette] = useState<CoverPalette>(DEFAULT_COVER_PALETTE);
     const [bgCfg, setBgCfg] = useState<MusicBgConfig>(() => loadMusicBg());
     const [commentTotal, setCommentTotal] = useState(0);
+    const [customCss, setCustomCss] = useState(() =>
+        typeof window !== "undefined" ? (kvGet("music-custom-css") || "") : "");
+
+    useEffect(() => {
+        const handleCssChange = (event: Event) => {
+            const next = event instanceof CustomEvent && typeof event.detail === "string"
+                ? event.detail
+                : (kvGet("music-custom-css") || "");
+            setCustomCss(next);
+        };
+        window.addEventListener("music-css-change", handleCssChange);
+        const timers = [300, 1200, 3000].map(ms => setTimeout(() => {
+            setCustomCss(prev => {
+                const fresh = kvGet("music-custom-css") || "";
+                return fresh === prev ? prev : fresh;
+            });
+        }, ms));
+        return () => {
+            window.removeEventListener("music-css-change", handleCssChange);
+            timers.forEach(clearTimeout);
+        };
+    }, []);
 
     useEffect(() => {
         const handleBgChange = () => setBgCfg(loadMusicBg());
@@ -452,6 +475,7 @@ export default function MusicPlayer() {
 
     return (
         <div className="music-player mp-lumen" style={ambientVars}>
+            {customCss && <SessionCustomCSS css={customCss} scope=".music-player" />}
             {musicToast && (
                 <div className="music-toast-overlay">
                     <div className="music-toast-chip">
