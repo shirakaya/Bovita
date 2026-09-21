@@ -183,7 +183,7 @@ marked.setOptions({
     gfm: true,         // GitHub Flavored Markdown (tables, strikethrough)
 });
 
-function MarkdownSegment({ content, scopeClass }: { content: string; scopeClass: string }) {
+function MarkdownSegment({ content, scopeClass, bilingualLineBreaks = false }: { content: string; scopeClass: string; bilingualLineBreaks?: boolean }) {
     const html = useMemo(() => {
         // 0. Pre-process:
         const preprocessed = content
@@ -199,6 +199,23 @@ function MarkdownSegment({ content, scopeClass }: { content: string; scopeClass:
         // 2. Strip only <script> tags (security), keep everything else as-is
         //    No DOMPurify — regex-processed HTML is user-configured and trusted
         let clean = rawHtml.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "");
+
+        if (bilingualLineBreaks && typeof document !== "undefined" && clean.includes("|")) {
+            const template = document.createElement("template");
+            template.innerHTML = clean;
+            const walker = document.createTreeWalker(template.content, NodeFilter.SHOW_TEXT);
+            const nodes: Text[] = [];
+            while (walker.nextNode()) nodes.push(walker.currentNode as Text);
+            for (const node of nodes) {
+                if (node.parentElement?.closest("pre,code,style,script,table,textarea,svg")) continue;
+                const value = node.data;
+                // A single bilingual separator with Chinese on the translation side.
+                if (!/^[^|\n]+\|[^|\n]*[\u3400-\u9fff][^|\n]*$/.test(value.trim())) continue;
+                const [original, translation] = value.split("|");
+                node.replaceWith(document.createTextNode(original.trimEnd()), document.createElement("br"), document.createTextNode(translation.trimStart()));
+            }
+            clean = template.innerHTML;
+        }
 
         // 2.5 单换行(<br>)后的行也做首行缩进：CSS text-indent 只作用于段落首行，
         //     标准的 each-line 关键字浏览器均未实现，这里在每个 <br> 后插入
@@ -216,7 +233,7 @@ function MarkdownSegment({ content, scopeClass }: { content: string; scopeClass:
             .replace(/<p>\s*(<br\s*\/?>)\s*<\/p>/gi, "");
 
         return trimmed;
-    }, [content, scopeClass]);
+    }, [content, scopeClass, bilingualLineBreaks]);
 
     return <div className={scopeClass} style={{ whiteSpace: "normal" }} dangerouslySetInnerHTML={{ __html: html }} />;
 }
@@ -434,7 +451,7 @@ function StoryHtmlRendererInner({ content, messageId, onOptionSelect, htmlPageMo
                         </StoryFoldBlock>
                     );
                 }
-                return <MarkdownSegment key={`md-${i}`} content={seg.content} scopeClass={scopeClass} />;
+                return <MarkdownSegment key={`md-${i}`} content={seg.content} scopeClass={scopeClass} bilingualLineBreaks={serifIframeFallback} />;
             })}
         </div>
     );
