@@ -468,6 +468,7 @@ export function DebugPromptPanel() {
             const history = session ? loadStoryMessages(session.id) : [];
             const result = await previewStoryPromptPayload(storyCharacterId, history, {
                 sessionContextExcludedTags: session?.contextExcludedTags,
+                vnChoicesEnabled: session?.uiPrefs?.vnChoicesEnabled === true,
             });
             setStoryResult(result);
             setExpandedIdx(new Set()); setBadgesShownIdx(new Set());

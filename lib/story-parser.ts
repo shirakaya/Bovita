@@ -2,7 +2,7 @@ import type { RegexConfig } from "./settings-types";
 import { applyAllOutputRegex, applyAllReasoningRegex } from "./llm-prompt-assembler";
 import type { MacroEngine } from "./macro-engine";
 
-export const STORY_PARSER_VERSION = 7;
+export const STORY_PARSER_VERSION = 8;
 
 export type ParsedStoryResponse = {
   rawText: string;
@@ -54,6 +54,28 @@ function applyFoldTags(text: string, foldTags?: string): string {
     result = result.split(placeholder).join(replacement);
   }
   return result;
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function renderStoryChoices(text: string): string {
+  return text.replace(/<options>([\s\S]*?)<\/options>/gi, (_match, body: string) => {
+    const choices = Array.from(body.matchAll(/<option>([\s\S]*?)<\/option>/gi))
+      .map(match => match[1].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim())
+      .filter(Boolean)
+      .slice(0, 4);
+    if (choices.length === 0) return "";
+    return `\n<div class="story-vn-options" aria-label="剧情选择">${choices.map((choice, index) => (
+      `<button type="button" class="story-vn-option" data-action="${escapeHtml(choice)}"><span>${index + 1}</span>${escapeHtml(choice)}</button>`
+    )).join("")}</div>\n`;
+  });
 }
 
 export function parseStoryResponse(
@@ -116,7 +138,7 @@ export function parseStoryResponse(
     reasoningProcessed = reasoningProcessed.replace(placeholder, restored);
   }
 
-  const folded = applyFoldTags(reasoningProcessed, options?.foldTags);
+  const folded = applyFoldTags(renderStoryChoices(reasoningProcessed), options?.foldTags);
   const renderedText = folded
     .replace(/\r\n/g, "\n")
     .replace(/\n{4,}/g, "\n\n\n")

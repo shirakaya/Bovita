@@ -676,6 +676,7 @@ export function StoryApp({ onClose }: StoryAppProps) {
         sessionFoldTags: currentSession?.foldTags,
         sessionContextExcludedTags: currentSession?.contextExcludedTags,
         memoryAnchorAt: currentSession?.sessionType === "main" ? undefined : currentSession?.memoryAnchorAt,
+        vnChoicesEnabled: currentSession?.uiPrefs?.vnChoicesEnabled === true,
         signal: generationRun.controller.signal,
       });
       if (!isCurrentGeneration()) return;
@@ -884,6 +885,7 @@ export function StoryApp({ onClose }: StoryAppProps) {
         sessionFoldTags: currentSession?.foldTags,
         sessionContextExcludedTags: currentSession?.contextExcludedTags,
         memoryAnchorAt: currentSession?.sessionType === "main" ? undefined : currentSession?.memoryAnchorAt,
+        vnChoicesEnabled: currentSession?.uiPrefs?.vnChoicesEnabled === true,
         signal: generationRun.controller.signal,
       });
       if (!isCurrentGeneration()) return;
@@ -1032,6 +1034,14 @@ export function StoryApp({ onClose }: StoryAppProps) {
 
         <div className="story-drawer-section">
           <div className="story-drawer-eyebrow">显示选项</div>
+          <label className="story-pref-row">
+            <span>剧情选择项</span>
+            <input
+              type="checkbox"
+              checked={uiPrefs.vnChoicesEnabled === true}
+              onChange={(event) => applySessionUpdates({ uiPrefs: { vnChoicesEnabled: event.currentTarget.checked } })}
+            />
+          </label>
           <label className="story-pref-row">
             <span>译文字号（px）</span>
             <input

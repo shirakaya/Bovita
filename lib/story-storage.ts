@@ -8,6 +8,7 @@ export type StoryUiPrefs = {
   theme?: string;
   translationFontSize?: number;
   translationColor?: string;
+  vnChoicesEnabled?: boolean;
 };
 
 export type StorySessionType = "main" | "extra" | "theater";
