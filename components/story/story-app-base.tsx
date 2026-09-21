@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import {
   BookOpenIcon,
@@ -952,6 +952,10 @@ export function StoryApp({ onClose }: StoryAppProps) {
   return (
     <div
       className={`story-app-shell story-session-${currentSession.id}`}
+      style={{
+        "--story-translation-size": `${uiPrefs.translationFontSize ?? 14}px`,
+        "--story-translation-color": uiPrefs.translationColor || "#94a3b8",
+      } as CSSProperties}
       data-story-theme={uiPrefs.theme || "paper"}
       onTouchStart={(event) => handleTouchStart(event.touches[0]?.clientX || 0)}
       onTouchMove={(event) => handleTouchMove(event.touches[0]?.clientX || 0)}
@@ -1028,6 +1032,28 @@ export function StoryApp({ onClose }: StoryAppProps) {
 
         <div className="story-drawer-section">
           <div className="story-drawer-eyebrow">显示选项</div>
+          <label className="story-pref-row">
+            <span>译文字号（px）</span>
+            <input
+              type="number"
+              min={8}
+              max={40}
+              defaultValue={uiPrefs.translationFontSize ?? 14}
+              key={`${currentSession.id}-translation-size-${uiPrefs.translationFontSize ?? 14}`}
+              style={{ width: 64, color: "inherit", background: "transparent" }}
+              onBlur={(event) => {
+                const size = Number(event.currentTarget.value);
+                const next = event.currentTarget.value.trim() && Number.isFinite(size) ? Math.min(40, Math.max(8, size)) : 14;
+                event.currentTarget.value = String(next);
+                applySessionUpdates({ uiPrefs: { translationFontSize: next } });
+              }}
+            />
+          </label>
+          <label className="story-pref-row">
+            <span>译文颜色</span>
+            <input type="color" aria-label="译文颜色" value={uiPrefs.translationColor || "#94a3b8"}
+              onChange={(event) => applySessionUpdates({ uiPrefs: { translationColor: event.currentTarget.value } })} />
+          </label>
           <div style={{ padding: "10px 0", borderBottom: "1px solid var(--c-story-drawer-border, rgba(124, 104, 68, 0.08))" }}>
             <label style={{ fontSize: "calc(13px*var(--app-text-scale,1))", color: "var(--c-story-sub, rgba(95, 82, 61, 0.72))", display: "block", marginBottom: 6 }}>
               折叠标签

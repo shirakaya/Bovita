@@ -209,10 +209,21 @@ function MarkdownSegment({ content, scopeClass, bilingualLineBreaks = false }: {
             for (const node of nodes) {
                 if (node.parentElement?.closest("pre,code,style,script,table,textarea,svg")) continue;
                 const value = node.data;
-                // A single bilingual separator with Chinese on the translation side.
-                if (!/^[^|\n]+\|[^|\n]*[\u3400-\u9fff][^|\n]*$/.test(value.trim())) continue;
-                const [original, translation] = value.split("|");
-                node.replaceWith(document.createTextNode(original.trimEnd()), document.createElement("br"), document.createTextNode(translation.trimStart()));
+                const pairs = Array.from(value.matchAll(/\[([^\[\]|\n]+)\|([^\[\]|\n]+)\]/g));
+                if (!pairs.length) continue;
+                const fragment = document.createDocumentFragment();
+                let offset = 0;
+                for (const pair of pairs) {
+                    fragment.append(document.createTextNode(value.slice(offset, pair.index)));
+                    fragment.append(document.createTextNode(pair[1].trim()));
+                    const translation = document.createElement("span");
+                    translation.className = "story-dialogue-translation";
+                    translation.textContent = pair[2].trim();
+                    fragment.append(translation);
+                    offset = pair.index! + pair[0].length;
+                }
+                fragment.append(document.createTextNode(value.slice(offset)));
+                node.replaceWith(fragment);
             }
             clean = template.innerHTML;
         }

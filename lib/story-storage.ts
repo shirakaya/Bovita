@@ -6,6 +6,8 @@ export type StoryUiPrefs = {
   hideAvatar?: boolean;
   hideTimestamp?: boolean;
   theme?: string;
+  translationFontSize?: number;
+  translationColor?: string;
 };
 
 export type StorySessionType = "main" | "extra" | "theater";
