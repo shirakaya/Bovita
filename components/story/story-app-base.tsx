@@ -1220,7 +1220,14 @@ export function StoryApp({ onClose }: StoryAppProps) {
                       <div className="story-bubble-wrap" style={{ position: "relative" }}>
                         <div className="story-bubble">
                           {editingMessageId === message.id ? (
-                            <div className="story-inline-edit">
+                            <div
+                              className="story-inline-edit"
+                              // Keep native text selection/paste inside the editor out of the message menu.
+                              onPointerDown={(e) => e.stopPropagation()}
+                              onPointerMove={(e) => e.stopPropagation()}
+                              onPointerUp={(e) => e.stopPropagation()}
+                              onContextMenu={(e) => e.stopPropagation()}
+                            >
                               <div className="story-grow-wrap" data-value={editingContent}>
                                 <textarea
                                   autoFocus
