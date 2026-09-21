@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useContext, useCallback, useMemo } from "react";
-import { Plus, Upload, Download, Trash2, RotateCcw, ChevronLeft, ChevronDown, GripVertical, MessageSquare, AlertCircle, Maximize2, Copy, Replace, CheckSquare, Check, Filter, MoreHorizontal } from "lucide-react";
+import { Plus, Upload, Download, Trash2, RotateCcw, ChevronLeft, ChevronDown, GripVertical, MessageSquare, AlertCircle, Maximize2, Copy, Replace, CheckSquare, Check, Filter, Search, MoreHorizontal } from "lucide-react";
 import {
     loadPresets,
     savePresets,
@@ -76,6 +76,44 @@ function setPromptTags(tags: string[]): Partial<Prompt> {
     };
 }
 
+type PromptVariableInfo = {
+    defined: string[];
+    read: string[];
+};
+
+const PROMPT_VARIABLE_PATTERN = /\{\{\s*(setvar|setglobalvar|getvar|getglobalvar)::\s*([^:{}]+?)(?=::|\}\})/g;
+
+function getPromptVariableInfo(content: string): PromptVariableInfo {
+    const defined = new Set<string>();
+    const read = new Set<string>();
+    for (const match of content.matchAll(PROMPT_VARIABLE_PATTERN)) {
+        const operation = match[1];
+        const name = match[2].trim();
+        if (!name) continue;
+        if (operation === "setvar" || operation === "setglobalvar") defined.add(name);
+        else read.add(name);
+    }
+    return { defined: [...defined], read: [...read] };
+}
+
+function formatPromptVariableNames(names: string[], limit = 3): string {
+    const visible = names.slice(0, limit).join("、");
+    return names.length > limit ? `${visible} 等 ${names.length} 个` : visible;
+}
+
+function matchesPromptSearch(prompt: Prompt, searchQuery: string): boolean {
+    const query = searchQuery.trim().toLocaleLowerCase();
+    if (!query) return true;
+    const variables = getPromptVariableInfo(prompt.content);
+    return [
+        prompt.name,
+        prompt.identifier,
+        prompt.content,
+        ...variables.defined,
+        ...variables.read,
+    ].some(value => value.toLocaleLowerCase().includes(query));
+}
+
 // ── Marker 名称自动识别（手动编辑与桌宠填表共用） ──
 // marker 条目靠 identifier 注入内容，条目名称命中下表时自动补齐 identifier + marker。
 const MARKER_NAMES: Record<string, string> = {
@@ -147,8 +185,9 @@ function buildPromptRenderItems(
     filterMode: AppFilterMode,
     filterTags: Set<string>,
     expandedGroups: Set<string>,
+    searchQuery: string,
 ): PromptRenderItem[] {
-    const allPrompts = buildDisplayedPrompts(preset);
+    const allPrompts = buildDisplayedPrompts(preset).filter(prompt => matchesPromptSearch(prompt, searchQuery));
     const matchesFilter = (prompt: Prompt) => matchesSelectedAppTags(prompt, filterTags);
     const hasFilter = filterTags.size > 0;
 
@@ -306,6 +345,7 @@ export function PresetManager({ isActive = true }: { isActive?: boolean } = {}) 
     const [appFilterMode, setAppFilterMode] = useState<AppFilterMode>("highlight");
     const [appFilterTags, setAppFilterTags] = useState<Set<string>>(new Set()); // 选中的大类 tag 集合（可多选）
     const [expandedCollapseGroups, setExpandedCollapseGroups] = useState<Set<string>>(new Set()); // 已展开的折叠组 key
+    const [promptSearch, setPromptSearch] = useState("");
 
     const toggleFilterTag = useCallback((tag: string) => {
         setAppFilterTags(prev => {
@@ -355,9 +395,9 @@ export function PresetManager({ isActive = true }: { isActive?: boolean } = {}) 
     );
     const promptRenderItems = useMemo(
         () => activePreset
-            ? buildPromptRenderItems(activePreset, tagGroups, appFilterMode, appFilterTags, expandedCollapseGroups)
+            ? buildPromptRenderItems(activePreset, tagGroups, appFilterMode, appFilterTags, expandedCollapseGroups, promptSearch)
             : [],
-        [activePreset, appFilterMode, appFilterTags, expandedCollapseGroups, tagGroups],
+        [activePreset, appFilterMode, appFilterTags, expandedCollapseGroups, promptSearch, tagGroups],
     );
     const visiblePromptIds = useMemo(
         () => new Set(
@@ -1453,6 +1493,22 @@ export function PresetManager({ isActive = true }: { isActive?: boolean } = {}) 
                                         )}
                                     </div>
 
+                                    <div className="mx-2 -mt-2 relative">
+                                        <Search
+                                            size={16}
+                                            strokeWidth={1.8}
+                                            className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
+                                        />
+                                        <input
+                                            type="search"
+                                            value={promptSearch}
+                                            onChange={(event) => setPromptSearch(event.target.value)}
+                                            placeholder="搜索条目名称、变量名或内容"
+                                            className="ui-input w-full"
+                                            style={{ paddingLeft: "36px" }}
+                                        />
+                                    </div>
+
                                     {selectMode && (
                                         <div className="multi-select-float-bar">
                                             <div className="msfb-main">
@@ -1543,6 +1599,7 @@ export function PresetManager({ isActive = true }: { isActive?: boolean } = {}) 
                                             const isCustomPromptTags = promptTags.length > 0 && !matchedTagGroup;
                                             const selectedTagGroup = matchedTagGroup ?? tagGroups[0];
                                             const selectedTagMinor = matchedTagGroup ? getPromptTagMinor(prompt, selectedTagGroup) : selectedTagGroup.minors[0];
+                                            const promptVariables = getPromptVariableInfo(prompt.content);
 
                                             return (
                                                 <SwipeActionRow
@@ -1676,6 +1733,22 @@ export function PresetManager({ isActive = true }: { isActive?: boolean } = {}) 
                                                                                     {getPromptTagsLabel(prompt, tagProfiles)}
                                                                                 </span>
                                                                             </>
+                                                                        )}
+                                                                        {(promptVariables.defined.length > 0 || promptVariables.read.length > 0) && (
+                                                                            <span
+                                                                                className="ui-status-tag"
+                                                                                data-variant="warning"
+                                                                                title={[
+                                                                                    promptVariables.defined.length > 0 ? `定义：${promptVariables.defined.join("、")}` : "",
+                                                                                    promptVariables.read.length > 0 ? `读取：${promptVariables.read.join("、")}` : "",
+                                                                                ].filter(Boolean).join("；")}
+                                                                            >
+                                                                                变量：
+                                                                                {[
+                                                                                    promptVariables.defined.length > 0 ? `定义 ${formatPromptVariableNames(promptVariables.defined)}` : "",
+                                                                                    promptVariables.read.length > 0 ? `读取 ${formatPromptVariableNames(promptVariables.read)}` : "",
+                                                                                ].filter(Boolean).join(" · ")}
+                                                                            </span>
                                                                         )}
                                                                         {/* System/User badge — shown for all entries */}
                                                                         <span className="ui-status-tag">
