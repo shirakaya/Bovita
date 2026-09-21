@@ -165,6 +165,7 @@ export function loadNativeTimeline(
         userName?: string;
         appId?: import("./settings-types").ContentAppId;
         excludeOfflineSessionId?: string;
+        storyBeforeTimestamp?: string;
         timeAware?: boolean;
         promptTimestampOptions?: PromptTimestampOptions;
     }
@@ -515,6 +516,7 @@ export function loadNativeTimeline(
     // ── Story projections ──
     const storyEntries = loadStoryProjectionEntries(characterId, {
         afterTimestamp: options?.afterTimestamp,
+        beforeTimestamp: options?.storyBeforeTimestamp,
         userName,
         charName,
     });
@@ -926,6 +928,7 @@ export function prepareShortTermContext(
         history?: ChatMessage[];
         excludeGroupSessionId?: string;
         excludeOfflineSessionId?: string;
+        storyBeforeTimestamp?: string;
         includeNativeToolHistory?: boolean;
         includeDirectChatEntries?: boolean;
         timeAware?: boolean;
@@ -942,6 +945,7 @@ export function prepareShortTermContext(
         userName: options?.userName,
         appId: appId as import("./settings-types").ContentAppId,
         excludeOfflineSessionId: options?.excludeOfflineSessionId,
+        storyBeforeTimestamp: options?.storyBeforeTimestamp,
         timeAware,
         promptTimestampOptions: options?.promptTimestampOptions,
     });

@@ -18,9 +18,11 @@ import { estimateTokens } from "./token-counter";
 export async function retrieveMemoriesForPrompt(
     characterId: string,
     currentContext: string,
-    config: MemoryConfig
+    config: MemoryConfig,
+    options?: { beforeTimestamp?: string },
 ): Promise<MemoryEntry[]> {
-    const longTermEntries = await loadMemoryEntriesByType(characterId, "long_term");
+    const longTermEntries = (await loadMemoryEntriesByType(characterId, "long_term"))
+        .filter(entry => !options?.beforeTimestamp || entry.createdAt <= options.beforeTimestamp);
     if (longTermEntries.length === 0 || !currentContext.trim()) return [];
 
     const budget = config.longTermTokenBudget;
@@ -63,8 +65,10 @@ export async function retrieveMemoriesForPrompt(
 export async function retrieveCoreMemoriesForPrompt(
     characterId: string,
     config: MemoryConfig,
+    options?: { beforeTimestamp?: string },
 ): Promise<MemoryEntry[]> {
-    const coreEntries = await loadMemoryEntriesByType(characterId, "core");
+    const coreEntries = (await loadMemoryEntriesByType(characterId, "core"))
+        .filter(entry => !options?.beforeTimestamp || (entry.updatedAt || entry.createdAt) <= options.beforeTimestamp);
     if (coreEntries.length === 0) return [];
 
     const sorted = [...coreEntries].sort((a, b) => {

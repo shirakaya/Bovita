@@ -8,11 +8,17 @@ export type StoryUiPrefs = {
   theme?: string;
 };
 
+export type StorySessionType = "main" | "extra" | "theater";
+
 export type StorySession = {
   id: string;
   characterId: string;
+  sessionType: StorySessionType;
   title?: string;
+  createdAt: string;
   updatedAt: string;
+  /** Non-main sessions only read memories that existed when the window was created. */
+  memoryAnchorAt?: string;
   customCSS?: string;
   foldTags?: string;            // Comma-separated tag names to fold for this session.
   contextExcludedTags?: string; // Comma-separated tag names stripped before sending story history to the LLM.
@@ -37,6 +43,8 @@ export type StoryMessage = {
 
 export type StoryProjectionEntry = {
   id: string;
+  sessionId: string;
+  characterId: string;
   timestamp: string;
   content: string;
 };
@@ -89,7 +97,7 @@ function isPreferredStorySession(candidate: StorySession, current: StorySession)
 
 function normalizeStorySessions(sessions: StorySession[]): { items: StorySession[]; changed: boolean } {
   const normalized: StorySession[] = [];
-  const indexByCharacter = new Map<string, number>();
+  const mainByCharacter = new Map<string, number>();
   let changed = false;
 
   for (const session of sessions) {
@@ -99,21 +107,33 @@ function normalizeStorySessions(sessions: StorySession[]): { items: StorySession
       changed = true;
       continue;
     }
-    const item = id === session.id && characterId === session.characterId
-      ? session
-      : { ...session, id, characterId };
-    const existingIndex = indexByCharacter.get(characterId);
-    if (existingIndex === undefined) {
-      indexByCharacter.set(characterId, normalized.length);
-      normalized.push(item);
-      if (item !== session) changed = true;
-      continue;
-    }
+    const createdAt = session.createdAt || session.updatedAt || new Date().toISOString();
+    const requestedType: StorySessionType = session.sessionType === "extra" || session.sessionType === "theater"
+      ? session.sessionType
+      : "main";
+    let item: StorySession = {
+      ...session,
+      id,
+      characterId,
+      createdAt,
+      sessionType: requestedType,
+    };
+    if (id !== session.id || characterId !== session.characterId || !session.createdAt || !session.sessionType) changed = true;
 
-    changed = true;
-    if (isPreferredStorySession(item, normalized[existingIndex])) {
-      normalized[existingIndex] = item;
+    if (item.sessionType === "main") {
+      const existingIndex = mainByCharacter.get(characterId);
+      if (existingIndex === undefined) {
+        mainByCharacter.set(characterId, normalized.length);
+      } else if (isPreferredStorySession(item, normalized[existingIndex])) {
+        normalized[existingIndex] = { ...normalized[existingIndex], sessionType: "extra", memoryAnchorAt: normalized[existingIndex].memoryAnchorAt || createdAt };
+        mainByCharacter.set(characterId, normalized.length);
+        changed = true;
+      } else {
+        item = { ...item, sessionType: "extra", memoryAnchorAt: item.memoryAnchorAt || createdAt };
+        changed = true;
+      }
     }
+    normalized.push(item);
   }
 
   return { items: normalized, changed };
@@ -158,18 +178,55 @@ export function createOrGetStorySession(characterId: string): StorySession {
     _sessionsCache = normalized.items;
     persistStorySessionsSnapshot(normalized.items);
   }
-  const existing = _sessionsCache.find((session) => session.characterId === characterId);
+  const existing = _sessionsCache.find((session) => session.characterId === characterId && session.sessionType === "main");
   if (existing) return existing;
 
+  const now = new Date().toISOString();
   const session: StorySession = {
     id: generateId("story_sess"),
     characterId,
-    updatedAt: new Date().toISOString(),
+    sessionType: "main",
+    title: "主线",
+    createdAt: now,
+    updatedAt: now,
     uiPrefs: {},
   };
   _sessionsCache.unshift(session);
   storyDb.sessions.put(session).catch(() => undefined);
   return session;
+}
+
+export function createStorySession(
+  characterId: string,
+  sessionType: Exclude<StorySessionType, "main">,
+  title: string,
+): StorySession {
+  const now = new Date().toISOString();
+  const session: StorySession = {
+    id: generateId("story_sess"),
+    characterId,
+    sessionType,
+    title: title.trim() || (sessionType === "extra" ? "未命名番外" : "未命名小剧场"),
+    createdAt: now,
+    updatedAt: now,
+    memoryAnchorAt: now,
+    uiPrefs: {},
+  };
+  _sessionsCache.unshift(session);
+  storyDb.sessions.put(session).catch(() => undefined);
+  return session;
+}
+
+export function deleteStorySession(sessionId: string): boolean {
+  const session = _sessionsCache.find((item) => item.id === sessionId);
+  if (!session || session.sessionType === "main") return false;
+  _sessionsCache = _sessionsCache.filter((item) => item.id !== sessionId);
+  _messagesCache = _messagesCache.filter((message) => message.sessionId !== sessionId);
+  storyDb.transaction("rw", storyDb.sessions, storyDb.messages, async () => {
+    await storyDb.sessions.delete(sessionId);
+    await storyDb.messages.where("sessionId").equals(sessionId).delete();
+  }).catch(() => undefined);
+  return true;
 }
 
 export function updateStorySession(sessionId: string, updates: Partial<StorySession>): StorySession | null {
@@ -260,9 +317,9 @@ function compactProjectionText(text: string, maxLen = 160): string {
 
 export function loadStoryProjectionEntries(
   characterId: string,
-  options?: { afterTimestamp?: string; userName?: string; charName?: string }
+  options?: { afterTimestamp?: string; beforeTimestamp?: string; userName?: string; charName?: string }
 ): StoryProjectionEntry[] {
-  const session = _sessionsCache.find((item) => item.characterId === characterId);
+  const session = _sessionsCache.find((item) => item.characterId === characterId && item.sessionType === "main");
   if (!session) return [];
   const messages = loadStoryMessages(session.id);
   const projections: StoryProjectionEntry[] = [];
@@ -271,6 +328,7 @@ export function loadStoryProjectionEntries(
     const current = messages[i];
     if (current.role !== "assistant") continue;
     if (options?.afterTimestamp && current.createdAt <= options.afterTimestamp) continue;
+    if (options?.beforeTimestamp && current.createdAt > options.beforeTimestamp) continue;
 
     if (!current.storySummary) continue;
     const summaryText = compactProjectionText(current.storySummary, 500);
@@ -279,6 +337,8 @@ export function loadStoryProjectionEntries(
     const ts = formatChatTimestamp(current.createdAt);
     projections.push({
       id: `story_projection_${current.id}`,
+      sessionId: session.id,
+      characterId,
       timestamp: current.createdAt,
       content: `[事件 ${ts}] ${summaryText}`,
     });

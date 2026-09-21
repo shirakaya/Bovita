@@ -204,6 +204,71 @@
           color: var(--c-story-heading, #1e293b);
           font-weight: 600;
         }
+        .story-session-group + .story-session-group {
+          margin-top: 14px;
+        }
+        .story-session-group-head {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          padding: 0 2px 6px;
+          color: var(--c-story-sub, #64748b);
+          font-size: calc(12px*var(--app-text-scale,1));
+          font-weight: 600;
+        }
+        .story-session-group-head button,
+        .story-session-action {
+          border: 0;
+          background: transparent;
+          color: var(--c-story-sub, #64748b);
+          cursor: pointer;
+          font: inherit;
+        }
+        .story-session-group-head button {
+          padding: 2px 6px;
+          font-size: calc(18px*var(--app-text-scale,1));
+          line-height: 1;
+        }
+        .story-session-row {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) 28px 28px;
+          align-items: center;
+          min-height: 48px;
+          border-bottom: 1px solid var(--c-story-drawer-border, rgba(124, 104, 68, 0.08));
+        }
+        .story-session-row[data-active="true"] {
+          background: var(--c-story-panel, rgba(255,255,255,.62));
+          box-shadow: inset 2px 0 0 var(--c-story-heading, #1e293b);
+        }
+        .story-session-open {
+          min-width: 0;
+          padding: 8px 8px 8px 10px;
+          border: 0;
+          background: transparent;
+          color: var(--c-story-text, #3a3b3c);
+          text-align: left;
+          cursor: pointer;
+        }
+        .story-session-open span,
+        .story-session-open small {
+          display: block;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+        .story-session-open span {
+          font-size: calc(13px*var(--app-text-scale,1));
+        }
+        .story-session-open small {
+          margin-top: 3px;
+          color: var(--c-story-sub, #94a3b8);
+          font-size: calc(10px*var(--app-text-scale,1));
+        }
+        .story-session-action {
+          align-self: stretch;
+          padding: 0;
+          font-size: calc(15px*var(--app-text-scale,1));
+        }
         .story-tool-btn {
           width: 100%;
           padding: 12px 0;

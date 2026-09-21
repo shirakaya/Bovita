@@ -136,7 +136,7 @@ export function getStoryRenderSignature(characterId: string): { regexSignature: 
 export async function generateStoryCompletion(
   characterId: string,
   history: StoryMessage[],
-  options?: { sessionFoldTags?: string; sessionContextExcludedTags?: string; signal?: AbortSignal },
+  options?: { sessionFoldTags?: string; sessionContextExcludedTags?: string; memoryAnchorAt?: string; signal?: AbortSignal },
 ): Promise<StoryGenerationResult> {
   const character = loadCharacters().find((item) => item.id === characterId);
   if (!character) {
@@ -146,7 +146,7 @@ export async function generateStoryCompletion(
   const { apiConfig, preset, regexes, worldBooks, regexSignature, summaryTag } = resolveStoryConfigs(characterId);
   const effectiveFoldTags = options?.sessionFoldTags?.trim() || DEFAULT_STORY_FOLD_TAGS;
   const effectiveContextExcludedTags = options?.sessionContextExcludedTags?.trim() || DEFAULT_STORY_CONTEXT_EXCLUDED_TAGS;
-  const llmMessages = await buildStoryPromptMessages(characterId, history, preset, regexes, worldBooks, effectiveContextExcludedTags);
+  const llmMessages = await buildStoryPromptMessages(characterId, history, preset, regexes, worldBooks, effectiveContextExcludedTags, options?.memoryAnchorAt);
 
   const userIdentity = resolveUserIdentity(characterId, "story");
   const macroEngine = new MacroEngine(character.name, userIdentity?.name ?? "用户");
@@ -180,6 +180,7 @@ async function buildStoryPromptMessages(
   regexes: RegexConfig[],
   worldBooks: WorldBookConfig[],
   contextExcludedTags: string = DEFAULT_STORY_CONTEXT_EXCLUDED_TAGS,
+  memoryAnchorAt?: string,
 ): Promise<LLMMessage[]> {
   const character = loadCharacters().find((item) => item.id === characterId);
   if (!character) {
@@ -192,11 +193,12 @@ async function buildStoryPromptMessages(
   const { recentBlocks, truncatedHistory, wbActivationContext, unifiedRecentItems } = prepareShortTermContext(characterId, "story", {
     userName: userIdentity?.name ?? "用户",
     history: historyMessages,
+    storyBeforeTimestamp: memoryAnchorAt,
   });
 
   const [memories, coreMemories] = await Promise.all([
-    retrieveMemoriesForPrompt(characterId, wbActivationContext, memConfig).catch(() => null),
-    retrieveCoreMemoriesForPrompt(characterId, memConfig).catch(() => null),
+    retrieveMemoriesForPrompt(characterId, wbActivationContext, memConfig, { beforeTimestamp: memoryAnchorAt }).catch(() => null),
+    retrieveCoreMemoriesForPrompt(characterId, memConfig, { beforeTimestamp: memoryAnchorAt }).catch(() => null),
   ]);
 
   const now = new Date();

@@ -48,7 +48,9 @@ import {
   rebuildStorySessionRenderCache,
 } from "@/lib/story-engine";
 import {
+  createStorySession,
   createOrGetStorySession,
+  deleteStorySession,
   hydrateStoryStorage,
   loadStoryMessages,
   loadStorySessions,
@@ -315,6 +317,10 @@ export function StoryApp({ onClose }: StoryAppProps) {
     [characters, activeCharacterId]
   );
   const sessions = loadStorySessions();
+  const characterSessions = useMemo(
+    () => sessions.filter((session) => session.characterId === activeCharacterId),
+    [sessions, activeCharacterId]
+  );
   const currentSession = useMemo(
     () => sessions.find((session) => session.id === activeSessionId) || null,
     [sessions, activeSessionId]
@@ -330,6 +336,43 @@ export function StoryApp({ onClose }: StoryAppProps) {
       return next;
     });
   }, []);
+
+  function openStorySession(session: StorySession) {
+    setActiveCharacterId(session.characterId);
+    setActiveSessionId(session.id);
+    activeSessionIdRef.current = session.id;
+    setVisibleMessageCount(STORY_INITIAL_LOAD);
+    setMessages(loadStoryMessages(session.id));
+    setCustomCssDraft(session.customCSS || "");
+    setFoldTagsDraft(session.foldTags ?? "think,thinking");
+    setContextExcludedTagsDraft(session.contextExcludedTags ?? "think,thinking");
+    setStorageVersion((value) => value + 1);
+  }
+
+  function handleCreateSession(sessionType: "extra" | "theater") {
+    if (!activeCharacterId) return;
+    const label = sessionType === "extra" ? "番外" : "小剧场";
+    const title = window.prompt(`请输入${label}标题`, `新的${label}`)?.trim();
+    if (!title) return;
+    const session = createStorySession(activeCharacterId, sessionType, title);
+    openStorySession(session);
+  }
+
+  function handleRenameSession(session: StorySession) {
+    const title = window.prompt("请输入剧情标题", session.title || "")?.trim();
+    if (!title) return;
+    updateStorySession(session.id, { title });
+    setStorageVersion((value) => value + 1);
+  }
+
+  function handleDeleteSession(session: StorySession) {
+    if (session.sessionType === "main") return;
+    if (!window.confirm(`删除「${session.title || "未命名剧情"}」及其全部消息？`)) return;
+    if (!deleteStorySession(session.id)) return;
+    const main = loadStorySessions().find((item) => item.characterId === session.characterId && item.sessionType === "main")
+      || createOrGetStorySession(session.characterId);
+    openStorySession(main);
+  }
 
   useEffect(() => {
     mountedRef.current = true;
@@ -632,6 +675,7 @@ export function StoryApp({ onClose }: StoryAppProps) {
       const result = await generateStoryCompletion(characterId, historyForGeneration, {
         sessionFoldTags: currentSession?.foldTags,
         sessionContextExcludedTags: currentSession?.contextExcludedTags,
+        memoryAnchorAt: currentSession?.sessionType === "main" ? undefined : currentSession?.memoryAnchorAt,
         signal: generationRun.controller.signal,
       });
       if (!isCurrentGeneration()) return;
@@ -650,7 +694,7 @@ export function StoryApp({ onClose }: StoryAppProps) {
       setStorageVersion((value) => value + 1);
 
       const storyCharacter = characters.find((character) => character.id === characterId);
-      if (storyCharacter) {
+      if (storyCharacter && currentSession?.sessionType === "main") {
         void (async () => {
           try {
             incrementEventCounter(characterId);
@@ -839,6 +883,7 @@ export function StoryApp({ onClose }: StoryAppProps) {
       const result = await generateStoryCompletion(characterId, contextMessages, {
         sessionFoldTags: currentSession?.foldTags,
         sessionContextExcludedTags: currentSession?.contextExcludedTags,
+        memoryAnchorAt: currentSession?.sessionType === "main" ? undefined : currentSession?.memoryAnchorAt,
         signal: generationRun.controller.signal,
       });
       if (!isCurrentGeneration()) return;
@@ -935,7 +980,6 @@ export function StoryApp({ onClose }: StoryAppProps) {
                 data-active={character.id === activeCharacterId ? "true" : undefined}
                 onClick={() => {
                   setActiveCharacterId(character.id);
-                  setDrawerOpen(false);
                 }}
               >
                 <Avatar src={character.avatar || undefined} name={character.name} size="lg" />
@@ -943,6 +987,43 @@ export function StoryApp({ onClose }: StoryAppProps) {
               </button>
             ))}
           </div>
+        </div>
+
+        <div className="story-drawer-section">
+          <div className="story-drawer-eyebrow">剧情窗口</div>
+          {(["main", "extra", "theater"] as const).map((sessionType) => {
+            const grouped = characterSessions.filter((session) => session.sessionType === sessionType);
+            const label = sessionType === "main" ? "主线" : sessionType === "extra" ? "番外" : "小剧场";
+            return (
+              <div className="story-session-group" key={sessionType}>
+                <div className="story-session-group-head">
+                  <span>{label}</span>
+                  {sessionType !== "main" ? (
+                    <button type="button" onClick={() => handleCreateSession(sessionType)} aria-label={`新建${label}`}>＋</button>
+                  ) : null}
+                </div>
+                {grouped.map((session) => (
+                  <div className="story-session-row" data-active={session.id === activeSessionId ? "true" : undefined} key={session.id}>
+                    <button
+                      type="button"
+                      className="story-session-open"
+                      onClick={() => {
+                        openStorySession(session);
+                        setDrawerOpen(false);
+                      }}
+                    >
+                      <span>{session.title || label}</span>
+                      {session.lastMessagePreview ? <small>{session.lastMessagePreview}</small> : null}
+                    </button>
+                    <button type="button" className="story-session-action" onClick={() => handleRenameSession(session)} aria-label="重命名">✎</button>
+                    {session.sessionType !== "main" ? (
+                      <button type="button" className="story-session-action" onClick={() => handleDeleteSession(session)} aria-label="删除">×</button>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            );
+          })}
         </div>
 
         <div className="story-drawer-section">
