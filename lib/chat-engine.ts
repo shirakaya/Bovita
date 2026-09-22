@@ -1250,7 +1250,7 @@ export async function sendLLMToolStreamRequest(
             content += finalContent;
             await callbacks?.onDelta?.(finalContent);
         }
-        content = await applyChatPluginLlmResponse(content, pluginPurpose, options?.debugSessionId);
+        content = await applyChatPluginLlmResponse(content, pluginPurpose, options?.debugSessionId, reasoning);
 
         const sanitizedMessages = request.messagesForLog.map(m => ({
             ...m,
