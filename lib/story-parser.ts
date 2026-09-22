@@ -2,7 +2,7 @@ import type { RegexConfig } from "./settings-types";
 import { applyAllOutputRegex, applyAllReasoningRegex } from "./llm-prompt-assembler";
 import type { MacroEngine } from "./macro-engine";
 
-export const STORY_PARSER_VERSION = 8;
+export const STORY_PARSER_VERSION = 9;
 
 export type ParsedStoryResponse = {
   rawText: string;
@@ -65,17 +65,23 @@ function escapeHtml(value: string): string {
     .replace(/'/g, "&#39;");
 }
 
-function renderStoryChoices(text: string): string {
-  return text.replace(/<options>([\s\S]*?)<\/options>/gi, (_match, body: string) => {
-    const choices = Array.from(body.matchAll(/<option>([\s\S]*?)<\/option>/gi))
+function extractStoryChoices(text: string): string[] {
+  let result: string[] = [];
+  for (const optionsMatch of text.matchAll(/<options>([\s\S]*?)<\/options>/gi)) {
+    const choices = Array.from(optionsMatch[1].matchAll(/<option>([\s\S]*?)<\/option>/gi))
       .map(match => match[1].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim())
       .filter(Boolean)
       .slice(0, 4);
-    if (choices.length === 0) return "";
-    return `\n<div class="story-vn-options" aria-label="剧情选择">${choices.map((choice, index) => (
-      `<button type="button" class="story-vn-option" data-action="${escapeHtml(choice)}"><span>${index + 1}</span>${escapeHtml(choice)}</button>`
-    )).join("")}</div>\n`;
-  });
+    if (choices.length > 0) result = choices;
+  }
+  return result;
+}
+
+function renderStoryChoices(choices: string[]): string {
+  if (choices.length === 0) return "";
+  return `\n<div class="story-vn-options" aria-label="剧情选择">${choices.map((choice, index) => (
+    `<button type="button" class="story-vn-option" data-action="${escapeHtml(choice)}"><span>${index + 1}</span>${escapeHtml(choice)}</button>`
+  )).join("")}</div>\n`;
 }
 
 export function parseStoryResponse(
@@ -98,6 +104,10 @@ export function parseStoryResponse(
     }
   }
   const summaryText = extractXmlField(textForSummary, options?.summaryTag);
+  // Read choices from the raw response before output regex can extract only
+  // <content> or otherwise remove the custom tags. textForSummary has already
+  // excluded thinking folds, so examples mentioned in reasoning are ignored.
+  const storyChoices = extractStoryChoices(textForSummary);
 
   // Temporarily replace fold-tag blocks with placeholders before output regex,
   // so that <content>/<summary> mentioned inside thinking aren't matched by regex rules
@@ -138,8 +148,12 @@ export function parseStoryResponse(
     reasoningProcessed = reasoningProcessed.replace(placeholder, restored);
   }
 
-  const folded = applyFoldTags(renderStoryChoices(reasoningProcessed), options?.foldTags);
-  const renderedText = folded
+  // Always place choices after the folded content. Models occasionally emit
+  // <options> inside <summary>; keeping them in place would hide the buttons in
+  // the collapsed block. Remove any surviving copy to avoid duplicates.
+  const contentWithoutChoices = reasoningProcessed.replace(/<options>[\s\S]*?<\/options>/gi, "");
+  const folded = applyFoldTags(contentWithoutChoices, options?.foldTags);
+  const renderedText = `${folded}${renderStoryChoices(storyChoices)}`
     .replace(/\r\n/g, "\n")
     .replace(/\n{4,}/g, "\n\n\n")
     .trim();
