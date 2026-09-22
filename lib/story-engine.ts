@@ -25,12 +25,6 @@ import { MacroEngine } from "./macro-engine";
 
 const DEFAULT_STORY_FOLD_TAGS = "think,thinking,summary";
 const DEFAULT_STORY_CONTEXT_EXCLUDED_TAGS = "think,thinking";
-const STORY_BILINGUAL_INSTRUCTION = [
-  "【剧情双语规则】",
-  "- 非中文角色的对白使用符合角色设定的原语言，并逐段写成“[完整原文|对应的简体中文译文]”，必须保留外层半角方括号。中文角色的中文对白正常输出，不重复翻译。",
-  "- 旁白、动作、环境描写和剧情摘要使用简体中文，不添加双语分隔符。",
-  "- 只在对白文本内添加译文，保留预设要求的 XML、HTML 标签及其他输出结构，不改动标签名、属性或样式。",
-].join("\n");
 const STORY_VN_CHOICES_INSTRUCTION = [
   "【剧情选择项规则】",
   "- 每轮剧情正文结尾提供 2～4 个可由 {{user}} 采取的下一步选择，选择必须贴合当前场景，并保留自由发挥空间。",
@@ -231,13 +225,7 @@ async function buildStoryPromptMessages(
     worldBookActivationContext: wbActivationContext,
     recentBlocks,
     unifiedRecentItems,
-    chatBilingualInstruction: STORY_BILINGUAL_INSTRUCTION,
-    offlineBilingualInstruction: STORY_BILINGUAL_INSTRUCTION,
   });
-  // Existing story presets may not contain a bilingual macro; enable it for those too.
-  if (!promptMessages.some(message => typeof message.content === "string" && message.content.includes(STORY_BILINGUAL_INSTRUCTION))) {
-    promptMessages.unshift({ role: "system", content: STORY_BILINGUAL_INSTRUCTION });
-  }
   if (vnChoicesEnabled) {
     promptMessages.unshift({ role: "system", content: STORY_VN_CHOICES_INSTRUCTION });
   }
