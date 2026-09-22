@@ -5,7 +5,9 @@
     },
     "app/api/cline-proxy/[...path]/route.ts": {
       "maxDuration": 300
+    },
+    "app/api/volcengine-plan-proxy/[...path]/route.ts": {
+      "maxDuration": 300
     }
   }
 }
-

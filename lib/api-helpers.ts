@@ -7,6 +7,7 @@ import { pushApiLog } from "./api-log-store";
 
 const SIMPLE_ANTHROPIC_AUTO_MAX_TOKENS = 8192;
 const BOVITA_VERCEL_PROXY_ORIGIN = "https://bovita-float.vercel.app";
+const VOLCENGINE_PLAN_API_BASE_URL = "https://ark.cn-beijing.volces.com/api/plan/v3";
 
 function normalizeBovitaProxyBaseUrl(baseUrl: string): string {
     const trimmed = baseUrl.trim();
@@ -15,6 +16,10 @@ function normalizeBovitaProxyBaseUrl(baseUrl: string): string {
 
     try {
         const url = new URL(trimmed);
+        const normalizedPathname = url.pathname.replace(/\/$/, "");
+        if (`${url.origin}${normalizedPathname}` === VOLCENGINE_PLAN_API_BASE_URL) {
+            return `${BOVITA_VERCEL_PROXY_ORIGIN}/api/volcengine-plan-proxy`;
+        }
         const isBovitaHost = url.hostname === "bovita.netlify.app"
             || url.hostname === "bovita-float.vercel.app";
         const isBovitaProxy = /^\/api\/(?:cline|opencode)-proxy(?:\/|$)/i.test(url.pathname);
