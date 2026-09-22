@@ -142,7 +142,7 @@ export function getStoryRenderSignature(characterId: string): { regexSignature: 
 export async function generateStoryCompletion(
   characterId: string,
   history: StoryMessage[],
-  options?: { sessionFoldTags?: string; sessionContextExcludedTags?: string; memoryAnchorAt?: string; vnChoicesEnabled?: boolean; signal?: AbortSignal },
+  options?: { sessionId?: string; sessionFoldTags?: string; sessionContextExcludedTags?: string; memoryAnchorAt?: string; vnChoicesEnabled?: boolean; signal?: AbortSignal },
 ): Promise<StoryGenerationResult> {
   const character = loadCharacters().find((item) => item.id === characterId);
   if (!character) {
@@ -163,7 +163,7 @@ export async function generateStoryCompletion(
     try {
       rawOutput = await sendLLMRequest(apiConfig, preset, llmMessages, regexes, {
         characterName: character.name,
-      }, { skipOutputRegex: true, includeReasoning: true, appId: "story", appTags: ["story"], signal: options?.signal });
+      }, { skipOutputRegex: true, includeReasoning: true, appId: "story", appTags: ["story"], debugSessionId: options?.sessionId, signal: options?.signal });
       break;
     } catch (error) {
       if (!(error instanceof ChatPluginStoryRetryError)) throw error;
