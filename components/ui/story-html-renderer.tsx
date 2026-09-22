@@ -215,10 +215,10 @@ function MarkdownSegment({ content, scopeClass, bilingualLineBreaks = false }: {
                 let offset = 0;
                 for (const pair of pairs) {
                     fragment.append(document.createTextNode(value.slice(offset, pair.index)));
-                    fragment.append(document.createTextNode(pair[1].trim()));
+                    fragment.append(document.createTextNode(`「${pair[1].trim()}」`));
                     const translation = document.createElement("span");
                     translation.className = "story-dialogue-translation";
-                    translation.textContent = pair[2].trim();
+                    translation.textContent = `“${pair[2].trim()}”`;
                     fragment.append(translation);
                     offset = pair.index! + pair[0].length;
                 }

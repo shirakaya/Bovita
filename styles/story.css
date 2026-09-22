@@ -753,6 +753,7 @@
 
         /* === 富文本排版 (Typography Aesthetic) === */
         .story-richtext {
+          --story-paragraph-indent: calc(28px*var(--app-text-scale,1));
           font-size: calc(14px*var(--app-text-scale,1));
           overflow-x: hidden;
           overflow-wrap: anywhere;
@@ -760,7 +761,7 @@
         }
         .story-richtext p {
           margin: 1.1em 0;
-          text-indent: 2em; /* 首行缩进两字，书籍排版 */
+          text-indent: var(--story-paragraph-indent); /* 首行缩进两字，书籍排版 */
         }
         /* 引用、列表内的段落不做首行缩进 */
         .story-richtext blockquote p,
@@ -1104,7 +1105,7 @@
           font-size: var(--story-translation-size, 14px);
           color: var(--story-translation-color, #94a3b8);
           line-height: 1.7;
-          text-indent: 0;
+          text-indent: var(--story-paragraph-indent);
         }
         .story-inline-edit { display: flex; flex-direction: column; gap: 4px; width: 100%; }
         /* 纯 CSS 自适应高度：隐藏镜像 ::after 与 textarea 叠在同一格，
