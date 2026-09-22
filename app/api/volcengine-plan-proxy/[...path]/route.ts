@@ -13,6 +13,7 @@ const ALLOWED_PATHS = new Set([
     "chat/completions",
 ]);
 const MAX_REQUEST_BODY_BYTES = 5 * 1024 * 1024;
+const MAX_OUTPUT_TOKENS = 32_768;
 
 type RouteContext = {
     params: Promise<{ path?: string[] }>;
@@ -87,7 +88,7 @@ async function proxyVolcenginePlan(request: NextRequest, context: RouteContext) 
     if (contentType) headers.set("Content-Type", contentType);
 
     try {
-        const body = request.method === "GET" || request.method === "HEAD"
+        let body = request.method === "GET" || request.method === "HEAD"
             ? undefined
             : await request.arrayBuffer();
         if (body && body.byteLength > MAX_REQUEST_BODY_BYTES) {
@@ -95,6 +96,18 @@ async function proxyVolcenginePlan(request: NextRequest, context: RouteContext) 
                 { error: "Request body is too large." },
                 { status: 413, headers: responseHeaders(request) },
             );
+        }
+
+        if (proxyPath === "chat/completions" && body) {
+            try {
+                const payload = JSON.parse(new TextDecoder().decode(body)) as Record<string, unknown>;
+                if (typeof payload.max_tokens === "number" && payload.max_tokens > MAX_OUTPUT_TOKENS) {
+                    payload.max_tokens = MAX_OUTPUT_TOKENS;
+                    body = new TextEncoder().encode(JSON.stringify(payload)).buffer;
+                }
+            } catch {
+                // Forward malformed JSON unchanged so the upstream API can report it normally.
+            }
         }
 
         const upstream = await fetch(target, {
