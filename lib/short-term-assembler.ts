@@ -157,6 +157,7 @@ function formatDiaryEntryForTimeline(entry: DiaryEntry, timeAware: boolean, time
  *
  * @param characterId - The character to load data for
  * @param options.afterTimestamp - Only include entries after this ISO timestamp
+ * @param options.beforeTimestamp - Only include entries at or before this ISO timestamp
  */
 export function loadNativeTimeline(
     characterId: string,
@@ -165,7 +166,7 @@ export function loadNativeTimeline(
         userName?: string;
         appId?: import("./settings-types").ContentAppId;
         excludeOfflineSessionId?: string;
-        storyBeforeTimestamp?: string;
+        beforeTimestamp?: string;
         timeAware?: boolean;
         promptTimestampOptions?: PromptTimestampOptions;
     }
@@ -516,7 +517,7 @@ export function loadNativeTimeline(
     // ── Story projections ──
     const storyEntries = loadStoryProjectionEntries(characterId, {
         afterTimestamp: options?.afterTimestamp,
-        beforeTimestamp: options?.storyBeforeTimestamp,
+        beforeTimestamp: options?.beforeTimestamp,
         userName,
         charName,
     });
@@ -788,9 +789,16 @@ export function loadNativeTimeline(
         });
     }
 
+    // A non-main story session is a snapshot of the outside world at the time
+    // it was created. Apply the upper bound to every source, not just story
+    // projections, so later chat/app activity cannot leak into that session.
+    const boundedEntries = options?.beforeTimestamp
+        ? entries.filter(entry => entry.timestamp <= options.beforeTimestamp!)
+        : entries;
+
     // Sort by timestamp ascending
-    entries.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
-    return entries;
+    boundedEntries.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+    return boundedEntries;
 }
 
 // Fixed order — lower = further from LLM output (appears higher in prompt)
@@ -928,7 +936,7 @@ export function prepareShortTermContext(
         history?: ChatMessage[];
         excludeGroupSessionId?: string;
         excludeOfflineSessionId?: string;
-        storyBeforeTimestamp?: string;
+        beforeTimestamp?: string;
         includeNativeToolHistory?: boolean;
         includeDirectChatEntries?: boolean;
         timeAware?: boolean;
@@ -945,7 +953,7 @@ export function prepareShortTermContext(
         userName: options?.userName,
         appId: appId as import("./settings-types").ContentAppId,
         excludeOfflineSessionId: options?.excludeOfflineSessionId,
-        storyBeforeTimestamp: options?.storyBeforeTimestamp,
+        beforeTimestamp: options?.beforeTimestamp,
         timeAware,
         promptTimestampOptions: options?.promptTimestampOptions,
     });

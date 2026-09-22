@@ -200,7 +200,7 @@ async function buildStoryPromptMessages(
   const { recentBlocks, truncatedHistory, wbActivationContext, unifiedRecentItems } = prepareShortTermContext(characterId, "story", {
     userName: userIdentity?.name ?? "用户",
     history: historyMessages,
-    storyBeforeTimestamp: memoryAnchorAt,
+    beforeTimestamp: memoryAnchorAt,
   });
 
   const [memories, coreMemories] = await Promise.all([

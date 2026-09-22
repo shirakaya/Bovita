@@ -20,7 +20,7 @@ export type StorySession = {
   title?: string;
   createdAt: string;
   updatedAt: string;
-  /** Non-main sessions only read memories that existed when the window was created. */
+  /** Non-main sessions only read external context that existed when the window was created. */
   memoryAnchorAt?: string;
   customCSS?: string;
   foldTags?: string;            // Comma-separated tag names to fold for this session.
@@ -135,6 +135,10 @@ function normalizeStorySessions(sessions: StorySession[]): { items: StorySession
         item = { ...item, sessionType: "extra", memoryAnchorAt: item.memoryAnchorAt || createdAt };
         changed = true;
       }
+    }
+    if (item.sessionType !== "main" && !item.memoryAnchorAt) {
+      item = { ...item, memoryAnchorAt: createdAt };
+      changed = true;
     }
     normalized.push(item);
   }
