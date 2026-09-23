@@ -159,11 +159,13 @@ function StoryGeneratingIndicator({
   avatar,
   streamingContent,
   streamingReasoning,
+  streamingPhase,
 }: {
   characterName: string;
   avatar?: string;
   streamingContent?: string;
   streamingReasoning?: string;
+  streamingPhase?: "preparing" | "waiting" | "streaming";
 }) {
   const [statusIndex, setStatusIndex] = useState(0);
   const body = (streamingContent || "").replace(/<(?:think|thinking)\b[^>]*>[\s\S]*?(?:<\/(?:think|thinking)>|$)/gi, "");
@@ -201,7 +203,7 @@ function StoryGeneratingIndicator({
             <div style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{body}</div>
           ) : !reasoning ? (
             <>
-              <span className="story-generating-copy">{streamingContent !== undefined ? "等待模型返回首个分片" : status}</span>
+              <span className="story-generating-copy">{streamingPhase === "preparing" ? "正在准备剧情提示词" : streamingPhase === "waiting" ? "等待模型返回首个分片" : status}</span>
               <span className="story-generating-dots" aria-hidden="true">
                 <i />
                 <i />
@@ -305,7 +307,7 @@ export function StoryApp({ onClose }: StoryAppProps) {
   const [contextExcludedTagsDraft, setContextExcludedTagsDraft] = useState("");
   // 生成状态按会话记录：避免在 A 会话生成时切到 B 会话也显示"正在生成"
   const [generatingSessionIds, setGeneratingSessionIds] = useState<ReadonlySet<string>>(() => new Set());
-  const [streamingPreview, setStreamingPreview] = useState<{ sessionId: string; runId: string; content: string; reasoning: string } | null>(null);
+  const [streamingPreview, setStreamingPreview] = useState<{ sessionId: string; runId: string; content: string; reasoning: string; phase: "preparing" | "waiting" | "streaming" } | null>(null);
   // 抽屉滑动手势用 ref 而不是 state：手指按住时 touchmove 每帧都在触发，
   // 逐帧 setState 会让整个剧情页以事件频率重渲染（iOS 上拉到顶/底按住不动时
   // 表现为持续的重排/闪烁）
@@ -689,12 +691,15 @@ export function StoryApp({ onClose }: StoryAppProps) {
     const generationRun = createStoryGenerationRun(sessionId);
     const generationRunId = generationRun.runId;
     const isCurrentGeneration = () => mountedRef.current && isStoryGenerationRunActive(sessionId, generationRunId);
-    setStreamingPreview(null);
+    setStreamingPreview(currentSession?.uiPrefs?.streamingEnabled === true
+      ? { sessionId, runId: generationRunId, content: "", reasoning: "", phase: "preparing" }
+      : null);
     const onStreamUpdate = (content: string) => {
       if (isCurrentGeneration() && activeSessionIdRef.current === sessionId) {
         setStreamingPreview((current) => ({
           sessionId, runId: generationRunId, content,
           reasoning: current?.runId === generationRunId ? current.reasoning : "",
+          phase: content ? "streaming" : "waiting",
         }));
       }
     };
@@ -703,6 +708,7 @@ export function StoryApp({ onClose }: StoryAppProps) {
         setStreamingPreview((current) => ({
           sessionId, runId: generationRunId, reasoning,
           content: current?.runId === generationRunId ? current.content : "",
+          phase: reasoning ? "streaming" : "waiting",
         }));
       }
     };
@@ -923,12 +929,15 @@ export function StoryApp({ onClose }: StoryAppProps) {
     const generationRun = createStoryGenerationRun(sessionId);
     const generationRunId = generationRun.runId;
     const isCurrentGeneration = () => mountedRef.current && isStoryGenerationRunActive(sessionId, generationRunId);
-    setStreamingPreview(null);
+    setStreamingPreview(currentSession?.uiPrefs?.streamingEnabled === true
+      ? { sessionId, runId: generationRunId, content: "", reasoning: "", phase: "preparing" }
+      : null);
     const onStreamUpdate = (content: string) => {
       if (isCurrentGeneration() && activeSessionIdRef.current === sessionId) {
         setStreamingPreview((current) => ({
           sessionId, runId: generationRunId, content,
           reasoning: current?.runId === generationRunId ? current.reasoning : "",
+          phase: content ? "streaming" : "waiting",
         }));
       }
     };
@@ -937,6 +946,7 @@ export function StoryApp({ onClose }: StoryAppProps) {
         setStreamingPreview((current) => ({
           sessionId, runId: generationRunId, reasoning,
           content: current?.runId === generationRunId ? current.content : "",
+          phase: reasoning ? "streaming" : "waiting",
         }));
       }
     };
@@ -1404,6 +1414,8 @@ export function StoryApp({ onClose }: StoryAppProps) {
                   ? streamingPreview.content : undefined}
                 streamingReasoning={uiPrefs.streamingEnabled && streamingPreview?.sessionId === activeSessionId
                   ? streamingPreview.reasoning : undefined}
+                streamingPhase={uiPrefs.streamingEnabled && streamingPreview?.sessionId === activeSessionId
+                  ? streamingPreview.phase : undefined}
               />
             ) : null}
           </div>
