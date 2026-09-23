@@ -10,7 +10,7 @@ import {
 } from "./settings-storage";
 import type { ApiConfig, PresetConfig, RegexConfig, WorldBookConfig } from "./settings-types";
 import { assemblePromptPayload, type LLMMessage } from "./llm-prompt-assembler";
-import { previewMessagesForApi, sendLLMRequest, ChatEngineError, ChatPluginStoryRetryError } from "./chat-engine";
+import { previewMessagesForApi, sendLLMRequest, sendLLMStreamRequest, ChatEngineError, ChatPluginStoryRetryError } from "./chat-engine";
 import { loadMemoryConfig } from "./memory-storage";
 import { retrieveCoreMemoriesForPrompt, retrieveMemoriesForPrompt } from "./memory-service";
 import { formatCoreMemories, formatLongTermMemories } from "./memory-injector";
@@ -142,7 +142,7 @@ export function getStoryRenderSignature(characterId: string): { regexSignature: 
 export async function generateStoryCompletion(
   characterId: string,
   history: StoryMessage[],
-  options?: { sessionId?: string; sessionFoldTags?: string; sessionContextExcludedTags?: string; memoryAnchorAt?: string; vnChoicesEnabled?: boolean; signal?: AbortSignal },
+  options?: { sessionId?: string; sessionFoldTags?: string; sessionContextExcludedTags?: string; memoryAnchorAt?: string; vnChoicesEnabled?: boolean; streamingEnabled?: boolean; onStreamUpdate?: (content: string) => void; signal?: AbortSignal },
 ): Promise<StoryGenerationResult> {
   const character = loadCharacters().find((item) => item.id === characterId);
   if (!character) {
@@ -161,9 +161,23 @@ export async function generateStoryCompletion(
   let pluginRetryCount = 0;
   while (true) {
     try {
-      rawOutput = await sendLLMRequest(apiConfig, preset, llmMessages, regexes, {
-        characterName: character.name,
-      }, { skipOutputRegex: true, includeReasoning: true, appId: "story", appTags: ["story"], debugSessionId: options?.sessionId, signal: options?.signal });
+      options?.onStreamUpdate?.("");
+      if (options?.streamingEnabled) {
+        let streamedContent = "";
+        const result = await sendLLMStreamRequest(apiConfig, preset, llmMessages, regexes, {
+          characterName: character.name,
+        }, { skipOutputRegex: true, includeReasoning: true, appId: "story", appTags: ["story"], debugSessionId: options?.sessionId, signal: options?.signal }, {
+          onDelta: (delta) => {
+            streamedContent += delta;
+            options?.onStreamUpdate?.(streamedContent);
+          },
+        });
+        rawOutput = result.content;
+      } else {
+        rawOutput = await sendLLMRequest(apiConfig, preset, llmMessages, regexes, {
+          characterName: character.name,
+        }, { skipOutputRegex: true, includeReasoning: true, appId: "story", appTags: ["story"], debugSessionId: options?.sessionId, signal: options?.signal });
+      }
       break;
     } catch (error) {
       if (!(error instanceof ChatPluginStoryRetryError)) throw error;
