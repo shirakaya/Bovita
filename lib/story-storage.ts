@@ -9,6 +9,7 @@ export type StoryUiPrefs = {
   translationFontSize?: number;
   translationColor?: string;
   vnChoicesEnabled?: boolean;
+  streamingEnabled?: boolean;
 };
 
 export type StorySessionType = "main" | "extra" | "theater";
