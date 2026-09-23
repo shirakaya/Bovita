@@ -185,7 +185,7 @@ export default {
     id: "yuwen-story-injector",
     name: "🔥 余温·剧情",
     apiVersion: 1,
-    version: "1.0.0",
+    version: "1.0.1",
     author: "余温 / Float 适配",
     description: "仅作用于剧情：思维链注入、思考参数、英文思维链重试、标记截断。",
     permissions: ["chat.read", "ai"],
@@ -240,7 +240,7 @@ export default {
           { value: "max", label: "max" },
         ],
       },
-      { key: "autoTruncate", label: "按标记截断剧情回复（返回后截断，不节省生成 token）", type: "boolean", default: true },
+      { key: "autoTruncate", label: "按标记截断剧情回复（流式提前停止；非流式返回后截断）", type: "boolean", default: true },
       { key: "truncateMarker", label: "截断标记", type: "text", default: "<mutter>" },
       { key: "autoRetryEnglish", label: "英文思维链自动重试", type: "boolean", default: true },
       { key: "retryLimit", label: "连续自动重试上限", type: "number", default: 30 },
@@ -255,6 +255,9 @@ export default {
       if (setting(ctx, "enabled", true) === false || payload.purpose !== "story") return payload;
       injectSeed(ctx, payload);
       applyModelParameters(ctx, payload);
+      if (setting(ctx, "autoTruncate", true) !== false) {
+        payload.streamStopMarker = String(setting(ctx, "truncateMarker", "<mutter>") || "");
+      }
       return payload;
     }, { priority: 80 });
 
