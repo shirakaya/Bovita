@@ -158,13 +158,18 @@ function StoryGeneratingIndicator({
   characterName,
   avatar,
   streamingContent,
+  streamingReasoning,
 }: {
   characterName: string;
   avatar?: string;
   streamingContent?: string;
+  streamingReasoning?: string;
 }) {
   const [statusIndex, setStatusIndex] = useState(0);
-  const status = STORY_GENERATION_STATUS[statusIndex % STORY_GENERATION_STATUS.length];
+  const body = (streamingContent || "").replace(/<(?:think|thinking)\b[^>]*>[\s\S]*?(?:<\/(?:think|thinking)>|$)/gi, "");
+  const inlineReasoning = (streamingContent || "").match(/<(?:think|thinking)\b[^>]*>([\s\S]*?)(?:<\/(?:think|thinking)>|$)/i)?.[1] || "";
+  const reasoning = streamingReasoning || inlineReasoning;
+  const status = body ? "正在输出" : reasoning ? "思考中" : STORY_GENERATION_STATUS[statusIndex % STORY_GENERATION_STATUS.length];
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -185,19 +190,25 @@ function StoryGeneratingIndicator({
         </div>
       </div>
       <div className="story-bubble-wrap">
-        <div className="story-bubble story-generating-bubble" aria-label="正在生成剧情">
-          {streamingContent ? (
-            <div style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{streamingContent}</div>
-          ) : (
+        <div className={`story-bubble${reasoning || body ? "" : " story-generating-bubble"}`} aria-label="正在生成剧情">
+          {reasoning ? (
+            <details open={!body} style={{ marginBottom: body ? 10 : 0 }}>
+              <summary style={{ cursor: "pointer", opacity: 0.7 }}>思维链 · {body ? "已生成" : "生成中"}</summary>
+              <div style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", marginTop: 8, opacity: 0.8 }}>{reasoning}</div>
+            </details>
+          ) : null}
+          {body ? (
+            <div style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{body}</div>
+          ) : !reasoning ? (
             <>
-              <span className="story-generating-copy">{status}</span>
+              <span className="story-generating-copy">{streamingContent !== undefined ? "等待模型返回首个分片" : status}</span>
               <span className="story-generating-dots" aria-hidden="true">
                 <i />
                 <i />
                 <i />
               </span>
             </>
-          )}
+          ) : null}
         </div>
       </div>
     </article>
@@ -294,7 +305,7 @@ export function StoryApp({ onClose }: StoryAppProps) {
   const [contextExcludedTagsDraft, setContextExcludedTagsDraft] = useState("");
   // 生成状态按会话记录：避免在 A 会话生成时切到 B 会话也显示"正在生成"
   const [generatingSessionIds, setGeneratingSessionIds] = useState<ReadonlySet<string>>(() => new Set());
-  const [streamingPreview, setStreamingPreview] = useState<{ sessionId: string; runId: string; content: string } | null>(null);
+  const [streamingPreview, setStreamingPreview] = useState<{ sessionId: string; runId: string; content: string; reasoning: string } | null>(null);
   // 抽屉滑动手势用 ref 而不是 state：手指按住时 touchmove 每帧都在触发，
   // 逐帧 setState 会让整个剧情页以事件频率重渲染（iOS 上拉到顶/底按住不动时
   // 表现为持续的重排/闪烁）
@@ -681,7 +692,18 @@ export function StoryApp({ onClose }: StoryAppProps) {
     setStreamingPreview(null);
     const onStreamUpdate = (content: string) => {
       if (isCurrentGeneration() && activeSessionIdRef.current === sessionId) {
-        setStreamingPreview({ sessionId, runId: generationRunId, content });
+        setStreamingPreview((current) => ({
+          sessionId, runId: generationRunId, content,
+          reasoning: current?.runId === generationRunId ? current.reasoning : "",
+        }));
+      }
+    };
+    const onReasoningUpdate = (reasoning: string) => {
+      if (isCurrentGeneration() && activeSessionIdRef.current === sessionId) {
+        setStreamingPreview((current) => ({
+          sessionId, runId: generationRunId, reasoning,
+          content: current?.runId === generationRunId ? current.content : "",
+        }));
       }
     };
 
@@ -695,6 +717,7 @@ export function StoryApp({ onClose }: StoryAppProps) {
         vnChoicesEnabled: currentSession?.uiPrefs?.vnChoicesEnabled === true,
         streamingEnabled: currentSession?.uiPrefs?.streamingEnabled === true,
         onStreamUpdate,
+        onReasoningUpdate,
         signal: generationRun.controller.signal,
       });
       if (!isCurrentGeneration()) return;
@@ -903,7 +926,18 @@ export function StoryApp({ onClose }: StoryAppProps) {
     setStreamingPreview(null);
     const onStreamUpdate = (content: string) => {
       if (isCurrentGeneration() && activeSessionIdRef.current === sessionId) {
-        setStreamingPreview({ sessionId, runId: generationRunId, content });
+        setStreamingPreview((current) => ({
+          sessionId, runId: generationRunId, content,
+          reasoning: current?.runId === generationRunId ? current.reasoning : "",
+        }));
+      }
+    };
+    const onReasoningUpdate = (reasoning: string) => {
+      if (isCurrentGeneration() && activeSessionIdRef.current === sessionId) {
+        setStreamingPreview((current) => ({
+          sessionId, runId: generationRunId, reasoning,
+          content: current?.runId === generationRunId ? current.content : "",
+        }));
       }
     };
     try {
@@ -915,6 +949,7 @@ export function StoryApp({ onClose }: StoryAppProps) {
         vnChoicesEnabled: currentSession?.uiPrefs?.vnChoicesEnabled === true,
         streamingEnabled: currentSession?.uiPrefs?.streamingEnabled === true,
         onStreamUpdate,
+        onReasoningUpdate,
         signal: generationRun.controller.signal,
       });
       if (!isCurrentGeneration()) return;
@@ -1366,8 +1401,9 @@ export function StoryApp({ onClose }: StoryAppProps) {
                 characterName={currentCharacter.name}
                 avatar={currentCharacter.avatar || undefined}
                 streamingContent={uiPrefs.streamingEnabled && streamingPreview?.sessionId === activeSessionId
-                  ? streamingPreview.content.replace(/<(?:think|thinking)\b[^>]*>[\s\S]*?(?:<\/(?:think|thinking)>|$)/gi, "")
-                  : undefined}
+                  ? streamingPreview.content : undefined}
+                streamingReasoning={uiPrefs.streamingEnabled && streamingPreview?.sessionId === activeSessionId
+                  ? streamingPreview.reasoning : undefined}
               />
             ) : null}
           </div>
