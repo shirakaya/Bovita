@@ -579,7 +579,7 @@ async function applyChatPluginLlmRequest<T extends { role: string }>(
     messages: T[],
     purpose: string,
     sessionId?: string,
-): Promise<{ messages: T[]; preset: PresetConfig | null; providerBody?: Record<string, unknown> }> {
+): Promise<{ messages: T[]; preset: PresetConfig | null; providerBody?: Record<string, unknown>; streamStopMarker?: string }> {
     if (typeof window === "undefined") return { messages, preset };
     const payload = await runChatPluginTransform("llm.request", {
         messages: messages as unknown as LlmRequestPayload["messages"],
@@ -598,7 +598,10 @@ async function applyChatPluginLlmRequest<T extends { role: string }>(
     const providerBody = payload.providerBody && typeof payload.providerBody === "object" && !Array.isArray(payload.providerBody)
         ? payload.providerBody
         : undefined;
-    return { messages: nextMessages, preset: nextPreset, providerBody };
+    const streamStopMarker = typeof payload.streamStopMarker === "string" && payload.streamStopMarker.length > 0
+        ? payload.streamStopMarker
+        : undefined;
+    return { messages: nextMessages, preset: nextPreset, providerBody, streamStopMarker };
 }
 
 function applyChatPluginProviderBody(
@@ -753,6 +756,7 @@ async function readSseStream(
     providerKind: ChatCompletionStreamResult["providerKind"],
     callbacks?: ChatCompletionStreamCallbacks,
     stripTimestamps = true,
+    stopMarker?: string,
 ): Promise<{ content: string; rawResponse: string }> {
     if (!response.body) throw new ChatEngineError("流式响应没有 body。");
     const reader = response.body.getReader();
@@ -760,6 +764,7 @@ async function readSseStream(
     let buffer = "";
     let content = "";
     let rawResponse = "";
+    let stoppedAtMarker = false;
     // 时间戳剥离器会一直扣住流尾巴的 64 个字符等括号闭合，流结束才吐出来。
     // 要求"所见即模型所写"的调用方（独家特调）把它整个关掉：增量来一个字出一个字，
     // 否则模型在末尾写机括标记行（〔记〕这类）时，整行都压在扣留窗里，看起来像卡死。
@@ -777,8 +782,17 @@ async function readSseStream(
         if (parts.content) {
             const cleanDelta = contentStripper.push(parts.content);
             if (cleanDelta) {
-                content += cleanDelta;
-                await callbacks?.onDelta?.(cleanDelta);
+                const nextContent = content + cleanDelta;
+                // 与余温的返回后截断一致：只在原生 <think> 之后的正文里找标记。
+                const closingThink = stopMarker ? nextContent.indexOf("</think>") : -1;
+                const bodyStart = closingThink < 0 ? 0 : closingThink + "</think>".length;
+                const markerAt = stopMarker && (closingThink >= 0 || !nextContent.includes("<think>"))
+                    ? nextContent.indexOf(stopMarker, bodyStart)
+                    : -1;
+                const visibleDelta = markerAt < 0 ? cleanDelta : nextContent.slice(content.length, markerAt + stopMarker!.length);
+                content += visibleDelta;
+                if (visibleDelta) await callbacks?.onDelta?.(visibleDelta);
+                if (markerAt >= 0) stoppedAtMarker = true;
             }
         }
     };
@@ -787,6 +801,7 @@ async function readSseStream(
         if (rawResponse.length < 65_536) rawResponse += `${eventText}\n`;
         for (const parsed of sseParser.pushEvent(eventText)) {
             await handleParsed(parsed);
+            if (stoppedAtMarker) break;
         }
     };
 
@@ -798,14 +813,22 @@ async function readSseStream(
         buffer = parsed.rest;
         for (const eventText of parsed.events) {
             await handleEvent(eventText);
+            if (stoppedAtMarker) break;
+        }
+        if (stoppedAtMarker) {
+            // 正常完成本次回复，而非用户取消：后续仍需经过插件的英文思维链检查。
+            void reader.cancel().catch(() => {});
+            return { content, rawResponse };
         }
     }
     buffer += decoder.decode();
     if (buffer.trim()) {
         await handleEvent(buffer);
+        if (stoppedAtMarker) return { content, rawResponse };
     }
     for (const parsed of sseParser.flush()) {
         await handleParsed(parsed);
+        if (stoppedAtMarker) return { content, rawResponse };
     }
     const finalContent = contentStripper.flush();
     if (finalContent) {
@@ -880,7 +903,8 @@ export async function sendLLMStreamRequest(
                 response,
                 request.providerKind,
                 streamLogCallbacks,
-                !options?.skipTimestampStrip,
+                !options?.skipTimestampStrip && !afterPlugins.streamStopMarker,
+                afterPlugins.streamStopMarker,
             );
             streamedContent = streamed.content;
             rawResponse = streamed.rawResponse;
