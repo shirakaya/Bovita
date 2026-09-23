@@ -1,6 +1,6 @@
 // 余温 · Float 剧情插件
 // Float apiVersion 1；仅作用于 purpose === "story" 的剧情生成。
-// 功能：思维链种子注入、模型参数、英文思维链自动重试。
+// 功能：思维链种子注入、模型参数、英文思维链自动重试、标记截断。
 
 const KIMI_SEED = [
   "Meta：",
@@ -151,6 +151,15 @@ function extractThinking(ctx, payload) {
   return "";
 }
 
+function truncateAtMarker(text, marker) {
+  if (!marker || typeof text !== "string") return text;
+  // 剧情宿主会把原生思维链包成 <think> 放在正文前；只在其后的正文查截断标记。
+  const closingThink = text.indexOf("</think>");
+  const bodyStart = closingThink < 0 ? 0 : closingThink + "</think>".length;
+  const markerAt = text.indexOf(marker, bodyStart);
+  return markerAt < 0 ? text : text.slice(0, markerAt + marker.length);
+}
+
 function looksEnglish(ctx, thinking, sessionId) {
   const sample = stripTags(thinking).slice(0, 240);
   const meaningful = sample.replace(/\s/g, "");
@@ -178,7 +187,7 @@ export default {
     apiVersion: 1,
     version: "1.0.0",
     author: "余温 / Float 适配",
-    description: "仅作用于剧情：注入思维链种子、设置模型思考参数，英文思维链自动重试。",
+    description: "仅作用于剧情：思维链注入、思考参数、英文思维链重试、标记截断。",
     permissions: ["chat.read", "ai"],
     settings: [
       { key: "enabled", label: "启用余温·剧情", type: "boolean", default: true },
@@ -193,7 +202,7 @@ export default {
         key: "injectMode", label: "注入方式", type: "select", default: "reasoning_content",
         options: [
           { value: "reasoning_content", label: "原生思维链（推荐）" },
-          { value: "partial", label: "正文续写" },
+          { value: "partial", label: "正文身份锚（非原生续写）" },
           { value: "both", label: "两种都开" },
           { value: "off", label: "关闭注入" },
         ],
@@ -231,6 +240,8 @@ export default {
           { value: "max", label: "max" },
         ],
       },
+      { key: "autoTruncate", label: "按标记截断剧情回复（返回后截断，不节省生成 token）", type: "boolean", default: true },
+      { key: "truncateMarker", label: "截断标记", type: "text", default: "<mutter>" },
       { key: "autoRetryEnglish", label: "英文思维链自动重试", type: "boolean", default: true },
       { key: "retryLimit", label: "连续自动重试上限", type: "number", default: 30 },
       { key: "englishThreshold", label: "英文占比阈值（0.2～0.95）", type: "number", default: 0.5 },
@@ -249,16 +260,22 @@ export default {
 
     ctx.hooks.transform("llm.response", (payload) => {
       if (setting(ctx, "enabled", true) === false || payload.purpose !== "story") return payload;
-      if (setting(ctx, "autoRetryEnglish", true) === false) return payload;
+      if (setting(ctx, "autoRetryEnglish", true) !== false) {
+        const thinking = extractThinking(ctx, payload);
+        if (thinking && looksEnglish(ctx, thinking, payload.sessionId)) {
+          const limit = Math.min(30, Math.max(1, Math.floor(Number(setting(ctx, "retryLimit", 30))) || 30));
+          payload.retry = true;
+          payload.retryLimit = limit;
+          payload.retryReason = "检测到英文思维链";
+          ctx.ui.toast("检测到英文思维链，正在自动重试……");
+          return payload;
+        }
+      }
 
-      const thinking = extractThinking(ctx, payload);
-      if (!thinking || !looksEnglish(ctx, thinking, payload.sessionId)) return payload;
-
-      const limit = Math.min(30, Math.max(1, Math.floor(Number(setting(ctx, "retryLimit", 30))) || 30));
-      payload.retry = true;
-      payload.retryLimit = limit;
-      payload.retryReason = "检测到英文思维链";
-      ctx.ui.toast("检测到英文思维链，正在自动重试……");
+      if (setting(ctx, "autoTruncate", true) !== false) {
+        const marker = String(setting(ctx, "truncateMarker", "<mutter>") || "");
+        payload.text = truncateAtMarker(payload.text, marker);
+      }
       return payload;
     }, { priority: 80 });
 
