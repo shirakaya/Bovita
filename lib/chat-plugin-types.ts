@@ -108,6 +108,8 @@ export type LlmRequestPayload = {
      * 插件应只写自己负责的键；同名键会覆盖预设生成的值。
      */
     providerBody?: Record<string, unknown>;
+    /** 仅流式请求：完整收到此标记时结束读取，标记本身保留在回复中。 */
+    streamStopMarker?: string;
 };
 
 export type LlmResponsePayload = {
