@@ -897,6 +897,9 @@ export async function sendLLMStreamRequest(
                 : "流式响应没有解析到文本增量。");
         }
         let rawOutput = options?.skipTimestampStrip ? streamedContent.trim() : stripHallucinatedTimestamps(streamedContent.trim());
+        if (options?.includeReasoning && streamedReasoning.trim()) {
+            rawOutput = `<think>\n${streamedReasoning}\n</think>\n\n${rawOutput}`;
+        }
         rawOutput = await applyChatPluginLlmResponse(rawOutput, pluginPurpose, options?.debugSessionId, streamedReasoning);
 
         // Store API log entry — mirror sendLLMRequest so streaming calls also show up
