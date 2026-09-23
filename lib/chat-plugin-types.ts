@@ -102,13 +102,29 @@ export type LlmRequestPayload = {
     /** 采样参数改写（留空则用用户配置；仅在该次请求带预设时生效） */
     temperature?: number;
     maxTokens?: number;
+    /**
+     * 合并到最终供应商请求 body 的顶层参数。
+     * 适合 reasoning_effort、thinking 等宿主未统一建模的供应商参数。
+     * 插件应只写自己负责的键；同名键会覆盖预设生成的值。
+     */
+    providerBody?: Record<string, unknown>;
 };
 
 export type LlmResponsePayload = {
     /** 模型原始回复文本（内置正则处理之前），可改写 */
     text: string;
+    /** 模型原生思维链；供应商未返回时为空字符串 */
+    reasoning: string;
     sessionId?: string;
     purpose: string;
+    /**
+     * 请求宿主丢弃本次结果并重试。apiVersion 1 当前仅剧情应用（purpose === "story"）
+     * 消费该信号；其它应用会忽略。宿主会限制连续次数，避免无限循环。
+     */
+    retry?: boolean;
+    retryReason?: string;
+    /** 允许的连续重试次数，1～30；默认 3 */
+    retryLimit?: number;
 };
 
 export type MessageBeforePersistPayload = {

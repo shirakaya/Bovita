@@ -10,7 +10,7 @@ import {
 } from "./settings-storage";
 import type { ApiConfig, PresetConfig, RegexConfig, WorldBookConfig } from "./settings-types";
 import { assemblePromptPayload, type LLMMessage } from "./llm-prompt-assembler";
-import { previewMessagesForApi, sendLLMRequest, ChatEngineError } from "./chat-engine";
+import { previewMessagesForApi, sendLLMRequest, ChatEngineError, ChatPluginStoryRetryError } from "./chat-engine";
 import { loadMemoryConfig } from "./memory-storage";
 import { retrieveCoreMemoriesForPrompt, retrieveMemoriesForPrompt } from "./memory-service";
 import { formatCoreMemories, formatLongTermMemories } from "./memory-injector";
@@ -142,7 +142,7 @@ export function getStoryRenderSignature(characterId: string): { regexSignature: 
 export async function generateStoryCompletion(
   characterId: string,
   history: StoryMessage[],
-  options?: { sessionFoldTags?: string; sessionContextExcludedTags?: string; memoryAnchorAt?: string; vnChoicesEnabled?: boolean; signal?: AbortSignal },
+  options?: { sessionId?: string; sessionFoldTags?: string; sessionContextExcludedTags?: string; memoryAnchorAt?: string; vnChoicesEnabled?: boolean; signal?: AbortSignal },
 ): Promise<StoryGenerationResult> {
   const character = loadCharacters().find((item) => item.id === characterId);
   if (!character) {
@@ -157,9 +157,25 @@ export async function generateStoryCompletion(
   const userIdentity = resolveUserIdentity(characterId, "story");
   const macroEngine = new MacroEngine(character.name, userIdentity?.name ?? "用户");
 
-  const rawOutput = await sendLLMRequest(apiConfig, preset, llmMessages, regexes, {
-    characterName: character.name,
-  }, { skipOutputRegex: true, includeReasoning: true, appId: "story", appTags: ["story"], signal: options?.signal });
+  let rawOutput = "";
+  let pluginRetryCount = 0;
+  while (true) {
+    try {
+      rawOutput = await sendLLMRequest(apiConfig, preset, llmMessages, regexes, {
+        characterName: character.name,
+      }, { skipOutputRegex: true, includeReasoning: true, appId: "story", appTags: ["story"], debugSessionId: options?.sessionId, signal: options?.signal });
+      break;
+    } catch (error) {
+      if (!(error instanceof ChatPluginStoryRetryError)) throw error;
+      pluginRetryCount += 1;
+      if (pluginRetryCount > error.maxRetries) {
+        throw new ChatEngineError(`自动重试已达上限（${error.maxRetries} 次）：${error.retryReason}`);
+      }
+      console.warn(
+        `[StoryEngine] 插件请求自动重试 ${pluginRetryCount}/${error.maxRetries}：${error.retryReason}`,
+      );
+    }
+  }
 
   const parsed = parseStoryResponse(rawOutput, regexes, {
     summaryTag,

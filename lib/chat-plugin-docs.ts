@@ -93,8 +93,8 @@ opts.timeoutMs 覆盖该 transform 的超时（默认 8000ms）。在 transform 
 |---|---|---|
 | user.beforeSend | 用户消息落库前 | { text, sessionId, isGroup, cancelled } —— 改 text 可改写；cancelled=true 取消发送 |
 | prompt.system | 组装系统提示词时（单聊/群聊） | { sessionId, isGroup, characterId?, hint } —— 往 hint 追加/改写提示词 |
-| llm.request | 每次 LLM 请求发出前 | { messages, purpose, sessionId?, temperature?, maxTokens? } —— messages 为 OpenAI 形状数组，可增删改；设置 temperature/maxTokens 覆盖采样参数 |
-| llm.response | 模型原始回复文本落地前 | { text, sessionId?, purpose } —— 改 text 即改写回复（在内置正则之前） |
+| llm.request | 每次 LLM 请求发出前 | { messages, purpose, sessionId?, temperature?, maxTokens?, providerBody? } —— messages 可增删改；providerBody 顶层合并到供应商请求，可传 reasoning_effort / thinking 等参数 |
+| llm.response | 模型原始回复文本落地前 | { text, reasoning, sessionId?, purpose, retry?, retryReason?, retryLimit? } —— 改 text 可改写回复；剧情应用可令 retry=true 丢弃本次结果并重试 |
 | message.beforePersist | 任何消息写入存储前（**同步**，处理函数不能是 async） | { message } —— 可修改 message 的字段 |
 
 ### on（只读事件广播，处理函数可 async）

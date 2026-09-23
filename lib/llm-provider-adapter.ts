@@ -30,7 +30,7 @@ export type LlmToolCall = {
 export type LlmRequestMessage =
     | { role: "system"; content: string | LLMContentPart[]; marker?: string }
     | { role: "user"; content: string | LLMContentPart[]; marker?: string }
-    | { role: "assistant"; content: string; marker?: string; reasoning?: string; openRouterReasoningDetails?: unknown[]; toolCalls?: LlmToolCall[] }
+    | { role: "assistant"; content: string; marker?: string; reasoning?: string; reasoningContent?: string; name?: string; partial?: boolean; openRouterReasoningDetails?: unknown[]; toolCalls?: LlmToolCall[] }
     | { role: "tool"; content: string; name: string; toolCallId: string; marker?: string };
 
 export type LlmRequestPayload = {
@@ -114,6 +114,9 @@ export function toLlmRequestMessages(messages: LLMMessage[]): LlmRequestMessage[
                 content: typeof message.content === "string" ? message.content : textFromContent(message.content),
                 marker: message._debugMeta?.marker,
                 reasoning: message.reasoning,
+                reasoningContent: (message as LLMMessage & { reasoning_content?: string }).reasoning_content,
+                name: (message as LLMMessage & { name?: string }).name,
+                partial: (message as LLMMessage & { partial?: boolean }).partial,
                 openRouterReasoningDetails: message.openRouterReasoningDetails,
                 toolCalls: message.toolCalls,
             };
@@ -510,12 +513,25 @@ function buildOpenAICompatibleRequest(
                         },
                     })),
                 };
-                if (message.reasoning && shouldEchoReasoningContent(config)) {
+                if (message.reasoningContent) {
+                    assistantMessage.reasoning_content = message.reasoningContent;
+                } else if (message.reasoning && shouldEchoReasoningContent(config)) {
                     assistantMessage.reasoning_content = message.reasoning;
                 }
+                if (message.name) assistantMessage.name = message.name;
                 if (config.provider === "OpenRouter" && message.openRouterReasoningDetails?.length) {
                     assistantMessage.reasoning_details = message.openRouterReasoningDetails;
                 }
+                return assistantMessage;
+            }
+            if (message.role === "assistant") {
+                const assistantMessage: Record<string, unknown> = {
+                    role: "assistant",
+                    content: openAIContent(message.content),
+                };
+                if (message.reasoningContent) assistantMessage.reasoning_content = message.reasoningContent;
+                if (message.name) assistantMessage.name = message.name;
+                // partial 是酒馆网关语义，不是标准 OpenAI 字段；正文前缀作为 assistant 消息传递。
                 return assistantMessage;
             }
             return { role: message.role, content: openAIContent(message.content) };

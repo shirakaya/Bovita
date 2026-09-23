@@ -100,6 +100,19 @@ export class ChatEngineError extends Error {
     }
 }
 
+/** 插件请求剧情应用丢弃当前结果并重试；由剧情生成器消费，不写入消息。 */
+export class ChatPluginStoryRetryError extends ChatEngineError {
+    readonly retryReason: string;
+    readonly maxRetries: number;
+
+    constructor(reason?: string, maxRetries = 3) {
+        super(reason?.trim() || "插件请求重试本次剧情生成。");
+        this.name = "ChatPluginStoryRetryError";
+        this.retryReason = reason?.trim() || "插件判定本次剧情输出不合格";
+        this.maxRetries = Math.min(30, Math.max(1, Math.floor(maxRetries) || 3));
+    }
+}
+
 const LLM_IMAGE_MAX_SIDE = 512;
 const LLM_IMAGE_JPEG_QUALITY = 0.72;
 
@@ -566,7 +579,7 @@ async function applyChatPluginLlmRequest<T extends { role: string }>(
     messages: T[],
     purpose: string,
     sessionId?: string,
-): Promise<{ messages: T[]; preset: PresetConfig | null }> {
+): Promise<{ messages: T[]; preset: PresetConfig | null; providerBody?: Record<string, unknown> }> {
     if (typeof window === "undefined") return { messages, preset };
     const payload = await runChatPluginTransform("llm.request", {
         messages: messages as unknown as LlmRequestPayload["messages"],
@@ -582,13 +595,32 @@ async function applyChatPluginLlmRequest<T extends { role: string }>(
     const nextMessages = Array.isArray(payload.messages)
         ? payload.messages as unknown as T[]
         : messages;
-    return { messages: nextMessages, preset: nextPreset };
+    const providerBody = payload.providerBody && typeof payload.providerBody === "object" && !Array.isArray(payload.providerBody)
+        ? payload.providerBody
+        : undefined;
+    return { messages: nextMessages, preset: nextPreset, providerBody };
+}
+
+function applyChatPluginProviderBody(
+    body: Record<string, unknown>,
+    patch?: Record<string, unknown>,
+): void {
+    if (!patch) return;
+    Object.assign(body, patch);
 }
 
 /** 聊天插件 llm.response 织入：模型原始回复在内置正则处理前交给插件改写 */
-async function applyChatPluginLlmResponse(text: string, purpose: string, sessionId?: string): Promise<string> {
+async function applyChatPluginLlmResponse(
+    text: string,
+    purpose: string,
+    sessionId?: string,
+    reasoning = "",
+): Promise<string> {
     if (typeof window === "undefined") return text;
-    const payload = await runChatPluginTransform("llm.response", { text, sessionId, purpose });
+    const payload = await runChatPluginTransform("llm.response", { text, reasoning, sessionId, purpose });
+    if (purpose === "story" && payload.retry === true) {
+        throw new ChatPluginStoryRetryError(payload.retryReason, payload.retryLimit);
+    }
     return typeof payload.text === "string" ? payload.text : text;
 }
 
@@ -815,6 +847,7 @@ export async function sendLLMStreamRequest(
     } : undefined;
     const requestMessages = toLlmRequestMessages(afterPlugins.messages);
     const request = buildProviderRequest(config, effectivePreset, requestMessages, { stream: true });
+    applyChatPluginProviderBody(request.body as Record<string, unknown>, afterPlugins.providerBody);
     publishDebugPromptSnapshot({ request, config, preset: effectivePreset, meta, options, requestKind: "completion" });
     const llmAbort = new AbortController();
     const llmTimeout = setTimeout(() => llmAbort.abort(), 500_000);
@@ -864,7 +897,7 @@ export async function sendLLMStreamRequest(
                 : "流式响应没有解析到文本增量。");
         }
         let rawOutput = options?.skipTimestampStrip ? streamedContent.trim() : stripHallucinatedTimestamps(streamedContent.trim());
-        rawOutput = await applyChatPluginLlmResponse(rawOutput, pluginPurpose, options?.debugSessionId);
+        rawOutput = await applyChatPluginLlmResponse(rawOutput, pluginPurpose, options?.debugSessionId, streamedReasoning);
 
         // Store API log entry — mirror sendLLMRequest so streaming calls also show up
         // in the "底层调用大模型日志" panel. reasoning 单独存思维链原文，供「查看原始」直接展示。
@@ -931,6 +964,7 @@ export async function sendLLMRequest(
     const effectivePreset = afterPlugins.preset;
     const requestMessages = toLlmRequestMessages(afterPlugins.messages);
     const request = buildProviderRequest(config, effectivePreset, requestMessages);
+    applyChatPluginProviderBody(request.body as Record<string, unknown>, afterPlugins.providerBody);
     publishDebugPromptSnapshot({ request, config, preset: effectivePreset, meta, options, requestKind: "completion" });
     const requestBodyJson = JSON.stringify(request.body);
     const requestBodySize = requestBodyJson.length;
@@ -985,7 +1019,7 @@ export async function sendLLMRequest(
             }
         }
 
-        rawOutput = await applyChatPluginLlmResponse(rawOutput, pluginPurpose, options?.debugSessionId);
+        rawOutput = await applyChatPluginLlmResponse(rawOutput, pluginPurpose, options?.debugSessionId, parsed.reasoning || "");
 
         if (!rawOutput && parsed.toolCalls.length === 0) {
             const emptyDetails = emptyResponseDetails(parsed.raw);
@@ -1126,6 +1160,7 @@ export async function sendLLMToolStreamRequest(
     const afterPlugins = await applyChatPluginLlmRequest(preset, messages, pluginPurpose, options?.debugSessionId);
     const effectivePreset = afterPlugins.preset;
     const request = buildProviderRequest(config, effectivePreset, afterPlugins.messages, { tools, stream: true, maxTokens: options?.maxTokens });
+    applyChatPluginProviderBody(request.body as Record<string, unknown>, afterPlugins.providerBody);
     publishDebugPromptSnapshot({ request, config, preset: effectivePreset, meta, options, requestKind: "native-tools-stream", tools });
     const llmAbort = new AbortController();
     const llmTimeout = setTimeout(() => llmAbort.abort(), 500_000);
@@ -1215,7 +1250,7 @@ export async function sendLLMToolStreamRequest(
             content += finalContent;
             await callbacks?.onDelta?.(finalContent);
         }
-        content = await applyChatPluginLlmResponse(content, pluginPurpose, options?.debugSessionId);
+        content = await applyChatPluginLlmResponse(content, pluginPurpose, options?.debugSessionId, reasoning);
 
         const sanitizedMessages = request.messagesForLog.map(m => ({
             ...m,
@@ -1280,6 +1315,7 @@ export async function sendLLMToolRequest(
     const afterPlugins = await applyChatPluginLlmRequest(preset, messages, pluginPurpose, options?.debugSessionId);
     const effectivePreset = afterPlugins.preset;
     const request = buildProviderRequest(config, effectivePreset, afterPlugins.messages, { tools });
+    applyChatPluginProviderBody(request.body as Record<string, unknown>, afterPlugins.providerBody);
     publishDebugPromptSnapshot({ request, config, preset: effectivePreset, meta, options, requestKind: "native-tools", tools });
     const llmAbort = new AbortController();
     const llmTimeout = setTimeout(() => llmAbort.abort(), 500_000);
@@ -1299,7 +1335,7 @@ export async function sendLLMToolRequest(
         if (options?.includeReasoning && parsed.reasoning) {
             rawOutput = `<think>\n${parsed.reasoning}\n</think>\n\n${rawOutput}`;
         }
-        rawOutput = await applyChatPluginLlmResponse(rawOutput, pluginPurpose, options?.debugSessionId);
+        rawOutput = await applyChatPluginLlmResponse(rawOutput, pluginPurpose, options?.debugSessionId, parsed.reasoning || "");
 
         if (!rawOutput && parsed.toolCalls.length === 0) {
             const emptyDetails = emptyResponseDetails(parsed.raw);
