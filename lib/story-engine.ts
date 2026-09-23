@@ -142,7 +142,7 @@ export function getStoryRenderSignature(characterId: string): { regexSignature: 
 export async function generateStoryCompletion(
   characterId: string,
   history: StoryMessage[],
-  options?: { sessionId?: string; sessionFoldTags?: string; sessionContextExcludedTags?: string; memoryAnchorAt?: string; vnChoicesEnabled?: boolean; streamingEnabled?: boolean; onStreamUpdate?: (content: string) => void; signal?: AbortSignal },
+  options?: { sessionId?: string; sessionFoldTags?: string; sessionContextExcludedTags?: string; memoryAnchorAt?: string; vnChoicesEnabled?: boolean; streamingEnabled?: boolean; onStreamUpdate?: (content: string) => void; onReasoningUpdate?: (reasoning: string) => void; signal?: AbortSignal },
 ): Promise<StoryGenerationResult> {
   const character = loadCharacters().find((item) => item.id === characterId);
   if (!character) {
@@ -162,14 +162,20 @@ export async function generateStoryCompletion(
   while (true) {
     try {
       options?.onStreamUpdate?.("");
+      options?.onReasoningUpdate?.("");
       if (options?.streamingEnabled) {
         let streamedContent = "";
+        let streamedReasoning = "";
         const result = await sendLLMStreamRequest(apiConfig, preset, llmMessages, regexes, {
           characterName: character.name,
         }, { skipOutputRegex: true, includeReasoning: true, appId: "story", appTags: ["story"], debugSessionId: options?.sessionId, signal: options?.signal }, {
           onDelta: (delta) => {
             streamedContent += delta;
             options?.onStreamUpdate?.(streamedContent);
+          },
+          onReasoningDelta: (delta) => {
+            streamedReasoning += delta;
+            options?.onReasoningUpdate?.(streamedReasoning);
           },
         });
         rawOutput = result.content;
