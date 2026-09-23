@@ -157,9 +157,11 @@ const STORY_LOAD_MORE_COUNT = 10;
 function StoryGeneratingIndicator({
   characterName,
   avatar,
+  streamingContent,
 }: {
   characterName: string;
   avatar?: string;
+  streamingContent?: string;
 }) {
   const [statusIndex, setStatusIndex] = useState(0);
   const status = STORY_GENERATION_STATUS[statusIndex % STORY_GENERATION_STATUS.length];
@@ -184,12 +186,18 @@ function StoryGeneratingIndicator({
       </div>
       <div className="story-bubble-wrap">
         <div className="story-bubble story-generating-bubble" aria-label="正在生成剧情">
-          <span className="story-generating-copy">{status}</span>
-          <span className="story-generating-dots" aria-hidden="true">
-            <i />
-            <i />
-            <i />
-          </span>
+          {streamingContent ? (
+            <div style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{streamingContent}</div>
+          ) : (
+            <>
+              <span className="story-generating-copy">{status}</span>
+              <span className="story-generating-dots" aria-hidden="true">
+                <i />
+                <i />
+                <i />
+              </span>
+            </>
+          )}
         </div>
       </div>
     </article>
@@ -286,6 +294,7 @@ export function StoryApp({ onClose }: StoryAppProps) {
   const [contextExcludedTagsDraft, setContextExcludedTagsDraft] = useState("");
   // 生成状态按会话记录：避免在 A 会话生成时切到 B 会话也显示"正在生成"
   const [generatingSessionIds, setGeneratingSessionIds] = useState<ReadonlySet<string>>(() => new Set());
+  const [streamingPreview, setStreamingPreview] = useState<{ sessionId: string; runId: string; content: string } | null>(null);
   // 抽屉滑动手势用 ref 而不是 state：手指按住时 touchmove 每帧都在触发，
   // 逐帧 setState 会让整个剧情页以事件频率重渲染（iOS 上拉到顶/底按住不动时
   // 表现为持续的重排/闪烁）
@@ -669,6 +678,12 @@ export function StoryApp({ onClose }: StoryAppProps) {
     const generationRun = createStoryGenerationRun(sessionId);
     const generationRunId = generationRun.runId;
     const isCurrentGeneration = () => mountedRef.current && isStoryGenerationRunActive(sessionId, generationRunId);
+    setStreamingPreview(null);
+    const onStreamUpdate = (content: string) => {
+      if (isCurrentGeneration() && activeSessionIdRef.current === sessionId) {
+        setStreamingPreview({ sessionId, runId: generationRunId, content });
+      }
+    };
 
     try {
       const historyForGeneration = loadStoryMessages(sessionId);
@@ -678,6 +693,8 @@ export function StoryApp({ onClose }: StoryAppProps) {
         sessionContextExcludedTags: currentSession?.contextExcludedTags,
         memoryAnchorAt: currentSession?.sessionType === "main" ? undefined : currentSession?.memoryAnchorAt,
         vnChoicesEnabled: currentSession?.uiPrefs?.vnChoicesEnabled === true,
+        streamingEnabled: currentSession?.uiPrefs?.streamingEnabled === true,
+        onStreamUpdate,
         signal: generationRun.controller.signal,
       });
       if (!isCurrentGeneration()) return;
@@ -722,6 +739,7 @@ export function StoryApp({ onClose }: StoryAppProps) {
       setStorageVersion((value) => value + 1);
     } finally {
       if (finishStoryGenerationRun(sessionId, generationRunId)) {
+        setStreamingPreview((current) => current?.runId === generationRunId ? null : current);
         markGenerating(sessionId, false);
       }
     }
@@ -731,6 +749,7 @@ export function StoryApp({ onClose }: StoryAppProps) {
     if (!activeSessionId) return;
     const cancelled = cancelStoryGenerationRun(activeSessionId);
     if (!cancelled && !isGenerating) return;
+    setStreamingPreview((current) => current?.sessionId === activeSessionId ? null : current);
     markGenerating(activeSessionId, false);
   }
 
@@ -881,6 +900,12 @@ export function StoryApp({ onClose }: StoryAppProps) {
     const generationRun = createStoryGenerationRun(sessionId);
     const generationRunId = generationRun.runId;
     const isCurrentGeneration = () => mountedRef.current && isStoryGenerationRunActive(sessionId, generationRunId);
+    setStreamingPreview(null);
+    const onStreamUpdate = (content: string) => {
+      if (isCurrentGeneration() && activeSessionIdRef.current === sessionId) {
+        setStreamingPreview({ sessionId, runId: generationRunId, content });
+      }
+    };
     try {
       const result = await generateStoryCompletion(characterId, contextMessages, {
         sessionId,
@@ -888,6 +913,8 @@ export function StoryApp({ onClose }: StoryAppProps) {
         sessionContextExcludedTags: currentSession?.contextExcludedTags,
         memoryAnchorAt: currentSession?.sessionType === "main" ? undefined : currentSession?.memoryAnchorAt,
         vnChoicesEnabled: currentSession?.uiPrefs?.vnChoicesEnabled === true,
+        streamingEnabled: currentSession?.uiPrefs?.streamingEnabled === true,
+        onStreamUpdate,
         signal: generationRun.controller.signal,
       });
       if (!isCurrentGeneration()) return;
@@ -906,6 +933,7 @@ export function StoryApp({ onClose }: StoryAppProps) {
       setStorageVersion(v => v + 1);
     } finally {
       if (finishStoryGenerationRun(sessionId, generationRunId)) {
+        setStreamingPreview((current) => current?.runId === generationRunId ? null : current);
         markGenerating(sessionId, false);
       }
     }
@@ -1036,6 +1064,14 @@ export function StoryApp({ onClose }: StoryAppProps) {
 
         <div className="story-drawer-section">
           <div className="story-drawer-eyebrow">显示选项</div>
+          <label className="story-pref-row">
+            <span>流式传输</span>
+            <input
+              type="checkbox"
+              checked={uiPrefs.streamingEnabled === true}
+              onChange={(event) => applySessionUpdates({ uiPrefs: { streamingEnabled: event.currentTarget.checked } })}
+            />
+          </label>
           <label className="story-pref-row">
             <span>剧情选择项</span>
             <input
@@ -1329,6 +1365,9 @@ export function StoryApp({ onClose }: StoryAppProps) {
               <StoryGeneratingIndicator
                 characterName={currentCharacter.name}
                 avatar={currentCharacter.avatar || undefined}
+                streamingContent={uiPrefs.streamingEnabled && streamingPreview?.sessionId === activeSessionId
+                  ? streamingPreview.content.replace(/<(?:think|thinking)\b[^>]*>[\s\S]*?(?:<\/(?:think|thinking)>|$)/gi, "")
+                  : undefined}
               />
             ) : null}
           </div>
