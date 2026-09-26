@@ -1,3 +1,5 @@
+import { resolveIdentityDatabase, IDENTITY_SCOPE_KEY, identityLocalKey, logicalIdentityLocalKey } from "./identity-scope";
+import { readIdentityKvEntries } from "./kv-db";
 import { DATA_MODULES } from "./data-management/modules";
 import type { DataModuleDefinition, IndexedDbSource, KvSource, LocalStorageSource } from "./data-management/types";
 
@@ -132,7 +134,7 @@ function hasLocalStorage(): boolean {
 async function openDb(dbName: string): Promise<IDBDatabase | null> {
     if (!hasIndexedDb()) return null;
     return new Promise((resolve) => {
-        const request = indexedDB.open(dbName);
+        const request = indexedDB.open(resolveIdentityDatabase(dbName));
         request.onsuccess = () => resolve(request.result);
         request.onerror = () => resolve(null);
         request.onblocked = () => resolve(null);
@@ -207,26 +209,18 @@ async function countStore(dbName: string, storeName: string): Promise<number> {
 }
 
 async function readKvRecords(source: KvSource): Promise<Array<{ key: string; value: string }>> {
-    const db = await openDb("AiPhoneKvDB");
-    if (!db || !Array.from(db.objectStoreNames).includes("entries")) return [];
-    try {
-        const transaction = db.transaction("entries", "readonly");
-        const records = await runRequest<Array<{ key: string; value: string }>>(transaction.objectStore("entries").getAll());
-        return records.filter(record => matchesKey(record.key, source));
-    } catch {
-        return [];
-    } finally {
-        db.close();
-    }
+    const records = await readIdentityKvEntries();
+    return records.filter(record => record.key !== IDENTITY_SCOPE_KEY && record.key !== "identity_bridge_owners_v1" && matchesKey(record.key, source));
 }
 
 function readLocalStorageRecords(source: LocalStorageSource): Array<{ key: string; value: string }> {
     if (!hasLocalStorage()) return [];
     const records: Array<{ key: string; value: string }> = [];
     for (let index = 0; index < window.localStorage.length; index += 1) {
-        const key = window.localStorage.key(index);
+        const physicalKey = window.localStorage.key(index);
+        const key = physicalKey ? logicalIdentityLocalKey(physicalKey) : null;
         if (!key || !matchesKey(key, source)) continue;
-        const value = window.localStorage.getItem(key);
+        const value = window.localStorage.getItem(identityLocalKey(key));
         if (value !== null) records.push({ key, value });
     }
     return records;
@@ -762,7 +756,7 @@ export async function readLocalDataFile(input: LocalDataReadInput): Promise<unkn
         return readKeyValueFile("kv", path.key, record?.value ?? null, input);
     }
     if (path.kind === "localStorageFile") {
-        const raw = hasLocalStorage() ? window.localStorage.getItem(path.key) : null;
+        const raw = hasLocalStorage() ? window.localStorage.getItem(identityLocalKey(path.key)) : null;
         return readKeyValueFile("localStorage", path.key, raw, input);
     }
     return listLocalDataDirectory({ path: input.path, limit: input.limit, offset: input.offset });
@@ -812,7 +806,7 @@ export async function inspectLocalDataFields(input: LocalDataFieldsInput): Promi
         const parsed = tryParseJson(record.value);
         sampleValues = Array.isArray(parsed) ? parsed.slice(0, sample) : [parsed];
     } else if (path.kind === "localStorageFile") {
-        const raw = hasLocalStorage() ? window.localStorage.getItem(path.key) : null;
+        const raw = hasLocalStorage() ? window.localStorage.getItem(identityLocalKey(path.key)) : null;
         if (raw === null) throw new Error(`localStorage 文件不存在：${path.key}`);
         const parsed = tryParseJson(raw);
         sampleValues = Array.isArray(parsed) ? parsed.slice(0, sample) : [parsed];
@@ -834,7 +828,7 @@ async function searchPath(path: SourcePath, input: LocalDataSearchInput, remaini
         return record ? searchKeyValueRecord("kv", `/${path.module.id}/kv`, record.key, record.value, input.query, remaining, fields) : [];
     }
     if (path.kind === "localStorageFile") {
-        const raw = hasLocalStorage() ? window.localStorage.getItem(path.key) : null;
+        const raw = hasLocalStorage() ? window.localStorage.getItem(identityLocalKey(path.key)) : null;
         return raw ? searchKeyValueRecord("localStorage", `/${path.module.id}/localStorage`, path.key, raw, input.query, remaining, fields) : [];
     }
 

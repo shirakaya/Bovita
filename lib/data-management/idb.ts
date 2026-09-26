@@ -1,3 +1,4 @@
+import { resolveIdentityDatabase, IDENTITY_SCOPE_KEY, identityLocalKey, logicalIdentityLocalKey, getRuntimeIdentityId } from "../identity-scope";
 import type {
   ClearResult,
   DataSource,
@@ -20,7 +21,7 @@ import {
   type MediaCollector,
   type MediaResolver,
 } from "./serializers";
-import { kvEntries, kvGet, kvRemove, kvSetAsync } from "../kv-db";
+import { readIdentityKvEntries, kvEntries, kvGet, kvRemove, kvRemoveAsync, kvSetAsync } from "../kv-db";
 
 type SourceStats = {
   records: number;
@@ -52,6 +53,7 @@ function ensureKnownStoreIndexes(dbName: string, store: IDBObjectStore): void {
 }
 
 function matchesKey(key: string, source: { keys?: string[]; prefixes?: string[]; includeAll?: boolean; excludeKeys?: string[]; excludePrefixes?: string[] }): boolean {
+  if (key === IDENTITY_SCOPE_KEY || key === "identity_bridge_owners_v1") return false;
   if (source.excludeKeys?.includes(key)) return false;
   if (source.excludePrefixes?.some((prefix) => key.startsWith(prefix))) return false;
   if (source.includeAll) return true;
@@ -141,7 +143,7 @@ function tryReplaceEmptyJsonValue(existingRaw: string, incomingRaw: string): str
 export function deleteDatabase(dbName: string): Promise<void> {
   return new Promise((resolve) => {
     if (!hasIndexedDb()) return resolve();
-    const request = indexedDB.deleteDatabase(dbName);
+    const request = indexedDB.deleteDatabase(resolveIdentityDatabase(dbName));
     request.onsuccess = () => resolve();
     request.onerror = () => resolve();
     request.onblocked = () => resolve();
@@ -156,7 +158,7 @@ async function openDb(
 ): Promise<IDBDatabase | null> {
   if (!hasIndexedDb()) return null;
   return new Promise((resolve) => {
-    const request = version ? indexedDB.open(dbName, version) : indexedDB.open(dbName);
+    const request = version ? indexedDB.open(resolveIdentityDatabase(dbName), version) : indexedDB.open(resolveIdentityDatabase(dbName));
     let settled = false;
     let blockedTimer: ReturnType<typeof setTimeout> | undefined;
     let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
@@ -301,32 +303,8 @@ async function readKvRecords(source: KvSource): Promise<{ key: string; value: st
   // 空的/不完整的，退回缓存会生成一份「导出成功」但缺数据的备份——用户换设备
   // 导入后才发现历史没了。宁可备份报错，也不产出表面正常的残缺 ZIP。
   const byKey = new Map<string, { key: string; value: string }>();
-  const db = await openDb("AiPhoneKvDB");
-  if (!db) {
-    throw new Error("本机数据库（AiPhoneKvDB）打不开，为避免生成不完整的备份已中止。请重启浏览器后重试。");
-  }
-  try {
-    // 库刚建、还没有 entries 表 = 这台设备确实没写过 KV 数据，不算读取失败
-    if (Array.from(db.objectStoreNames).includes("entries")) {
-      const transaction = db.transaction("entries", "readonly");
-      const request = transaction.objectStore("entries").openCursor();
-      await new Promise<void>((resolve, reject) => {
-        request.onsuccess = () => {
-          const cursor = request.result;
-          if (!cursor) return resolve();
-          const record = cursor.value as { key: string; value: string };
-          if (matchesKey(record.key, source)) byKey.set(record.key, record);
-          cursor.continue();
-        };
-        request.onerror = () => reject(request.error);
-        transaction.onerror = () => reject(transaction.error);
-        transaction.onabort = () => reject(transaction.error);
-      });
-    }
-  } catch (error) {
-    throw new Error(`本机数据读取失败，为避免生成不完整的备份已中止（${error instanceof Error ? error.message : String(error)}）。请重试。`);
-  } finally {
-    db.close();
+  for (const record of await readIdentityKvEntries()) {
+    if (matchesKey(record.key, source)) byKey.set(record.key, record);
   }
 
   // 内存缓存仍然要并进来：kvSet 是先写缓存再异步落盘，缓存可能比 IndexedDB 新
@@ -349,9 +327,10 @@ async function exportLocalStorageSource(source: LocalStorageSource, collector?: 
   if (typeof window === "undefined") return { type: "localStorage", records: [] };
   const records: { key: string; value: string }[] = [];
   for (let index = 0; index < window.localStorage.length; index += 1) {
-    const key = window.localStorage.key(index);
+    const physicalKey = window.localStorage.key(index);
+    const key = physicalKey ? logicalIdentityLocalKey(physicalKey) : null;
     if (!key || !matchesKey(key, source)) continue;
-    const value = window.localStorage.getItem(key);
+    const value = window.localStorage.getItem(identityLocalKey(key));
     if (value !== null) records.push({ key, value: await serializeStorageString(value, collector) });
   }
   return { type: "localStorage", records };
@@ -534,13 +513,13 @@ export async function importSource(
     for (const record of payload.records) {
       // 单条失败（配额满、单条数据损坏）只损失这一条，剩下的照常导入。
       try {
-        const exists = window.localStorage.getItem(record.key) !== null;
+        const exists = window.localStorage.getItem(identityLocalKey(record.key)) !== null;
         if (exists && !overwrite) {
           result.skipped += 1;
           continue;
         }
         const value = await deserializeStorageString(record.value, resolver);
-        window.localStorage.setItem(record.key, value);
+        window.localStorage.setItem(identityLocalKey(record.key), value);
         if (exists) result.overwritten += 1;
         else result.added += 1;
       } catch (error) {
@@ -557,7 +536,19 @@ export async function importSource(
       // 逐条兜底：以前整个循环包在一个 try 里，第一条出错后剩余记录全部
       // 静默丢弃——正是「恢复内容不全」的来源之一。
       try {
-        const incoming = await deserializeStorageString(record.value, resolver);
+        let incoming = await deserializeStorageString(record.value, resolver);
+        // Restoring into B must not redirect the next boot to A midway through import.
+        const runtimeId = getRuntimeIdentityId();
+        if (runtimeId && record.key === "ai_phone_bindings_v1") {
+          const config = JSON.parse(incoming);
+          incoming = JSON.stringify({ ...config, globalDefaults: { ...config.globalDefaults, userIdentityId: runtimeId } });
+        }
+        if (runtimeId && record.key === "ai_phone_user_identities_v1") {
+          const identities = JSON.parse(incoming) as Array<{ id: string }>;
+          const current = (JSON.parse(kvGet(record.key) || "[]") as Array<{ id: string }>).find(item => item.id === runtimeId);
+          if (current && !identities.some(item => item.id === runtimeId)) identities.push(current);
+          incoming = JSON.stringify(identities);
+        }
         const existing = kvGet(record.key);
         const exists = existing !== null;
         if (!exists) {
@@ -651,11 +642,12 @@ export async function clearSource(source: DataSource): Promise<ClearResult> {
   if (source.type === "localStorage") {
     const keys: string[] = [];
     for (let index = 0; index < window.localStorage.length; index += 1) {
-      const key = window.localStorage.key(index);
+      const physicalKey = window.localStorage.key(index);
+      const key = physicalKey ? logicalIdentityLocalKey(physicalKey) : null;
       if (key && matchesKey(key, source)) keys.push(key);
     }
     for (const key of keys) {
-      window.localStorage.removeItem(key);
+      window.localStorage.removeItem(identityLocalKey(key));
       result.removed += 1;
     }
     return result;
@@ -663,25 +655,9 @@ export async function clearSource(source: DataSource): Promise<ClearResult> {
 
   if (source.type === "kv") {
     const records = await readKvRecords(source);
-    const db = await openDb("AiPhoneKvDB");
-    if (!db || !Array.from(db.objectStoreNames).includes("entries")) return result;
-    const removedKeys: string[] = [];
-    try {
-      const transaction = db.transaction("entries", "readwrite");
-      const store = transaction.objectStore("entries");
-      for (const record of records) {
-        store.delete(record.key);
-        removedKeys.push(record.key);
-        result.removed += 1;
-      }
-      await transactionDone(transaction);
-      for (const key of removedKeys) {
-        kvRemove(key);
-      }
-    } catch (error) {
-      result.errors.push(String(error));
-    } finally {
-      db.close();
+    for (const record of records) {
+      try { await kvRemoveAsync(record.key); result.removed += 1; }
+      catch (error) { result.errors.push(String(error)); }
     }
     return result;
   }

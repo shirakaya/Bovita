@@ -6,6 +6,7 @@ import { ChatContactsList } from "./chat-contacts-list";
 import { MomentsFeed } from "./moments-feed";
 import { ChatRoom } from "./chat-room";
 import { MascotChatRoom } from "./mascot-chat-room";
+import { IdentitySwitchButton } from "./identity-switch-button";
 import { UserProfilePanel } from "./user-profile-panel";
 import { MessageCircle, Users, Aperture, UserRound } from "lucide-react";
 import { ChatSession, loadChatSessions, pushChatMessage, hydrateChatStorage } from "@/lib/chat-storage";
@@ -289,13 +290,13 @@ export const PhoneChatApp = memo(function PhoneChatApp({ onClose, initialSession
                     <CompassIcon active={activeTab === "feeds"} />
                     <span style={{ fontSize: "calc(10px*var(--app-text-scale,1))", color: activeTab === "feeds" ? undefined : "var(--c-text)" }}>动态</span>
                 </button>
-                <button
+                <IdentitySwitchButton
                     className={`chat-tab ${activeTab === "me" ? "chat-tab-active" : ""}`}
                     onClick={() => setActiveTab("me")}
                 >
                     <MeIcon active={activeTab === "me"} />
                     <span style={{ fontSize: "calc(10px*var(--app-text-scale,1))", color: activeTab === "me" ? undefined : "var(--c-text)" }}>主页</span>
-                </button>
+                </IdentitySwitchButton>
             </nav>
 
             {/* Chat Rooms — all visited sessions stay mounted, only active one is visible */}

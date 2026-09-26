@@ -1,3 +1,4 @@
+import { resolveIdentityDatabase } from "./identity-scope";
 import { callQaAgent, compactQaContext, formatQaErrorMessage, type QaContextEntry } from "./qa-agent-engine";
 import { QA_TOOLS, formatQaToolSubtitle, type QaCreatedContent, type QaProposedCommit } from "./qa-agent-tools";
 import { loadQaGithubConfig } from "./qa-github";
@@ -7,7 +8,7 @@ import { commitQaFiles, revertQaCommit, type QaCommitResult } from "./qa-github-
 // 模式与 mascot-chat-store 一致：裸 IndexedDB + 模块级单例 + subscribe/snapshot。
 // 独立 DB，多会话。
 
-const QA_DB_NAME = "AiPhoneQaDB";
+const QA_DB_NAME = resolveIdentityDatabase("AiPhoneQaDB");
 // A restore into a fresh browser creates the missing store in DB version 2.
 // Keep the owner at least that high so reopening the restored DB cannot fail
 // with VersionError (opening a lower version than the one on disk).

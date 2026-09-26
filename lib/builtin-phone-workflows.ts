@@ -134,7 +134,7 @@ function openIndexedDb(name) {
 }
 
 async function readPhoneKv(key) {
-    var db = await openIndexedDb("AiPhoneKvDB");
+    var db = await openIndexedDb(context.identityKvDatabase || "AiPhoneKvDB");
     if (db && Array.from(db.objectStoreNames).includes("entries")) {
         try {
             var transaction = db.transaction("entries", "readonly");
@@ -144,7 +144,7 @@ async function readPhoneKv(key) {
             db.close();
         }
     }
-    if (typeof window !== "undefined" && window.localStorage) {
+    if ((!context.identityKvDatabase || context.identityKvDatabase === "AiPhoneKvDB") && typeof window !== "undefined" && window.localStorage) {
         return window.localStorage.getItem(key);
     }
     return null;

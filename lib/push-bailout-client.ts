@@ -1,3 +1,4 @@
+import { identityStorageName } from "./identity-scope";
 // 离线推送·兜底预约（客户端侧）：
 // 追问排期时把「组装好的完整请求快照」预约到服务端；本地正常触发就撤销，
 // App 被杀则由服务端 cron 到点接管生成并推送。组装用的就是前台同一条
@@ -39,7 +40,7 @@ import type { LLMMessage } from "./llm-prompt-assembler";
 // 安静时段无需在此处理——这两类任务落在安静时段根本不会预约（见上方门控）。
 
 const CALL_INVITE_WINDOW_MS = 20 * 60 * 60 * 1000;
-const CALL_INVITE_STORE_KEY = "ai_phone_call_invite_armed_v1";
+const CALL_INVITE_STORE_KEY = identityStorageName("ai_phone_call_invite_armed_v1");
 
 const CALL_INVITE_INSTRUCTION = "（可选能力：如果你此刻更想直接给对方打语音电话——想念、着急、有情绪、"
     + "或者事情几句话说不清——就在回复的第一行使用你已有的小手机通话格式：[我向当前聊天对象发起了语音通话]，"

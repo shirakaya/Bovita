@@ -1,3 +1,4 @@
+import { resolveIdentityDatabase } from "./identity-scope";
 import { getMascotContext, type MascotPageContext } from "./mascot-context";
 import { mascotFillField } from "./mascot-events";
 import {
@@ -18,7 +19,7 @@ import {
 } from "./mascot-tools";
 import { isMascotPanelOpen } from "./mascot-state";
 
-const MASCOT_DB_NAME = "AiPhoneMascotDB";
+const MASCOT_DB_NAME = resolveIdentityDatabase("AiPhoneMascotDB");
 const MASCOT_DB_VERSION = 2;
 const MASCOT_CHAT_STORE = "chat";
 const MASCOT_MESSAGES_KEY = "messages"; // 旧版单会话键，仅用于迁移

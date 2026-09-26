@@ -686,6 +686,10 @@ export async function scanAllStorageStrings(scan: StorageStringScanner, excludeD
       }
     }
   }
+  // Shared assets can still be referenced by an inactive identity.
+  for (const db of await indexedDB.databases()) {
+    if (db.name && (db.name.includes("__identity_") || db.name === "AiPhoneKvDB") && !excluded.has(db.name)) indexedDbNames.add(db.name);
+  }
   for (const dbName of indexedDbNames) {
     await scanIndexedDbSourceWithScanner(dbName, scan).catch(() => undefined);
   }

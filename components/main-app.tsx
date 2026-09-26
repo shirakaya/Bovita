@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { IDENTITY_SCOPE_KEY, IDENTITY_SWITCHING_EVENT, isIdentitySwitching } from "@/lib/identity-scope";
 import { ArrowRight } from "lucide-react";
 
 import { AccountGate } from "@/components/auth/account-gate";
@@ -228,6 +229,14 @@ async function prepareDesktopThemeForFirstPaint(): Promise<PreparedDesktopTheme>
 }
 
 export function MainApp() {
+  const [identitySwitching, setIdentitySwitching] = useState(false);
+  useEffect(() => {
+    const update = () => setIdentitySwitching(isIdentitySwitching());
+    const otherTab = (event: StorageEvent) => { if (event.key === IDENTITY_SCOPE_KEY && event.newValue !== event.oldValue) window.location.reload(); };
+    window.addEventListener(IDENTITY_SWITCHING_EVENT, update);
+    window.addEventListener("storage", otherTab);
+    return () => { window.removeEventListener(IDENTITY_SWITCHING_EVENT, update); window.removeEventListener("storage", otherTab); };
+  }, []);
   const [preparedDesktopTheme, setPreparedDesktopTheme] = useState<PreparedDesktopTheme | null>(null);
   const [hydrated, setHydrated] = useState(false);
   const [splashDismissed, setSplashDismissed] = useState(false);
@@ -262,7 +271,7 @@ export function MainApp() {
       if (cancelled) return;
       setPreparedDesktopTheme(nextPreparedTheme);
       setHydrated(true);
-      if (hasPendingMcpOAuthCallback()) {
+      if (hasPendingMcpOAuthCallback() || sessionStorage.getItem("ai_phone_open_chat_after_identity_switch")) {
         setSplashDismissed(true);
       }
     })();
@@ -325,6 +334,7 @@ export function MainApp() {
 
   return (
     <AccountGate>
+      {identitySwitching && <div role="status" style={{ position: "fixed", inset: 0, zIndex: 2147483647, display: "grid", placeItems: "center", background: "var(--c-bg, #fff)", color: "var(--c-text, #222)" }}>正在切换用户…</div>}
       {!splashDismissed ? (
         <SplashScreen ready={hydrated} onEnter={() => setSplashDismissed(true)} />
       ) : (

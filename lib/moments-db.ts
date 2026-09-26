@@ -1,3 +1,4 @@
+import { resolveIdentityDatabase } from "./identity-scope";
 // lib/moments-db.ts
 // IndexedDB persistence layer for Moments (朋友圈) posts & comments via Dexie.js.
 // Per-record rows behind the synchronous in-memory cache in moments-storage.ts,
@@ -12,7 +13,7 @@ class MomentsDatabase extends Dexie {
     comments!: Dexie.Table<MomentComment, string>;
 
     constructor() {
-        super("AiPhoneMomentsDB");
+        super(resolveIdentityDatabase("AiPhoneMomentsDB"));
         this.version(1).stores({
             posts: "id, authorId, createdAt",
             comments: "id, postId, createdAt",

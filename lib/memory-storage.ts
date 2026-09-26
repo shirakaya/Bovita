@@ -1,3 +1,4 @@
+import { resolveIdentityDatabase } from "./identity-scope";
 // lib/memory-storage.ts
 // IndexedDB persistence for long-term memory entries + short-term events + localStorage config.
 
@@ -8,7 +9,7 @@ import { openIndexedDbAtLeast } from "./idb-open";
 
 // ── Long-term memory DB (unchanged from v1) ──
 
-const DB_NAME = "ai_phone_memory_db_v1";
+const DB_NAME = resolveIdentityDatabase("ai_phone_memory_db_v1");
 const DB_VERSION = 3;
 const STORE_NAME = "memories";
 

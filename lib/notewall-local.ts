@@ -1,9 +1,10 @@
 "use client";
 
+import { identityStorageName } from "./identity-scope";
 import type { NoteWallTimerSettings } from "./notewall-types";
 
-const TIMER_KEY = "ai_phone_note_wall_timer_settings_v1";
-const LOCAL_USER_KEY = "ai_phone_note_wall_local_user_v1";
+const TIMER_KEY = identityStorageName("ai_phone_note_wall_timer_settings_v1");
+const LOCAL_USER_KEY = identityStorageName("ai_phone_note_wall_local_user_v1");
 
 export const DEFAULT_NOTE_WALL_TIMER_SETTINGS: NoteWallTimerSettings = {
   enabled: false,

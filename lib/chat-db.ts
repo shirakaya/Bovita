@@ -1,3 +1,4 @@
+import { resolveIdentityDatabase, isLegacyIdentityScope } from "./identity-scope";
 // lib/chat-db.ts
 // IndexedDB persistence layer for chat data using Dexie.js.
 // Provides async persistence behind the synchronous in-memory cache in chat-storage.ts.
@@ -13,7 +14,7 @@ class ChatDatabase extends Dexie {
     contacts!: Dexie.Table<ChatContact, string>;
 
     constructor() {
-        super("AiPhoneChatDB");
+        super(resolveIdentityDatabase("AiPhoneChatDB"));
         this.version(1).stores({
             messages: "id, sessionId, createdAt",
             sessions: "id, contactId",
@@ -44,7 +45,7 @@ export async function initChatDb(): Promise<{
         return { messages: [], sessions: [], contacts: [] };
     }
 
-    const alreadyMigrated = window.localStorage.getItem(LS_MIGRATED_FLAG);
+    const alreadyMigrated = !isLegacyIdentityScope() || window.localStorage.getItem(LS_MIGRATED_FLAG);
 
     if (!alreadyMigrated) {
         // Guard against a lost migration flag while IndexedDB still holds data.

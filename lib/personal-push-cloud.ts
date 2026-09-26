@@ -1,3 +1,4 @@
+import { getRuntimeIdentityId } from "./identity-scope";
 import {
   isCloudBackupConfigured,
   loadCloudBackupConfig,
@@ -127,6 +128,13 @@ export async function setPersonalPushCloudScheduled(enabled: boolean): Promise<v
 }
 
 export function pushJobsFetch(init: RequestInit): Promise<Response> {
+  if (init.method === "POST" && typeof init.body === "string") {
+    const body = JSON.parse(init.body);
+    if (body.payload?.merge) {
+      body.payload.merge.identityId = getRuntimeIdentityId();
+      init = { ...init, body: JSON.stringify(body) };
+    }
+  }
   if (isPersonalPushCloudActive()) return personalPushFetch("jobs", init);
   return fetch("/api/push/jobs", { ...init, credentials: "include" });
 }

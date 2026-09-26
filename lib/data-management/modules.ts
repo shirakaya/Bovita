@@ -8,6 +8,7 @@ import type { DataModuleDefinition, DataModuleId } from "./types";
 const RESERVED_LOCAL_STORAGE_KEYS = [
   "ai_phone_idb_migrated_v1",
   "ai_phone_settings_idb_migrated_v1",
+  "ai_phone_identity_scope_v1",
 ];
 
 // Never put the credential used to reach the cloud inside that same cloud
@@ -40,6 +41,7 @@ const PRIMARY_DATA_MODULES: DataModuleDefinition[] = [
     critical: true,
     sources: [
       { type: "indexeddb", dbName: "AiPhoneChatDB", label: "聊天记录" },
+      { type: "indexeddb", dbName: "AiPhonePushInboxDB", label: "待导入的离线消息" },
       { type: "indexeddb", dbName: "AiPhoneMediaCacheDB", label: "聊天与工具媒体缓存" },
       { type: "indexeddb", dbName: "AiPhoneQaDB", label: "答疑助手会话" },
       {

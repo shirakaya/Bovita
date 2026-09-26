@@ -1,3 +1,4 @@
+import { resolveIdentityDatabase } from "./identity-scope";
 // lib/reading-storage.ts — Dexie IndexedDB persistence for Reading feature.
 
 import Dexie from "dexie";
@@ -15,7 +16,7 @@ class ReadingDB extends Dexie {
     rawFiles!: Dexie.Table<{ bookId: string; data: Blob }, string>;
 
     constructor() {
-        super("reading-db");
+        super(resolveIdentityDatabase("reading-db"));
         this.version(1).stores({
             books: "id",
             chapters: "id, bookId, [bookId+index]",

@@ -15,7 +15,8 @@
     "weixin:assistant:once": "node tools/weixin-local-assistant/assistant.mjs --once",
     "weixin:build-dist": "node scripts/build-weixin-assistant-dist.mjs",
     "push:build-dist": "node scripts/build-personal-push-dist.mjs",
-    "build:glass-icons": "node scripts/build-glass-icons.mjs"
+    "build:glass-icons": "node scripts/build-glass-icons.mjs",
+    "test:identity": "node scripts/tests/run-identity-isolation.cjs"
   },
   "dependencies": {
     "@gltf-transform/functions": "^4.4.1",
@@ -59,8 +60,10 @@
     "@types/qrcode": "^1.5.6",
     "@types/react": "^19.0.2",
     "@types/react-dom": "^19.0.2",
+    "esbuild": "0.28.2",
     "eslint": "^9.17.0",
     "eslint-config-next": "^15.1.0",
+    "fake-indexeddb": "6.2.5",
     "tailwindcss": "^4.2.1",
     "typescript": "^5.7.2"
   }

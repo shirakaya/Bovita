@@ -1,3 +1,4 @@
+import { resolveIdentityDatabase } from "./identity-scope";
 // lib/map-storage.ts
 // RPG Map Mode — IndexedDB storage
 
@@ -37,7 +38,7 @@ class MapDatabase extends Dexie {
   themeBlobs!: Dexie.Table<{ id: string; worldId: string; bgImage: string | null; customFont: string | null }, string>;
 
   constructor() {
-    super("AiPhoneMapDB");
+    super(resolveIdentityDatabase("AiPhoneMapDB"));
     this.version(1).stores({
       worlds: "id, createdAt",
       saves: "id, worldId, timestamp",

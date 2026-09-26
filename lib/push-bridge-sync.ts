@@ -1,3 +1,4 @@
+import { getRuntimeIdentityId } from "./identity-scope";
 // 现实桥离线联动·客户端同步器：
 // 把规则/云配置/触发状态 + 每条「让TA回话」规则的 prompt 快照（带占位哨兵）
 // 同步到服务端。快照用前台同一条组装链路构建，服务端只做占位符替换。
@@ -65,6 +66,9 @@ function ensureSessionFor(characterId: string) {
 }
 
 function toServerRule(rule: BridgeRule): (ServerBridgeRule & { actions: BridgeRule["actions"] }) | null {
+    const owners = JSON.parse(kvGet("identity_bridge_owners_v1") || "{}");
+    owners[rule.id] = getRuntimeIdentityId();
+    kvSet("identity_bridge_owners_v1", JSON.stringify(owners));
     const chat = rule.actions?.chat;
     let chatMeta: ServerBridgeRule["chat"];
     if (chat?.characterId) {
@@ -172,6 +176,7 @@ async function buildRuleSnapshot(rule: BridgeRule): Promise<Record<string, unkno
             ...(shortcutContinuation ? { shortcutContinuation } : {}),
             ...(processRequest ? { processRequest } : {}),
             reply: {
+                identityId: getRuntimeIdentityId(),
                 sessionId: session.id,
                 regexes,
                 characterName: character.name,
@@ -332,6 +337,7 @@ async function buildScreenChatSnapshot(): Promise<Record<string, unknown> | null
             ackSequence: loadScreenChatAck(screen.characterId),
             chat: { characterId: screen.characterId, sessionId: session.id, characterName: character.name },
             reply: {
+                identityId: getRuntimeIdentityId(),
                 sessionId: session.id,
                 regexes,
                 characterName: character.name,

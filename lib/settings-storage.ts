@@ -1,3 +1,4 @@
+import { getRuntimeIdentityId, initializeIdentityScope, activateIdentityScope } from "./identity-scope";
 import type {
     GenerationParameterKey,
     PresetConfig,
@@ -39,7 +40,7 @@ import {
     readRegexesCache, writeRegexesCache,
     hydrateSettingsDb,
 } from "./settings-db";
-import { kvGet, kvSet, kvRemove, registerKvMigration } from "./kv-db";
+import { kvGet, kvSet, kvSetAsync, kvRemove, registerKvMigration } from "./kv-db";
 import { isGenerationParameterKey } from "./generation-parameters";
 
 // --- Unsupported import format detection ---
@@ -900,10 +901,32 @@ export function loadBindingConfig(): BindingConfig {
     }
 }
 
-export function saveBindingConfig(config: BindingConfig, notify: boolean = true): void {
+export function saveBindingConfig(config: BindingConfig, notify: boolean = true): void | Promise<void> {
     if (typeof window === "undefined") return;
+    const identities = loadUserIdentities();
+    const nextId = identities.find(item => item.id === config.globalDefaults.userIdentityId)?.id ?? identities[0]?.id;
+    if (nextId && getRuntimeIdentityId() && nextId !== getRuntimeIdentityId()) {
+        const previous = kvGet(BINDINGS_KEY);
+        return (async () => {
+            try {
+                await kvSetAsync(BINDINGS_KEY, JSON.stringify(config));
+                await activateIdentityScope(nextId);
+            } catch (error) {
+                if (previous) await kvSetAsync(BINDINGS_KEY, previous);
+                console.error("[IdentitySwitch]", error);
+                window.alert("切换用户失败，当前数据已保留。请重试。");
+            }
+        })();
+    }
+    if (nextId) initializeIdentityScope(nextId);
     kvSet(BINDINGS_KEY, JSON.stringify(config));
     if (notify) window.dispatchEvent(new CustomEvent("settings-bindings-updated"));
+}
+
+export async function selectGlobalUserIdentity(identityId: string): Promise<void> {
+    if (!loadUserIdentities().some(identity => identity.id === identityId)) throw new Error("用户身份不存在");
+    const config = loadBindingConfig();
+    await saveBindingConfig({ ...config, globalDefaults: { ...config.globalDefaults, userIdentityId: identityId } });
 }
 
 /**
@@ -1180,6 +1203,7 @@ export function loadUserIdentities(): UserIdentity[] {
 export function saveUserIdentities(identities: UserIdentity[]): void {
     if (typeof window === "undefined") return;
     kvSet(USER_IDENTITIES_KEY, JSON.stringify(identities));
+    if (identities.length) void saveBindingConfig(loadBindingConfig());
 }
 
 /**
@@ -1191,7 +1215,8 @@ export function resolveUserIdentity(characterId?: string, appId?: string): UserI
     const identities = loadUserIdentities();
     if (identities.length === 0) return null;
     const config = loadBindingConfig();
-    const resolved = resolveBinding(config, characterId, appId);
+    const runtimeId = getRuntimeIdentityId();
+    const resolved = resolveBinding(runtimeId ? { ...config, globalDefaults: { ...config.globalDefaults, userIdentityId: runtimeId } } : config, characterId, appId);
     if (resolved.userIdentityId) {
         return identities.find(i => i.id === resolved.userIdentityId) || identities[0];
     }

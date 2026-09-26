@@ -34,6 +34,7 @@ import { IDLE_RECONNECT_MAX_CONSECUTIVE, loadIdleReconnectRules, removeIdleRecon
 import { addChatContact, createOrGetSession } from "@/lib/chat-storage";
 import { kvGet, kvSet, kvRemove } from "@/lib/kv-db";
 import { formatWalletAmount, getWalletBalance, loadWalletState, WALLET_UPDATED_EVENT } from "@/lib/wallet-storage";
+import { IdentitySwitchButton } from "./identity-switch-button";
 import { ChatFallbackAvatar } from "./chat-fallback-avatar";
 import {
     Loader2,
@@ -325,7 +326,7 @@ export function UserProfilePanel({ onClose, className }: UserProfilePanelProps) 
                     {/* User Info & Stats Block */}
                     <div className="flex items-center gap-5 px-6 pt-2 pb-4">
                         {/* Avatar */}
-                        <div className="relative shrink-0">
+                        <IdentitySwitchButton className="relative shrink-0">
                             <div className="w-[84px] h-[84px] rounded-full overflow-hidden bg-[var(--c-card)] border-2 border-white/50 shadow-sm flex items-center justify-center relative"
                                  style={{ boxShadow: "0 4px 20px rgba(0,0,0,0.06)" }}>
                                 {identity?.avatarUrl ? (
@@ -334,7 +335,7 @@ export function UserProfilePanel({ onClose, className }: UserProfilePanelProps) 
                                     <User size={38} color="var(--c-icon)" />
                                 )}
                             </div>
-                        </div>
+                        </IdentitySwitchButton>
 
                         {/* Info & Stats */}
                         <div className="flex flex-col flex-1 justify-center gap-2">

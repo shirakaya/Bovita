@@ -1,3 +1,4 @@
+import { stashIdentityPushEntries, loadIdentityPushEntries, removeIdentityPushEntries } from "./identity-push-inbox";
 // 离线推送·回端合并：App 打开/回前台时拉取服务端生成的原始输出，
 // 用客户端同一条解析管线（输出正则 → parseAndSaveResponse）落进聊天记录。
 
@@ -14,12 +15,13 @@ import { removeTimedWakeSchedule } from "./timed-wake-storage";
 import { appendBridgeFeed } from "./reality-bridge/storage";
 import { loadScreenChatSettings, saveScreenChatAck } from "./reality-bridge/storage";
 
-type OutboxEntry = {
+export type OutboxEntry = {
     id: string;
     session_id: string | null;
     trigger_key: string | null;
     raw_text: string;
     meta: {
+        identityId?: string;
         sessionId?: string;
         followUpIndex?: number;
         prevCount?: number;
@@ -76,10 +78,21 @@ export async function consumeServerOutbox(options?: { silent?: boolean; force?: 
                 ? personalPushFetch("outbox")
                 : fetch("/api/push/outbox", { credentials: "include" }))
                 .catch(() => null);
-            if (!response || !response.ok) break;
-            const data = await response.json().catch(() => ({})) as { ok?: boolean; entries?: OutboxEntry[] };
-            const entries = data.ok && Array.isArray(data.entries) ? data.entries : [];
-            if (entries.length === 0) break;
+            const data = response?.ok ? await response.json().catch(() => ({})) as { ok?: boolean; entries?: OutboxEntry[] } : {};
+            const remoteEntries = data.ok && Array.isArray(data.entries) ? data.entries : [];
+            if (remoteEntries.length) {
+                const savedIds = await stashIdentityPushEntries(remoteEntries);
+                if (savedIds.length) {
+                    const ack = await personalPushFetch("outbox", {
+                        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids: savedIds }),
+                    }).catch(() => null);
+                    // Do not remove local rows before remote acknowledgement succeeds;
+                    // otherwise a retry could insert an already-processed message again.
+                    if (!ack?.ok) break;
+                }
+            }
+            const entries = await loadIdentityPushEntries(OUTBOX_BATCH_SIZE);
+            if (entries.length === 0) { if (remoteEntries.length >= OUTBOX_BATCH_SIZE) continue; break; }
 
             const consumedIds: string[] = [];
             for (const entry of entries) {
@@ -258,17 +271,8 @@ export async function consumeServerOutbox(options?: { silent?: boolean; force?: 
             }
 
             if (consumedIds.length === 0) break;
-            const ackInit: RequestInit = {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ ids: consumedIds }),
-            };
-            const ackResponse = await (source === "personal"
-                ? personalPushFetch("outbox", ackInit)
-                : fetch("/api/push/outbox", { ...ackInit, credentials: "include" }))
-                .catch(() => null);
-            if (!ackResponse || !ackResponse.ok) break;
-            if (entries.length < OUTBOX_BATCH_SIZE) break;
+            await removeIdentityPushEntries(consumedIds);
+            if (entries.length < OUTBOX_BATCH_SIZE && remoteEntries.length < OUTBOX_BATCH_SIZE) break;
           }
         }
     } finally {

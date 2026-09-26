@@ -5,7 +5,13 @@ import type { DataModuleId, ModulePayload } from "../data-management/types";
 import { kvGet, kvSet, registerKvMigration } from "../kv-db";
 import { sha256BlobHex, sha256TextHex } from "../sha256-stream";
 import type { CloudBackupConfig } from "./config";
-import { ensureBucket, getObject, listObjects, putObject, removeObject } from "./storage-client";
+import { ensureBucket, getObject as rawGetObject, listObjects as rawListObjects, putObject as rawPutObject, removeObject as rawRemoveObject } from "./storage-client";
+import { getRuntimeIdentityId, isLegacyIdentityScope } from "../identity-scope";
+const backupPrefix = isLegacyIdentityScope() ? "" : `identities/${encodeURIComponent(getRuntimeIdentityId()!)}/`;
+const getObject: typeof rawGetObject = (config, path, ...args) => rawGetObject(config, backupPrefix + path, ...args);
+const putObject: typeof rawPutObject = (config, path, ...args) => rawPutObject(config, backupPrefix + path, ...args);
+const removeObject: typeof rawRemoveObject = (config, path) => rawRemoveObject(config, backupPrefix + path);
+const listObjects: typeof rawListObjects = (config, prefix = "", ...args) => rawListObjects(config, backupPrefix + prefix, ...args);
 
 /**
  * Source-level incremental cloud backup.

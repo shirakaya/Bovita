@@ -614,6 +614,7 @@ export function DataManagement({ onNotice }: DataManagementProps) {
     <div className="page-menu data-management-menu" style={{ padding: 0 }}>
       <div className="data-section">
         <DataSectionTitle>Module Breakdown</DataSectionTitle>
+        <p className="px-5 pb-3 text-xs opacity-60">聊天、记忆及互动数据按当前用户统计、备份和恢复；角色卡与通用设置由所有用户共用。其他用户的数据请切换后单独备份。</p>
         <div className="menu-group">
           {snapshot?.modules.length ? (
             <div className="menu-item data-readonly-item data-pie-item">

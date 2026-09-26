@@ -1,3 +1,4 @@
+import { identityStorageName } from "./identity-scope";
 import type {
     CompositeToolConfig,
     CompositeToolPackageConfig,
@@ -661,6 +662,7 @@ async function executeCompositeScriptStep(
             scope.last,
             stepArgs,
             {
+                identityKvDatabase: identityStorageName("AiPhoneKvDB"),
                 toolId: tool.id,
                 toolName: tool.name,
                 stepId: step.id,

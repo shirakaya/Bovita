@@ -1072,7 +1072,11 @@ export function DesktopShell({ initialThemeProfile, initialThemeAssets }: Deskto
   const [desktopReady, setDesktopReady] = useState(false);
   const [glassPaintPass, setGlassPaintPass] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
-  const [activeApp, setActiveApp] = useState<DesktopIconId | null>(null);
+  const [activeApp, setActiveApp] = useState<DesktopIconId | null>(() => {
+    if (typeof window !== "undefined" && sessionStorage.getItem("ai_phone_open_chat_after_identity_switch")) return "chat";
+    return null;
+  });
+  useEffect(() => { sessionStorage.removeItem("ai_phone_open_chat_after_identity_switch"); }, []);
   const [customApps, setCustomApps] = useState<InstalledCustomApp[]>([]);
   // 自定义 APP 桌面图标样式偏好（global = 忽略上传图标走全局效果）
   const [customAppIconStyles, setCustomAppIconStyles] = useState<Record<string, CustomAppIconStyle>>({});
