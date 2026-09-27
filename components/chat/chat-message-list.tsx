@@ -22,6 +22,7 @@ import {
     type DuplicateSessionGroup,
 } from "@/lib/chat-session-merge";
 import { kvSet } from "@/lib/kv-db";
+import { IdentitySwitchButton } from "./identity-switch-button";
 import { ChatFallbackAvatar } from "./chat-fallback-avatar";
 import {
     getMascotLastPreview,
@@ -187,13 +188,13 @@ export function ChatMessageList({ onCloseApp, activeSession, onSelectSession, on
                             <ChevronLeft size={24} strokeWidth={1.5} />
                         </button>
                         <div className="flex items-center gap-[10px]">
-                            <div className="w-[36px] h-[36px] rounded-full overflow-hidden bg-[var(--c-input)] flex items-center justify-center shrink-0">
+                            <IdentitySwitchButton className="w-[36px] h-[36px] rounded-full overflow-hidden bg-[var(--c-input)] flex items-center justify-center shrink-0">
                                 {identity?.avatarUrl ? (
                                     <img src={identity.avatarUrl} alt="Avatar" className="w-full h-full object-cover" />
                                 ) : (
                                     <ChatFallbackAvatar />
                                 )}
-                            </div>
+                            </IdentitySwitchButton>
                             <div className="flex flex-col whitespace-nowrap">
                                 <span className="ts-16 font-bold text-[var(--c-text-title)] leading-tight">{identity?.name || "用户"}</span>
                                 <div className="flex items-center gap-1 mt-1">

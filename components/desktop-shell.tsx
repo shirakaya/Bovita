@@ -1,5 +1,6 @@
 "use client";
 
+import { getIdentitySwitchResume, clearIdentitySwitchResume, rememberIdentitySwitchLocation } from "@/lib/identity-switch-transition";
 import { Component, memo, useCallback, useEffect, useInsertionEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ErrorInfo, type ReactNode } from "react";
 
 import { updateStatusBarTone } from "@/lib/bg-tone";
@@ -1073,10 +1074,10 @@ export function DesktopShell({ initialThemeProfile, initialThemeAssets }: Deskto
   const [glassPaintPass, setGlassPaintPass] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
   const [activeApp, setActiveApp] = useState<DesktopIconId | null>(() => {
-    if (typeof window !== "undefined" && sessionStorage.getItem("ai_phone_open_chat_after_identity_switch")) return "chat";
-    return null;
+    return (getIdentitySwitchResume()?.location.app as DesktopIconId) || null;
   });
-  useEffect(() => { sessionStorage.removeItem("ai_phone_open_chat_after_identity_switch"); }, []);
+  useEffect(() => { clearIdentitySwitchResume(); }, []);
+  useEffect(() => { rememberIdentitySwitchLocation({ app: activeApp }); }, [activeApp]);
   const [customApps, setCustomApps] = useState<InstalledCustomApp[]>([]);
   // 自定义 APP 桌面图标样式偏好（global = 忽略上传图标走全局效果）
   const [customAppIconStyles, setCustomAppIconStyles] = useState<Record<string, CustomAppIconStyle>>({});

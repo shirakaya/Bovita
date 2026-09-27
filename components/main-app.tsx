@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { IDENTITY_SCOPE_KEY, IDENTITY_SWITCHING_EVENT, isIdentitySwitching } from "@/lib/identity-scope";
+import { getIdentitySwitchResume, getPendingIdentitySwitch, type IdentitySwitchTransition } from "@/lib/identity-switch-transition";
+import { IdentityLoginScreen } from "./chat/identity-login-screen";
 import { ArrowRight } from "lucide-react";
 
 import { AccountGate } from "@/components/auth/account-gate";
@@ -229,9 +231,13 @@ async function prepareDesktopThemeForFirstPaint(): Promise<PreparedDesktopTheme>
 }
 
 export function MainApp() {
-  const [identitySwitching, setIdentitySwitching] = useState(false);
+  const [clientReady, setClientReady] = useState(false);
+  const [resumeSwitch, setResumeSwitch] = useState<IdentitySwitchTransition | null>(null);
+  const [identitySwitching, setIdentitySwitching] = useState<IdentitySwitchTransition | null>(null);
   useEffect(() => {
-    const update = () => setIdentitySwitching(isIdentitySwitching());
+    setResumeSwitch(getIdentitySwitchResume());
+    setClientReady(true);
+    const update = () => setIdentitySwitching(isIdentitySwitching() ? getPendingIdentitySwitch() : null);
     const otherTab = (event: StorageEvent) => { if (event.key === IDENTITY_SCOPE_KEY && event.newValue !== event.oldValue) window.location.reload(); };
     window.addEventListener(IDENTITY_SWITCHING_EVENT, update);
     window.addEventListener("storage", otherTab);
@@ -271,7 +277,7 @@ export function MainApp() {
       if (cancelled) return;
       setPreparedDesktopTheme(nextPreparedTheme);
       setHydrated(true);
-      if (hasPendingMcpOAuthCallback() || sessionStorage.getItem("ai_phone_open_chat_after_identity_switch")) {
+      if (hasPendingMcpOAuthCallback() || getIdentitySwitchResume()) {
         setSplashDismissed(true);
       }
     })();
@@ -296,6 +302,21 @@ export function MainApp() {
     };
   }, [initAttempt]);
 
+  // 大屏档整屏缩放：首帧由 layout.tsx 内联脚本算好，这里只负责旋转/分屏后重算。
+  // 只在宽度变化时重算——键盘弹出只改高度，打字过程中缩放不能跳。
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    applyShellZoom();
+    let lastWidth = window.innerWidth;
+    const onResize = () => {
+      if (window.innerWidth === lastWidth) return;
+      lastWidth = window.innerWidth;
+      applyShellZoom();
+    };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
   if (kvHydrateFailed) {
     return (
       <main className="app-root" style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100dvh", padding: "0 28px", background: "#0c0c12", color: "#e8e8ef" }}>
@@ -317,24 +338,14 @@ export function MainApp() {
     );
   }
 
-  // 大屏档整屏缩放：首帧由 layout.tsx 内联脚本算好，这里只负责旋转/分屏后重算。
-  // 只在宽度变化时重算——键盘弹出只改高度，打字过程中缩放不能跳。
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    applyShellZoom();
-    let lastWidth = window.innerWidth;
-    const onResize = () => {
-      if (window.innerWidth === lastWidth) return;
-      lastWidth = window.innerWidth;
-      applyShellZoom();
-    };
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, []);
+
+  // Decide the startup surface on the client before ever mounting Float's splash.
+  if (!clientReady) return <div className="fixed inset-0 bg-[var(--c-bg,#fafafa)]" />;
+  if (resumeSwitch && !hydrated) return <IdentityLoginScreen identity={resumeSwitch} />;
 
   return (
     <AccountGate>
-      {identitySwitching && <div role="status" style={{ position: "fixed", inset: 0, zIndex: 2147483647, display: "grid", placeItems: "center", background: "var(--c-bg, #fff)", color: "var(--c-text, #222)" }}>正在切换用户…</div>}
+      {identitySwitching && <IdentityLoginScreen identity={identitySwitching} />}
       {!splashDismissed ? (
         <SplashScreen ready={hydrated} onEnter={() => setSplashDismissed(true)} />
       ) : (

@@ -21,7 +21,7 @@ export function IdentitySwitchButton({ children, className, onClick }: { childre
     }, [open, busy]);
     const identities = open ? loadUserIdentities() : [];
     return <>
-        <button type="button" className={className} title="长按切换用户" aria-haspopup="dialog"
+        <button type="button" className={className} title="长按切换用户" aria-label="切换用户" aria-haspopup="dialog"
             style={{ WebkitTouchCallout: "none", userSelect: "none" }}
             onPointerDown={event => {
                 if (event.button !== 0) return;

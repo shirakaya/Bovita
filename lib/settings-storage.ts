@@ -910,7 +910,7 @@ export function saveBindingConfig(config: BindingConfig, notify: boolean = true)
         return (async () => {
             try {
                 await kvSetAsync(BINDINGS_KEY, JSON.stringify(config));
-                await activateIdentityScope(nextId);
+                await activateIdentityScope(nextId, identities.find(item => item.id === nextId));
             } catch (error) {
                 if (previous) await kvSetAsync(BINDINGS_KEY, previous);
                 console.error("[IdentitySwitch]", error);

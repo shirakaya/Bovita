@@ -1,5 +1,6 @@
 "use client";
 
+import { getIdentitySwitchResume, rememberIdentitySwitchLocation } from "@/lib/identity-switch-transition";
 import { useState, useEffect, useLayoutEffect, useCallback, useRef, createContext, type CSSProperties, type ReactNode } from "react";
 import { Activity, Check, ChevronRight, Clock, Database, FileText, Fingerprint, Globe, HardDrive, Image, Info, KeyRound, Laptop, Layers, Link2, Loader2, LogOut, MessageSquare, Mic, SlidersHorizontal, UserCircle, Wrench, X, CloudUpload } from "lucide-react";
 import { ConfirmDialog } from "./ui/modal";
@@ -106,7 +107,8 @@ const logoutIconStyle = {
 } as CSSProperties;
 
 export function PhoneSettingsApp({ onClose, onNotice }: SettingsPageProps) {
-    const [currentPage, setCurrentPage] = useState<SubPage>("main");
+    const [currentPage, setCurrentPage] = useState<SubPage>(() => (getIdentitySwitchResume()?.location.settingsPage as SubPage) || "main");
+    useEffect(() => { rememberIdentitySwitchLocation({ settingsPage: currentPage }); }, [currentPage]);
     const [subpageTitle, setSubpageTitle] = useState<string | null>(null);
     const [subpageRightActions, setSubpageRightActions] = useState<Record<string, ReactNode>>({});
     const [overrideBack, setOverrideBack] = useState<(() => void) | null>(null);

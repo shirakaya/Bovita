@@ -1,6 +1,8 @@
 /** Storage ownership is fixed for the lifetime of a page, including async tasks.
  * Switching the existing global identity reloads the page into another namespace.
  * The first identity retains the original database names and legacy data. */
+import { prepareIdentitySwitch, cancelIdentitySwitchTransition } from "./identity-switch-transition";
+
 export const IDENTITY_SCOPE_KEY = "ai_phone_identity_scope_v1";
 export const IDENTITY_SWITCHING_EVENT = "ai-phone-identity-switching";
 type ScopeState = { legacyIdentityId: string; activeIdentityId: string };
@@ -98,8 +100,9 @@ export function getIdentityScopeState(): string | null {
 }
 
 /** Drain already queued writes. In-flight requests retain the OLD namespace. */
-export async function activateIdentityScope(identityId: string): Promise<void> {
+export async function activateIdentityScope(identityId: string, profile?: { name: string; avatarUrl?: string }): Promise<void> {
     if (!runtimeState || identityId === runtimeState.activeIdentityId || switching) return;
+    prepareIdentitySwitch(identityId, profile);
     switching = true;
     window.dispatchEvent(new Event(IDENTITY_SWITCHING_EVENT));
     try {
@@ -119,9 +122,9 @@ export async function activateIdentityScope(identityId: string): Promise<void> {
         })));
         const next = { ...runtimeState, activeIdentityId: identityId };
         localStorage.setItem(IDENTITY_SCOPE_KEY, JSON.stringify(next));
-        sessionStorage.setItem("ai_phone_open_chat_after_identity_switch", "1");
         window.location.reload();
     } catch (error) {
+        cancelIdentitySwitchTransition();
         switching = false;
         window.dispatchEvent(new Event(IDENTITY_SWITCHING_EVENT));
         throw error;

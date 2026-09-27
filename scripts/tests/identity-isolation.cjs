@@ -58,11 +58,16 @@ async function seed() {
     const as=a.chat.createOrGetSession('same-character');
     a.chat.pushChatMessage({sessionId:as.id,role:'user',content:'A PRIVATE',status:'sent'});
     await a.memory.saveMemoryEntry({id:'memory-a',characterId:'same-character',type:'long_term',sourceApp:'chat',content:'A SECRET',importance:1,createdAt:'2026-01-01',updatedAt:'2026-01-01'});
+    a.transition.rememberIdentitySwitchLocation({app:'chat',chatTab:'me'});
     await a.settings.selectGlobalUserIdentity('B'); assert.equal(reloads,1);
     assert.equal(a.scope.getRuntimeIdentityId(),'A','old tasks retain A scope');
     // Completion after selecting B still belongs to A.
     await a.memory.saveMemoryEntry({id:'late-a',characterId:'same-character',type:'core',sourceApp:'chat',content:'A ASYNC',importance:1,createdAt:'2026-01-02',updatedAt:'2026-01-02'});
     const b=page(); await b.kv.hydrateKvDb(); await b.chat.hydrateChatStorage();
+    assert.equal(b.transition.getIdentitySwitchResume().name,'用户B');
+    assert.equal(b.transition.getIdentitySwitchResume().location.chatTab,'me');
+    b.transition.clearIdentitySwitchResume();
+    assert.equal(b.transition.getIdentitySwitchResume(),null);
     assert.equal(b.scope.getRuntimeIdentityId(),'B'); assert.equal(b.chat.loadChatContacts().length,0); assert.equal(b.chat.loadChatSessions().length,0);
     assert.equal((await b.memory.loadMemoryEntries('same-character')).length,0);
     assert.equal(b.kv.kvGet('ai_phone_friend_requests_v1'),null); assert.equal(b.kv.kvGet('ai_phone_diary_entries_v1'),null);
@@ -77,8 +82,12 @@ async function seed() {
     assert.equal((await b.inbox.stashIdentityPushEntries(mixed)).length,3);
     assert.equal((await b.inbox.loadIdentityPushEntries(20)).map(x=>x.id).join(','),'out-b');
     await b.inbox.removeIdentityPushEntries(['out-b']);
+    b.transition.rememberIdentitySwitchLocation({app:'settings',settingsPage:'binding'});
     await b.settings.selectGlobalUserIdentity('A'); assert.equal(reloads,2);
     const a2=page(); await a2.kv.hydrateKvDb(); await a2.chat.hydrateChatStorage();
+    assert.equal(a2.transition.getIdentitySwitchResume().location.app,'settings');
+    assert.equal(a2.transition.getIdentitySwitchResume().location.settingsPage,'binding');
+    a2.transition.clearIdentitySwitchResume();
     assert.equal(a2.chat.loadChatSessions().length,1); assert.equal(a2.chat.loadChatSessions()[0].id,as.id);
     assert.equal(a2.chat.loadChatMessages(as.id)[0].content,'A PRIVATE'); assert.equal((await a2.memory.loadMemoryEntries('same-character')).length,2);
     assert.equal(a2.memory.getEventCounter('same'),7); assert.equal(a2.kv.kvKeysWithPrefix('ai_phone_notewall_').length,0);

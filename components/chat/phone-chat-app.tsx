@@ -6,7 +6,7 @@ import { ChatContactsList } from "./chat-contacts-list";
 import { MomentsFeed } from "./moments-feed";
 import { ChatRoom } from "./chat-room";
 import { MascotChatRoom } from "./mascot-chat-room";
-import { IdentitySwitchButton } from "./identity-switch-button";
+import { getIdentitySwitchResume, rememberIdentitySwitchLocation } from "@/lib/identity-switch-transition";
 import { UserProfilePanel } from "./user-profile-panel";
 import { MessageCircle, Users, Aperture, UserRound } from "lucide-react";
 import { ChatSession, loadChatSessions, pushChatMessage, hydrateChatStorage } from "@/lib/chat-storage";
@@ -30,7 +30,8 @@ export type PhoneChatAppProps = {
 };
 
 export const PhoneChatApp = memo(function PhoneChatApp({ onClose, initialSessionId, onSessionChange, sharePayload, onShareDone }: PhoneChatAppProps) {
-    const [activeTab, setActiveTab] = useState<TabKey>("messages");
+    const [activeTab, setActiveTab] = useState<TabKey>(() => (getIdentitySwitchResume()?.location.chatTab as TabKey) || "messages");
+    useEffect(() => { rememberIdentitySwitchLocation({ chatTab: activeTab }); }, [activeTab]);
     const [activeSession, setActiveSession] = useState<ChatSession | null>(null);
     const [activeMascot, setActiveMascot] = useState(false);
     // Chat app-level custom CSS (affects all chat pages, lower priority than per-session CSS)
@@ -290,13 +291,13 @@ export const PhoneChatApp = memo(function PhoneChatApp({ onClose, initialSession
                     <CompassIcon active={activeTab === "feeds"} />
                     <span style={{ fontSize: "calc(10px*var(--app-text-scale,1))", color: activeTab === "feeds" ? undefined : "var(--c-text)" }}>动态</span>
                 </button>
-                <IdentitySwitchButton
+                <button
                     className={`chat-tab ${activeTab === "me" ? "chat-tab-active" : ""}`}
                     onClick={() => setActiveTab("me")}
                 >
                     <MeIcon active={activeTab === "me"} />
                     <span style={{ fontSize: "calc(10px*var(--app-text-scale,1))", color: activeTab === "me" ? undefined : "var(--c-text)" }}>主页</span>
-                </IdentitySwitchButton>
+                </button>
             </nav>
 
             {/* Chat Rooms — all visited sessions stay mounted, only active one is visible */}
