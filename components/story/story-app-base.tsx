@@ -569,22 +569,17 @@ export function StoryApp({ onClose }: StoryAppProps) {
     setComposerAppendRequest({ id: composerAppendIdRef.current, text });
   }, []);
 
-  // Close context menu when clicking outside (delay to avoid the opening tap closing it)
+  // 长按抬手时 iOS 可能补发 click；只在下一次菜单外按下时关闭。
   useEffect(() => {
     if (!activeMessageId) return;
-    const handler = (e: MouseEvent | TouchEvent) => {
-      const target = e.target as HTMLElement;
-      if (!target.closest(".story-ctx-menu")) {
+    const handler = (e: PointerEvent) => {
+      const target = e.target;
+      if (target instanceof Element && !target.closest(".story-ctx-menu")) {
         setActiveMessageId(null);
       }
     };
-    const timer = setTimeout(() => {
-      document.addEventListener("click", handler, true);
-    }, 300);
-    return () => {
-      clearTimeout(timer);
-      document.removeEventListener("click", handler, true);
-    };
+    document.addEventListener("pointerdown", handler, true);
+    return () => document.removeEventListener("pointerdown", handler, true);
   }, [activeMessageId]);
 
   useEffect(() => {
