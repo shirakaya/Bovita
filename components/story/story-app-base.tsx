@@ -451,6 +451,7 @@ export function StoryApp({ onClose }: StoryAppProps) {
   }, [activeSessionId]);
 
   const autoBottomLockRef = useRef(true);
+  const pendingBottomScrollTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   const foldToggleSuppressUntilRef = useRef(0);
   // 段落编辑期间：贴底锁必须关掉，否则编辑框自适应高度每次变化都会被
   // ResizeObserver 拽到底部（表现为"一打字就滚到底"）
@@ -464,7 +465,7 @@ export function StoryApp({ onClose }: StoryAppProps) {
   // 高度自适应改由纯 CSS 镜像（.story-grow-wrap::after）完成，打字零 JS 干预。
   const editingDraftRef = useRef("");
   const scrollStoryToBottom = useCallback(() => {
-    if (editingMessageIdRef.current) return; // 段落编辑期间任何路径都不允许自动贴底
+    if (editingMessageIdRef.current || startPosRef.current) return; // 编辑或长按期间不移动消息
     const node = scrollRef.current;
     if (!node) return;
     // 已经贴底（或 iOS 橡皮筋回弹超出底部）时不再强写 scrollTop：
@@ -475,7 +476,7 @@ export function StoryApp({ onClose }: StoryAppProps) {
     node.style.scrollBehavior = "auto";
     node.scrollTop = node.scrollHeight;
     requestAnimationFrame(() => {
-      node.scrollTop = node.scrollHeight;
+      if (!startPosRef.current) node.scrollTop = node.scrollHeight;
       requestAnimationFrame(() => {
         node.style.scrollBehavior = prevBehavior;
       });
@@ -501,7 +502,11 @@ export function StoryApp({ onClose }: StoryAppProps) {
         if (autoBottomLockRef.current) scrollStoryToBottom();
       }, delay)
     ));
-    return () => timers.forEach(clearTimeout);
+    pendingBottomScrollTimersRef.current = timers;
+    return () => {
+      timers.forEach(clearTimeout);
+      if (pendingBottomScrollTimersRef.current === timers) pendingBottomScrollTimersRef.current = [];
+    };
   }, [messages.length, activeSessionId, scrollStoryToBottom]);
 
   useEffect(() => {
@@ -773,6 +778,9 @@ export function StoryApp({ onClose }: StoryAppProps) {
     if (!activeSessionId) return;
     const cancelled = cancelStoryGenerationRun(activeSessionId);
     if (!cancelled && !isGenerating) return;
+    pendingBottomScrollTimersRef.current.forEach(clearTimeout);
+    pendingBottomScrollTimersRef.current = [];
+    autoBottomLockRef.current = false;
     setStreamingPreview((current) => current?.sessionId === activeSessionId ? null : current);
     markGenerating(activeSessionId, false);
   }
