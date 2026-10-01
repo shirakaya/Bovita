@@ -71,20 +71,49 @@ type StoryAppProps = {
   onClose: () => void;
 };
 
+type StoryStreamingPreview = {
+  sessionId: string;
+  runId: string;
+  content: string;
+  reasoning: string;
+  phase: "preparing" | "waiting" | "streaming";
+};
+
 type StoryGenerationRun = {
   runId: string;
   controller: AbortController;
+  preview?: StoryStreamingPreview;
 };
 
 const activeStoryGenerationRuns = new Map<string, StoryGenerationRun>();
+const storyGenerationListeners = new Set<() => void>();
 
-function createStoryGenerationRun(sessionId: string): StoryGenerationRun {
+function notifyStoryGenerationChanged() {
+  storyGenerationListeners.forEach(listener => listener());
+}
+
+function updateStoryGenerationPreview(
+  sessionId: string,
+  runId: string,
+  update: Partial<StoryStreamingPreview>,
+) {
+  const run = activeStoryGenerationRuns.get(sessionId);
+  if (!run || run.runId !== runId || run.controller.signal.aborted || !run.preview) return;
+  run.preview = { ...run.preview, ...update };
+  notifyStoryGenerationChanged();
+}
+
+function createStoryGenerationRun(sessionId: string, streamingEnabled: boolean): StoryGenerationRun {
   activeStoryGenerationRuns.get(sessionId)?.controller.abort();
-  const run = {
+  const run: StoryGenerationRun = {
     runId: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
     controller: new AbortController(),
   };
+  if (streamingEnabled) {
+    run.preview = { sessionId, runId: run.runId, content: "", reasoning: "", phase: "preparing" };
+  }
   activeStoryGenerationRuns.set(sessionId, run);
+  notifyStoryGenerationChanged();
   return run;
 }
 
@@ -97,6 +126,7 @@ function finishStoryGenerationRun(sessionId: string, runId: string): boolean {
   const run = activeStoryGenerationRuns.get(sessionId);
   if (!run || run.runId !== runId) return false;
   activeStoryGenerationRuns.delete(sessionId);
+  notifyStoryGenerationChanged();
   return true;
 }
 
@@ -105,6 +135,7 @@ function cancelStoryGenerationRun(sessionId: string): boolean {
   if (!run) return false;
   run.controller.abort();
   activeStoryGenerationRuns.delete(sessionId);
+  notifyStoryGenerationChanged();
   return true;
 }
 
@@ -306,8 +337,10 @@ export function StoryApp({ onClose }: StoryAppProps) {
   const [foldTagsDraft, setFoldTagsDraft] = useState("");
   const [contextExcludedTagsDraft, setContextExcludedTagsDraft] = useState("");
   // 生成状态按会话记录：避免在 A 会话生成时切到 B 会话也显示"正在生成"
-  const [generatingSessionIds, setGeneratingSessionIds] = useState<ReadonlySet<string>>(() => new Set());
-  const [streamingPreview, setStreamingPreview] = useState<{ sessionId: string; runId: string; content: string; reasoning: string; phase: "preparing" | "waiting" | "streaming" } | null>(null);
+  const [generatingSessionIds, setGeneratingSessionIds] = useState<ReadonlySet<string>>(
+    () => new Set(activeStoryGenerationRuns.keys()),
+  );
+  const [streamingPreview, setStreamingPreview] = useState<StoryStreamingPreview | null>(null);
   // 抽屉滑动手势用 ref 而不是 state：手指按住时 touchmove 每帧都在触发，
   // 逐帧 setState 会让整个剧情页以事件频率重渲染（iOS 上拉到顶/底按住不动时
   // 表现为持续的重排/闪烁）
@@ -390,6 +423,7 @@ export function StoryApp({ onClose }: StoryAppProps) {
   function handleDeleteSession(session: StorySession) {
     if (session.sessionType === "main") return;
     if (!window.confirm(`删除「${session.title || "未命名剧情"}」及其全部消息？`)) return;
+    cancelStoryGenerationRun(session.id);
     if (!deleteStorySession(session.id)) return;
     const main = loadStorySessions().find((item) => item.characterId === session.characterId && item.sessionType === "main")
       || createOrGetStorySession(session.characterId);
@@ -400,11 +434,24 @@ export function StoryApp({ onClose }: StoryAppProps) {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
-      if (activeSessionIdRef.current) {
-        cancelStoryGenerationRun(activeSessionIdRef.current);
-      }
     };
   }, []);
+
+  // Requests belong to their sessions, not this page's lifetime. A newly opened
+  // page subscribes to the existing run and reads its saved messages on finish.
+  useEffect(() => {
+    const syncGeneration = () => {
+      setGeneratingSessionIds(new Set(activeStoryGenerationRuns.keys()));
+      setStreamingPreview(activeStoryGenerationRuns.get(activeSessionId)?.preview ?? null);
+      if (activeSessionId && !activeStoryGenerationRuns.has(activeSessionId)) {
+        setMessages(loadStoryMessages(activeSessionId));
+      }
+      setStorageVersion(value => value + 1);
+    };
+    storyGenerationListeners.add(syncGeneration);
+    syncGeneration();
+    return () => { storyGenerationListeners.delete(syncGeneration); };
+  }, [activeSessionId]);
 
   useEffect(() => {
     hydrateStoryStorage().then(() => {
@@ -675,7 +722,7 @@ export function StoryApp({ onClose }: StoryAppProps) {
 
   async function handleSend(userTextInput: string) {
     const userText = userTextInput.trim();
-    if (!activeSessionId || !userText || isGenerating) return;
+    if (!activeSessionId || !userText || activeStoryGenerationRuns.has(activeSessionId)) return;
     const sessionId = activeSessionId;
     const characterId = activeCharacterId;
 
@@ -688,29 +735,19 @@ export function StoryApp({ onClose }: StoryAppProps) {
     setMessages((prev) => [...prev, userMessage]);
     setStorageVersion((value) => value + 1);
     markGenerating(sessionId, true);
-    const generationRun = createStoryGenerationRun(sessionId);
+    const generationRun = createStoryGenerationRun(sessionId, currentSession?.uiPrefs?.streamingEnabled === true);
     const generationRunId = generationRun.runId;
-    const isCurrentGeneration = () => mountedRef.current && isStoryGenerationRunActive(sessionId, generationRunId);
-    setStreamingPreview(currentSession?.uiPrefs?.streamingEnabled === true
-      ? { sessionId, runId: generationRunId, content: "", reasoning: "", phase: "preparing" }
-      : null);
+    const isCurrentGeneration = () => isStoryGenerationRunActive(sessionId, generationRunId)
+      && loadStorySessions().some(session => session.id === sessionId);
     const onStreamUpdate = (content: string) => {
-      if (isCurrentGeneration() && activeSessionIdRef.current === sessionId) {
-        setStreamingPreview((current) => ({
-          sessionId, runId: generationRunId, content,
-          reasoning: current?.runId === generationRunId ? current.reasoning : "",
-          phase: content ? "streaming" : "waiting",
-        }));
-      }
+      updateStoryGenerationPreview(sessionId, generationRunId, {
+        content, phase: content ? "streaming" : "waiting",
+      });
     };
     const onReasoningUpdate = (reasoning: string) => {
-      if (isCurrentGeneration() && activeSessionIdRef.current === sessionId) {
-        setStreamingPreview((current) => ({
-          sessionId, runId: generationRunId, reasoning,
-          content: current?.runId === generationRunId ? current.content : "",
-          phase: reasoning ? "streaming" : "waiting",
-        }));
-      }
+      updateStoryGenerationPreview(sessionId, generationRunId, {
+        reasoning, phase: reasoning ? "streaming" : "waiting",
+      });
     };
 
     try {
@@ -736,10 +773,10 @@ export function StoryApp({ onClose }: StoryAppProps) {
         regexSignature: result.regexSignature,
         parserVersion: result.parserVersion,
       });
-      if (activeSessionIdRef.current === sessionId) {
+      if (mountedRef.current && activeSessionIdRef.current === sessionId) {
         setMessages(loadStoryMessages(sessionId)); // 按会话从存储重读，杜绝跨会话串消息
       }
-      setStorageVersion((value) => value + 1);
+      if (mountedRef.current) setStorageVersion((value) => value + 1);
 
       const storyCharacter = characters.find((character) => character.id === characterId);
       if (storyCharacter && currentSession?.sessionType === "main") {
@@ -762,15 +799,12 @@ export function StoryApp({ onClose }: StoryAppProps) {
         rawContent: errText,
         renderedContent: errText,
       });
-      if (activeSessionIdRef.current === sessionId) {
+      if (mountedRef.current && activeSessionIdRef.current === sessionId) {
         setMessages(loadStoryMessages(sessionId));
       }
-      setStorageVersion((value) => value + 1);
+      if (mountedRef.current) setStorageVersion((value) => value + 1);
     } finally {
-      if (finishStoryGenerationRun(sessionId, generationRunId)) {
-        setStreamingPreview((current) => current?.runId === generationRunId ? null : current);
-        markGenerating(sessionId, false);
-      }
+      finishStoryGenerationRun(sessionId, generationRunId);
     }
   }
 
@@ -908,6 +942,7 @@ export function StoryApp({ onClose }: StoryAppProps) {
     setActiveMessageId(null);
   }
   async function handleStoryRetry(msgId: string) {
+    if (!activeSessionId || activeStoryGenerationRuns.has(activeSessionId)) return;
     const msgIndex = messages.findIndex(m => m.id === msgId);
     if (msgIndex === -1) return;
     const retryMessage = messages[msgIndex];
@@ -929,29 +964,19 @@ export function StoryApp({ onClose }: StoryAppProps) {
     autoBottomLockRef.current = true;
     requestAnimationFrame(() => scrollStoryToBottom());
     markGenerating(sessionId, true);
-    const generationRun = createStoryGenerationRun(sessionId);
+    const generationRun = createStoryGenerationRun(sessionId, currentSession?.uiPrefs?.streamingEnabled === true);
     const generationRunId = generationRun.runId;
-    const isCurrentGeneration = () => mountedRef.current && isStoryGenerationRunActive(sessionId, generationRunId);
-    setStreamingPreview(currentSession?.uiPrefs?.streamingEnabled === true
-      ? { sessionId, runId: generationRunId, content: "", reasoning: "", phase: "preparing" }
-      : null);
+    const isCurrentGeneration = () => isStoryGenerationRunActive(sessionId, generationRunId)
+      && loadStorySessions().some(session => session.id === sessionId);
     const onStreamUpdate = (content: string) => {
-      if (isCurrentGeneration() && activeSessionIdRef.current === sessionId) {
-        setStreamingPreview((current) => ({
-          sessionId, runId: generationRunId, content,
-          reasoning: current?.runId === generationRunId ? current.reasoning : "",
-          phase: content ? "streaming" : "waiting",
-        }));
-      }
+      updateStoryGenerationPreview(sessionId, generationRunId, {
+        content, phase: content ? "streaming" : "waiting",
+      });
     };
     const onReasoningUpdate = (reasoning: string) => {
-      if (isCurrentGeneration() && activeSessionIdRef.current === sessionId) {
-        setStreamingPreview((current) => ({
-          sessionId, runId: generationRunId, reasoning,
-          content: current?.runId === generationRunId ? current.content : "",
-          phase: reasoning ? "streaming" : "waiting",
-        }));
-      }
+      updateStoryGenerationPreview(sessionId, generationRunId, {
+        reasoning, phase: reasoning ? "streaming" : "waiting",
+      });
     };
     try {
       const result = await generateStoryCompletion(characterId, contextMessages, {
@@ -971,19 +996,16 @@ export function StoryApp({ onClose }: StoryAppProps) {
         rawContent: result.rawText, renderedContent: result.renderedText,
         storySummary: result.storySummary, regexSignature: result.regexSignature, parserVersion: result.parserVersion,
       });
-      if (activeSessionIdRef.current === sessionId) setMessages(loadStoryMessages(sessionId));
-      setStorageVersion(v => v + 1);
+      if (mountedRef.current && activeSessionIdRef.current === sessionId) setMessages(loadStoryMessages(sessionId));
+      if (mountedRef.current) setStorageVersion(v => v + 1);
     } catch (error) {
       if (!isCurrentGeneration() || isAbortLikeError(error)) return;
       const errText = error instanceof Error ? error.message : "重试失败，请稍后再试。";
       const systemMessage = pushStoryMessage({ sessionId, role: "system", rawContent: errText, renderedContent: errText });
-      if (activeSessionIdRef.current === sessionId) setMessages(loadStoryMessages(sessionId));
-      setStorageVersion(v => v + 1);
+      if (mountedRef.current && activeSessionIdRef.current === sessionId) setMessages(loadStoryMessages(sessionId));
+      if (mountedRef.current) setStorageVersion(v => v + 1);
     } finally {
-      if (finishStoryGenerationRun(sessionId, generationRunId)) {
-        setStreamingPreview((current) => current?.runId === generationRunId ? null : current);
-        markGenerating(sessionId, false);
-      }
+      finishStoryGenerationRun(sessionId, generationRunId);
     }
   }
 
