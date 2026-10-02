@@ -14,6 +14,7 @@ import {
 } from "@/lib/diary-entry-timer-service";
 import {
   createDiaryEntry,
+  updateUserDiaryEntry,
   deleteDiaryEntry,
   loadDiaryEntries,
   loadDiaryEntryFontAssetId,
@@ -25,6 +26,9 @@ import {
 } from "@/lib/diary-entry-storage";
 import type { DiaryEntry, DiaryEntryBlock, DiaryEntryTimerSettings, DiaryEntryTrigger } from "@/lib/diary-entry-types";
 import { getThemeAssetDataUrl, saveThemeAssetFromBlob } from "@/lib/theme-storage";
+
+import { USER_DIARY_BOOK_ID } from "@/lib/diary-entry-types";
+import { resolveUserIdentity } from "@/lib/settings-storage";
 
 const DIARY_USER_FONT_FAMILY = "AIPhoneDiaryEntryUserFont";
 const DIARY_USER_FONT_STYLE_ID = "ai-phone-diary-entry-user-font-face";
@@ -118,6 +122,7 @@ export function DiaryEntriesApp({ onBack, onNotice }: DiaryEntriesAppProps) {
   const [characters, setCharacters] = useState<Character[]>([]);
   const [settings, setSettings] = useState<DiaryEntryTimerSettings>(() => loadDiaryEntryTimerSettings());
   const [timerSettingsOpen, setTimerSettingsOpen] = useState(false);
+  const [userEditor, setUserEditor] = useState<DiaryEntry | "new" | null>(null);
   const [writePanelOpen, setWritePanelOpen] = useState(false);
   const [fontPanelOpen, setFontPanelOpen] = useState(false);
   const [activeEntry, setActiveEntry] = useState<DiaryEntry | null>(null);
@@ -578,7 +583,7 @@ export function DiaryEntriesApp({ onBack, onNotice }: DiaryEntriesAppProps) {
     }
     return Array.from(map.entries()).map(([characterId, characterEntries]) => ({
       characterId,
-      characterName: characterEntries[0].characterName,
+      characterName: characterEntries[0].authorType === "user" ? "我" : characterEntries[0].characterName,
       avatar: characters.find(character => character.id === characterId)?.avatar ?? "",
       entries: characterEntries,
     }));
@@ -609,7 +614,7 @@ export function DiaryEntriesApp({ onBack, onNotice }: DiaryEntriesAppProps) {
         </button>
         <div>
           <h1>{activeBook ? `${activeBook.characterName} 的日记` : "日记"}</h1>
-          <p>{activeBook ? `共 ${activeBook.entries.length} 篇手写日常` : "每个角色一本，点开翻阅"}</p>
+          <p>{activeBook ? `共 ${activeBook.entries.length} 篇手写日常` : "记录自己，也翻阅TA的日常"}</p>
         </div>
         <input
           ref={fontFileRef}
@@ -639,7 +644,7 @@ export function DiaryEntriesApp({ onBack, onNotice }: DiaryEntriesAppProps) {
           <div className="diary-entry-empty">
             <NotebookPen size={34} strokeWidth={1.5} />
             <h2>还没有日记</h2>
-            <p>让角色先写一篇，纸面会从这里开始铺开。</p>
+            <p>自己写一篇，或让角色留下今天的日常。</p>
             <button type="button" onClick={() => setWritePanelOpen(true)}>让TA写一篇</button>
           </div>
         ) : activeBook ? (
@@ -683,6 +688,12 @@ export function DiaryEntriesApp({ onBack, onNotice }: DiaryEntriesAppProps) {
         )}
       </main>
 
+      {activeBook?.characterId !== USER_DIARY_BOOK_ID ? (
+        <button type="button" className="diary-entry-write-btn diary-user-write-btn" onClick={() => setUserEditor("new")}>
+          <NotebookPen size={18} /><span>自己写</span>
+        </button>
+      ) : null}
+
       {entries.length > 0 ? (
         activeBook ? (
           <button
@@ -690,10 +701,10 @@ export function DiaryEntriesApp({ onBack, onNotice }: DiaryEntriesAppProps) {
             className="diary-entry-write-btn"
             disabled={activeBookBusy}
             aria-busy={activeBookBusy}
-            onClick={() => generateForCharacters([activeBook.characterId])}
+            onClick={() => activeBook.characterId === USER_DIARY_BOOK_ID ? setUserEditor("new") : generateForCharacters([activeBook.characterId])}
           >
             <WandSparkles size={18} strokeWidth={1.7} />
-            {activeBookBusy ? <DiaryWritingStatus /> : <span>让TA写</span>}
+            {activeBookBusy ? <DiaryWritingStatus /> : <span>{activeBook.characterId === USER_DIARY_BOOK_ID ? "自己写" : "让TA写"}</span>}
           </button>
         ) : (
           <button type="button" className="diary-entry-write-btn" onClick={() => setWritePanelOpen(true)}>
@@ -734,7 +745,29 @@ export function DiaryEntriesApp({ onBack, onNotice }: DiaryEntriesAppProps) {
       ) : null}
 
       {activeEntry ? (
-        <DiaryEntryDetail entry={activeEntry} onClose={() => setActiveEntry(null)} />
+        <DiaryEntryDetail entry={activeEntry} characters={characters} onEdit={() => { setUserEditor(activeEntry); setActiveEntry(null); }} onClose={() => setActiveEntry(null)} />
+      ) : null}
+
+      {userEditor ? (
+        <UserDiaryEditor
+          entry={userEditor === "new" ? null : userEditor}
+          characters={characters}
+          onClose={() => setUserEditor(null)}
+          onSave={(draft) => {
+            try {
+              const saved = userEditor === "new" ? createDiaryEntry({
+                ...draft, authorType: "user", characterId: USER_DIARY_BOOK_ID,
+                characterName: resolveUserIdentity()?.name || "我", blocks: [],
+              }) : updateUserDiaryEntry(userEditor.id, draft);
+              refreshEntries();
+              setUserEditor(null);
+              setActiveCharacterId(USER_DIARY_BOOK_ID);
+              setActiveEntry(saved);
+              window.dispatchEvent(new CustomEvent(DIARY_ENTRIES_UPDATED_EVENT));
+              notify("日记已保存");
+            } catch (error) { notify(`保存失败：${String(error)}`); }
+          }}
+        />
       ) : null}
 
       {deleteCandidateEntry ? (
@@ -1113,7 +1146,7 @@ function CharacterAvatarGrid({ characters, selectedIds, busyIds, disabled, onTog
   );
 }
 
-function DiaryEntryDetail({ entry, onClose }: { entry: DiaryEntry; onClose: () => void }) {
+function DiaryEntryDetail({ entry, characters, onEdit, onClose }: { entry: DiaryEntry; characters: Character[]; onEdit: () => void; onClose: () => void }) {
   const markers = getEntryMarkers(entry);
   return (
     <div className="nw-modal-backdrop" role="dialog" aria-modal="true" onClick={onClose}>
@@ -1129,6 +1162,7 @@ function DiaryEntryDetail({ entry, onClose }: { entry: DiaryEntry; onClose: () =
             </div>
             <div className="diary-entry-detail-top">
               <button type="button" onClick={onClose}>关闭</button>
+              {entry.authorType === "user" ? <button type="button" onClick={onEdit}>编辑</button> : null}
               {markers.length > 0 ? (
                 <span className="diary-entry-detail-markers">
                   {markers.map(marker => <span key={marker} className="diary-entry-marker">{marker}</span>)}
@@ -1136,6 +1170,9 @@ function DiaryEntryDetail({ entry, onClose }: { entry: DiaryEntry; onClose: () =
               ) : null}
             </div>
           </header>
+          {entry.authorType === "user" ? <p className="diary-user-visibility">{entry.visibleToCharacterIds?.length
+            ? `可见角色：${entry.visibleToCharacterIds.map(id => characters.find(character => character.id === id)?.name || "已删除角色").join("、")}`
+            : "仅自己可见"}</p> : null}
           <div className="diary-entry-blocks">
             {entry.blocks.map((block, index) => (
               <DiaryBlockView key={`${block.type}-${index}`} block={block} />
@@ -1187,4 +1224,47 @@ function DiaryBlockView({ block }: { block: DiaryEntryBlock }) {
     );
   }
   return <p className="diary-entry-paragraph">{block.text}</p>;
+}
+
+
+type UserDiaryDraft = { title: string; body: string; visibleToCharacterIds: string[] };
+
+function UserDiaryEditor({ entry, characters, onSave, onClose }: {
+  entry: DiaryEntry | null;
+  characters: Character[];
+  onSave: (draft: UserDiaryDraft) => void;
+  onClose: () => void;
+}) {
+  const [title, setTitle] = useState(entry?.title ?? "");
+  const [body, setBody] = useState(entry?.body ?? "");
+  const [visibleIds, setVisibleIds] = useState(entry?.visibleToCharacterIds ?? []);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const dirty = title !== (entry?.title ?? "") || body !== (entry?.body ?? "")
+    || JSON.stringify(visibleIds) !== JSON.stringify(entry?.visibleToCharacterIds ?? []);
+  const requestClose = () => dirty ? setConfirmDiscard(true) : onClose();
+  return (
+    <div className="nw-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="user-diary-title">
+      <section className="diary-entry-settings diary-user-editor">
+        <header>
+          <h2 id="user-diary-title">{entry ? "编辑日记" : "自己写日记"}</h2>
+          <button type="button" className="diary-icon-btn" aria-label="关闭编辑" onClick={requestClose}><X size={18} /></button>
+        </header>
+        <label>标题<input value={title} maxLength={80} placeholder="今天想记下什么？" onChange={event => setTitle(event.target.value)} /></label>
+        <label>正文<textarea value={body} maxLength={6000} rows={10} placeholder="写下今天的日常……" onChange={event => setBody(event.target.value)} /></label>
+        <p>{body.length} / 6000 字</p>
+        <div className="diary-entry-section-title"><strong>谁可以看到</strong><span>{visibleIds.length ? `已选 ${visibleIds.length} 个角色` : "仅自己可见"}</span></div>
+        <p>只有勾选的角色会在后续对话等上下文中读到这篇日记。不选则仅自己可见。</p>
+        <CharacterAvatarGrid characters={characters} selectedIds={visibleIds} busyIds={[]} disabled={false}
+          onToggle={id => setVisibleIds(previous => previous.includes(id) ? previous.filter(value => value !== id) : [...previous, id])} />
+        <p>更改可见范围不会撤回已生成的回复或记忆。</p>
+        {visibleIds.length ? <button type="button" className="nw-secondary-btn" onClick={() => setVisibleIds([])}>改为仅自己可见</button> : null}
+        {confirmDiscard ? <div className="diary-user-discard" role="alert">
+          <p>放弃尚未保存的修改？</p>
+          <button type="button" className="nw-secondary-btn" onClick={() => setConfirmDiscard(false)}>继续编辑</button>
+          <button type="button" className="nw-danger-btn" onClick={onClose}>放弃修改</button>
+        </div> : null}
+        <button type="button" className="diary-entry-confirm-btn" disabled={!body.trim()} onClick={() => onSave({ title, body, visibleToCharacterIds: visibleIds })}>保存日记</button>
+      </section>
+    </div>
+  );
 }

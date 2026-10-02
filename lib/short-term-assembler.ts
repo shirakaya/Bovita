@@ -16,6 +16,7 @@ import { buildTwoLevelMomentThreads } from "./moments-comment-threading";
 import { loadVnProjectionEntries } from "./vn-storage";
 import { loadMapProjectionEntries, loadMapSharedProjectionEntries } from "./map-storage";
 import { loadGameProjectionEntries } from "./game-storage";
+import { canCharacterReadDiaryEntry } from "./diary-entry-types";
 import { loadDiaryEntries } from "./diary-entry-storage";
 import type { DiaryEntry, DiaryEntryBlock } from "./diary-entry-types";
 import { loadNoteWallProjectionEntries } from "./notewall-memory";
@@ -148,7 +149,7 @@ function formatDiaryEntryForTimeline(entry: DiaryEntry, timeAware: boolean, time
     const markerText = markers.length > 0 ? `（${markers.join(" / ")}）` : "";
     const title = entry.title.trim() || "未命名日记";
     const text = clipTimelineText(body || title, 900);
-    return `${formatPromptEventLabel("日记", entry.createdAt, timeAware, timestampOptions)} ${entry.characterName}写了一篇日记《${title}》${markerText}：${text}`;
+    return `${formatPromptEventLabel("日记", entry.createdAt, timeAware, timestampOptions)} ${entry.authorType === "user" ? `用户${entry.characterName}（已向你分享）` : entry.characterName}写了一篇日记《${title}》${markerText}：${text}`;
 }
 
 /**
@@ -649,7 +650,7 @@ export function loadNativeTimeline(
 
     // ── Diary entries ──
     const diaryEntries = loadDiaryEntries().filter(entry =>
-        entry.characterId === characterId
+        canCharacterReadDiaryEntry(entry, characterId)
         && (!options?.afterTimestamp || entry.createdAt > options.afterTimestamp)
     );
     for (const diaryEntry of diaryEntries) {
@@ -657,7 +658,7 @@ export function loadNativeTimeline(
             id: diaryEntry.id,
             sourceApp: "diary",
             sourceDetail: "diary_entry",
-            authorType: "character",
+            authorType: diaryEntry.authorType === "user" ? "user" : "character",
             timestamp: diaryEntry.createdAt,
             content: formatDiaryEntryForTimeline(diaryEntry, timeAware, timestampOptions),
         });

@@ -573,7 +573,7 @@ export function DebugPromptPanel() {
             } else if (extraAppId === "dwelling") {
                 result = await previewDwellingPromptPayload(extraCharacterId, dwellingMode);
             } else if (extraAppId === "diary") {
-                const entries = loadDiaryEntries().filter(entry => entry.characterId === extraCharacterId);
+                const entries = loadDiaryEntries();
                 result = await previewDiaryEntryPromptPayload(extraCharacterId, entries);
             } else if (extraAppId === "notewall") {
                 const wall = await fetchNoteWall().catch(() => ({ notes: [] }));

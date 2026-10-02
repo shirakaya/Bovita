@@ -14,6 +14,8 @@ export type DiaryEntryBlock =
 
 export type DiaryEntry = {
   id: string;
+  authorType?: "character" | "user";
+  visibleToCharacterIds?: string[];
   characterId: string;
   characterName: string;
   title: string;
@@ -29,6 +31,8 @@ export type DiaryEntry = {
 };
 
 export type DiaryEntryInput = {
+  authorType?: "character" | "user";
+  visibleToCharacterIds?: string[];
   characterId: string;
   characterName: string;
   title: string;
@@ -54,3 +58,13 @@ export const DEFAULT_DIARY_ENTRY_TIMER_SETTINGS: DiaryEntryTimerSettings = {
   characterIds: [],
   lastRunAtByCharacter: {},
 };
+
+/** User entries are private unless the recipient is explicitly selected. */
+export function canCharacterReadDiaryEntry(entry: DiaryEntry, characterId: string): boolean {
+  if (!characterId) return false;
+  return entry.authorType === "user"
+    ? Boolean(entry.visibleToCharacterIds?.includes(characterId))
+    : entry.characterId === characterId;
+}
+
+export const USER_DIARY_BOOK_ID = "user_diary";

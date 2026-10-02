@@ -1,6 +1,7 @@
 import { kvGet, kvRemove, kvSet, registerKvMigration } from "./kv-db";
 import {
   DEFAULT_DIARY_ENTRY_TIMER_SETTINGS,
+  USER_DIARY_BOOK_ID,
   type DiaryEntry,
   type DiaryEntryBlock,
   type DiaryEntryInput,
@@ -182,7 +183,10 @@ export function normalizeDiaryEntry(raw: unknown): DiaryEntry | null {
 
   return {
     id,
-    characterId,
+    authorType: record.authorType === "user" ? "user" : "character",
+    visibleToCharacterIds: record.authorType === "user" && Array.isArray(record.visibleToCharacterIds)
+      ? Array.from(new Set(record.visibleToCharacterIds.filter((id): id is string => typeof id === "string" && Boolean(id.trim())))) : [],
+    characterId: record.authorType === "user" ? USER_DIARY_BOOK_ID : characterId,
     characterName: cleanText(record.characterName ?? record.character_name, 80) || "角色",
     title,
     dateLabel: cleanText(record.dateLabel ?? record.date_label, 40) || formatDateLabel(createdAt),
@@ -190,7 +194,7 @@ export function normalizeDiaryEntry(raw: unknown): DiaryEntry | null {
     weather: cleanText(record.weather, 60),
     tags: normalizeTags(record.tags ?? record.labels),
     body: body || blocks.map(block => block.type === "paragraph" || block.type === "quote" ? block.text : "").filter(Boolean).join("\n\n"),
-    blocks,
+    blocks: record.authorType === "user" ? [{ type: "paragraph", text: body }] : blocks,
     trigger: normalizeTrigger(record.trigger),
     createdAt,
     updatedAt: typeof record.updatedAt === "string"
@@ -232,7 +236,9 @@ export function createDiaryEntry(input: DiaryEntryInput): DiaryEntry {
   const body = cleanMultilineText(input.body, 6000);
   const entry: DiaryEntry = {
     id: generateId("diary_entry"),
-    characterId: cleanText(input.characterId, 120),
+    authorType: input.authorType ?? "character",
+    visibleToCharacterIds: input.authorType === "user" ? input.visibleToCharacterIds ?? [] : [],
+    characterId: input.authorType === "user" ? USER_DIARY_BOOK_ID : cleanText(input.characterId, 120),
     characterName: cleanText(input.characterName, 80) || "角色",
     title: cleanText(input.title, 80) || body.slice(0, 20) || "未命名日记",
     dateLabel: cleanText(input.dateLabel, 40) || formatDateLabel(now),
@@ -240,7 +246,7 @@ export function createDiaryEntry(input: DiaryEntryInput): DiaryEntry {
     weather: cleanText(input.weather, 60),
     tags: normalizeTags(input.tags),
     body,
-    blocks: normalizeBlocks(input.blocks, body),
+    blocks: input.authorType === "user" ? [{ type: "paragraph", text: body }] : normalizeBlocks(input.blocks, body),
     trigger: input.trigger ?? "manual",
     createdAt: now,
     updatedAt: now,
@@ -282,4 +288,13 @@ export function saveDiaryEntryTimerSettings(settings: DiaryEntryTimerSettings): 
     characterIds: settings.characterIds,
     lastRunAtByCharacter: settings.lastRunAtByCharacter,
   }));
+}
+
+export function updateUserDiaryEntry(id: string, input: Pick<DiaryEntryInput, "title" | "body" | "visibleToCharacterIds">): DiaryEntry {
+  const entries = loadDiaryEntries();
+  const current = entries.find(entry => entry.id === id && entry.authorType === "user");
+  if (!current) throw new Error("找不到这篇用户日记");
+  const updated = normalizeDiaryEntry({ ...current, ...input, updatedAt: new Date().toISOString() })!;
+  saveDiaryEntries(entries.map(entry => entry.id === id ? updated : entry));
+  return updated;
 }

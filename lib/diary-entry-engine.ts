@@ -9,7 +9,7 @@ import { retrieveCoreMemoriesForPrompt, retrieveMemoriesForPrompt } from "./memo
 import { formatCoreMemories, formatLongTermMemories } from "./memory-injector";
 import { prepareShortTermContext } from "./short-term-assembler";
 import { formatDiaryEntryContext, parseDiaryEntryContent, type ParsedDiaryEntry } from "./diary-entry-utils";
-import type { DiaryEntry, DiaryEntryTrigger } from "./diary-entry-types";
+import { canCharacterReadDiaryEntry, type DiaryEntry, type DiaryEntryTrigger } from "./diary-entry-types";
 import { beginDiaryGeneration, endDiaryGeneration } from "./diary-generating-tracker";
 
 type ResolvedDiaryEntryGeneration = {
@@ -75,7 +75,7 @@ async function resolveDiaryEntryGeneration(
     worldBookActivationContext: prepared.wbActivationContext,
     recentBlocks: prepared.recentBlocks,
     unifiedRecentItems: prepared.unifiedRecentItems,
-    diaryEntryContext: formatDiaryEntryContext(entries),
+    diaryEntryContext: formatDiaryEntryContext(entries.filter(entry => canCharacterReadDiaryEntry(entry, characterId))),
   });
 
   return { character, apiConfig, preset, regexes, messages, userName };

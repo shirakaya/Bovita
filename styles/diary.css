@@ -3898,3 +3898,19 @@
 @keyframes diary-generating-spin {
   to { transform: rotate(360deg); }
 }
+
+/* User-authored diary editor */
+.diary-user-write-btn { right: 108px; }
+.diary-user-editor { max-height: min(85dvh, 760px); overflow-y: auto; overscroll-behavior: contain; }
+.diary-user-editor > label { display: grid; gap: 8px; margin: 14px 0; font-size: 14px; }
+.diary-user-editor input, .diary-user-editor textarea {
+  box-sizing: border-box; width: 100%; min-width: 0; padding: 12px;
+  border: 1px solid rgba(71, 58, 37, .2); border-radius: 8px;
+  background: rgba(255,255,255,.8); color: #332c24; font: inherit; font-size: 16px;
+}
+.diary-user-editor textarea { resize: vertical; min-height: 180px; line-height: 1.7; }
+.diary-user-editor .diary-entry-confirm-btn { width: 100%; margin-top: 18px; min-height: 44px; }
+.diary-user-editor .diary-entry-confirm-btn:disabled { opacity: .45; cursor: default; }
+.diary-user-visibility { font-size: 12px; opacity: .7; margin: 12px 0; }
+.diary-user-discard { padding: 12px 0; }
+.diary-user-discard button + button { margin-left: 12px; }
