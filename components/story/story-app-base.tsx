@@ -757,7 +757,6 @@ export function StoryApp({ onClose }: StoryAppProps) {
         sessionFoldTags: currentSession?.foldTags,
         sessionContextExcludedTags: currentSession?.contextExcludedTags,
         memoryAnchorAt: currentSession?.sessionType === "main" ? undefined : currentSession?.memoryAnchorAt,
-        vnChoicesEnabled: currentSession?.uiPrefs?.vnChoicesEnabled === true,
         streamingEnabled: currentSession?.uiPrefs?.streamingEnabled === true,
         onStreamUpdate,
         onReasoningUpdate,
@@ -984,7 +983,6 @@ export function StoryApp({ onClose }: StoryAppProps) {
         sessionFoldTags: currentSession?.foldTags,
         sessionContextExcludedTags: currentSession?.contextExcludedTags,
         memoryAnchorAt: currentSession?.sessionType === "main" ? undefined : currentSession?.memoryAnchorAt,
-        vnChoicesEnabled: currentSession?.uiPrefs?.vnChoicesEnabled === true,
         streamingEnabled: currentSession?.uiPrefs?.streamingEnabled === true,
         onStreamUpdate,
         onReasoningUpdate,
@@ -1140,14 +1138,6 @@ export function StoryApp({ onClose }: StoryAppProps) {
               type="checkbox"
               checked={uiPrefs.streamingEnabled === true}
               onChange={(event) => applySessionUpdates({ uiPrefs: { streamingEnabled: event.currentTarget.checked } })}
-            />
-          </label>
-          <label className="story-pref-row">
-            <span>剧情选择项</span>
-            <input
-              type="checkbox"
-              checked={uiPrefs.vnChoicesEnabled === true}
-              onChange={(event) => applySessionUpdates({ uiPrefs: { vnChoicesEnabled: event.currentTarget.checked } })}
             />
           </label>
           <label className="story-pref-row">

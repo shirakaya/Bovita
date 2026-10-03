@@ -25,12 +25,6 @@ import { MacroEngine } from "./macro-engine";
 
 const DEFAULT_STORY_FOLD_TAGS = "think,thinking,summary";
 const DEFAULT_STORY_CONTEXT_EXCLUDED_TAGS = "think,thinking";
-const STORY_VN_CHOICES_INSTRUCTION = [
-  "【剧情选择项规则】",
-  "- 每轮剧情正文结尾提供 2～4 个可由 {{user}} 采取的下一步选择，选择必须贴合当前场景，并保留自由发挥空间。",
-  "- 把选择项放在 <content> 内部末尾，严格使用以下结构：<options><option>选择内容</option><option>选择内容</option></options>。",
-  "- 每个 <option> 只写可直接作为 {{user}} 下一轮输入的行动或台词，不编号，不添加解释；不要在 <summary> 中重复选择项。",
-].join("\n");
 
 export type StoryGenerationResult = {
   rawText: string;
@@ -142,7 +136,7 @@ export function getStoryRenderSignature(characterId: string): { regexSignature: 
 export async function generateStoryCompletion(
   characterId: string,
   history: StoryMessage[],
-  options?: { sessionId?: string; sessionFoldTags?: string; sessionContextExcludedTags?: string; memoryAnchorAt?: string; vnChoicesEnabled?: boolean; streamingEnabled?: boolean; onStreamUpdate?: (content: string) => void; onReasoningUpdate?: (reasoning: string) => void; signal?: AbortSignal },
+  options?: { sessionId?: string; sessionFoldTags?: string; sessionContextExcludedTags?: string; memoryAnchorAt?: string; streamingEnabled?: boolean; onStreamUpdate?: (content: string) => void; onReasoningUpdate?: (reasoning: string) => void; signal?: AbortSignal },
 ): Promise<StoryGenerationResult> {
   const character = loadCharacters().find((item) => item.id === characterId);
   if (!character) {
@@ -152,7 +146,7 @@ export async function generateStoryCompletion(
   const { apiConfig, preset, regexes, worldBooks, regexSignature, summaryTag } = resolveStoryConfigs(characterId);
   const effectiveFoldTags = options?.sessionFoldTags?.trim() || DEFAULT_STORY_FOLD_TAGS;
   const effectiveContextExcludedTags = options?.sessionContextExcludedTags?.trim() || DEFAULT_STORY_CONTEXT_EXCLUDED_TAGS;
-  const llmMessages = await buildStoryPromptMessages(characterId, history, preset, regexes, worldBooks, effectiveContextExcludedTags, options?.memoryAnchorAt, options?.vnChoicesEnabled);
+  const llmMessages = await buildStoryPromptMessages(characterId, history, preset, regexes, worldBooks, effectiveContextExcludedTags, options?.memoryAnchorAt);
 
   const userIdentity = resolveUserIdentity(characterId, "story");
   const macroEngine = new MacroEngine(character.name, userIdentity?.name ?? "用户");
@@ -223,7 +217,6 @@ async function buildStoryPromptMessages(
   worldBooks: WorldBookConfig[],
   contextExcludedTags: string = DEFAULT_STORY_CONTEXT_EXCLUDED_TAGS,
   memoryAnchorAt?: string,
-  vnChoicesEnabled?: boolean,
 ): Promise<LLMMessage[]> {
   const character = loadCharacters().find((item) => item.id === characterId);
   if (!character) {
@@ -262,16 +255,13 @@ async function buildStoryPromptMessages(
     recentBlocks,
     unifiedRecentItems,
   });
-  if (vnChoicesEnabled) {
-    promptMessages.unshift({ role: "system", content: STORY_VN_CHOICES_INSTRUCTION });
-  }
   return promptMessages;
 }
 
 export async function previewStoryPromptPayload(
   characterId: string,
   history: StoryMessage[],
-  options?: { sessionContextExcludedTags?: string; vnChoicesEnabled?: boolean },
+  options?: { sessionContextExcludedTags?: string },
 ): Promise<StoryPreviewResult> {
   const character = loadCharacters().find((item) => item.id === characterId);
   if (!character) {
@@ -279,7 +269,7 @@ export async function previewStoryPromptPayload(
   }
   const { apiConfig, preset, regexes, worldBooks } = resolveStoryConfigs(characterId);
   const effectiveContextExcludedTags = options?.sessionContextExcludedTags?.trim() || DEFAULT_STORY_CONTEXT_EXCLUDED_TAGS;
-  const llmMessages = await buildStoryPromptMessages(characterId, history, preset, regexes, worldBooks, effectiveContextExcludedTags, undefined, options?.vnChoicesEnabled);
+  const llmMessages = await buildStoryPromptMessages(characterId, history, preset, regexes, worldBooks, effectiveContextExcludedTags, undefined);
   return {
     messages: previewMessagesForApi(apiConfig, preset, llmMessages),
     characterName: character.name,

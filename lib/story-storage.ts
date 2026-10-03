@@ -9,7 +9,6 @@ export type StoryUiPrefs = {
   theme?: string;
   translationFontSize?: number;
   translationColor?: string;
-  vnChoicesEnabled?: boolean;
   streamingEnabled?: boolean;
 };
 

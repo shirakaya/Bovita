@@ -794,39 +794,6 @@
         .story-richtext p:empty {
           display: none;
         }
-        .story-vn-options {
-          display: grid;
-          gap: 8px;
-          margin: 1.6em 0 0;
-          text-align: left;
-        }
-        .story-vn-option {
-          width: 100%;
-          display: grid;
-          grid-template-columns: 24px minmax(0, 1fr);
-          align-items: center;
-          gap: 8px;
-          padding: 10px 12px;
-          border: 1px solid var(--c-story-border, rgba(100, 116, 139, 0.18));
-          border-radius: 0;
-          background: var(--c-story-panel, rgba(255, 255, 255, 0.58));
-          color: var(--c-story-text, #3a3b3c);
-          box-shadow: var(--story-paper-shadow-soft);
-          font: inherit;
-          line-height: 1.55;
-          cursor: pointer;
-          text-align: left;
-        }
-        .story-vn-option > span {
-          color: var(--c-story-sub, #94a3b8);
-          font-size: calc(11px*var(--app-text-scale,1));
-          text-align: center;
-        }
-        .story-vn-option:active {
-          transform: scale(0.985);
-          background: var(--c-story-css-box-bg, rgba(248, 250, 252, 0.82));
-        }
-        
         /* 强化强调样式 */
         .story-richtext strong, .story-richtext b {
           font-family: inherit;
